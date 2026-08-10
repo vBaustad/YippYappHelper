@@ -1381,8 +1381,11 @@ end
 events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
     if event == "CHAT_MSG_ADDON" then
         if arg1 ~= DURABILITY_PREFIX then return end
+        -- Remote input: another addon (or a crafted message) can send
+        -- anything. Clamp rather than trust -- this is displayed.
         local pct = tonumber(arg2)
         if not pct then return end
+        if pct < 0 then pct = 0 elseif pct > 100 then pct = 100 end
         local sender = arg4 and Ambiguate(arg4, "short") or nil
         if not sender then return end
         durabilityCache[sender] = { pct = pct, ts = GetTime() }

@@ -389,7 +389,15 @@ commFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
                 local name = C_ChallengeMode.GetMapUIInfo(mapID)
                 local entry = { mapID = mapID, level = level, name = name or "Unknown", ts = GetTime() }
                 if channel == "GUILD" then
-                    guildKeystones[shortName] = entry
+                    -- Keyed by sender, so a large or hostile guild can
+                    -- grow this without bound. Cap it: past a few hundred
+                    -- keys the list is unreadable anyway, and the table
+                    -- is only wiped on a weekly reset.
+                    local count = 0
+                    for _ in pairs(guildKeystones) do count = count + 1 end
+                    if count < 300 or guildKeystones[shortName] then
+                        guildKeystones[shortName] = entry
+                    end
                 elseif shortName ~= UnitName("player") then
                     -- Ignore our own broadcast: PARTY addon messages echo back to the sender.
                     partyKeystones[shortName] = entry

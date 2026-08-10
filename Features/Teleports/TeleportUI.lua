@@ -230,9 +230,14 @@ local function AcquireBtn(parent)
     btn:ClearAllPoints()
     btn:SetScript("OnEnter", nil)
     btn:SetScript("OnLeave", nil)
-    btn:SetAttribute("type", nil)
-    btn:SetAttribute("spell", nil)
-    btn:SetAttribute("macrotext", nil)
+    -- Attributes on a secure button cannot be written in combat: the
+    -- call is blocked and throws. The Mythic+ tiles already guard this;
+    -- these did not, so opening Teleports mid-combat errored.
+    if not InCombatLockdown() then
+        btn:SetAttribute("type", nil)
+        btn:SetAttribute("spell", nil)
+        btn:SetAttribute("macrotext", nil)
+    end
     btn:Show()
     return btn
 end
@@ -392,7 +397,7 @@ function ns:RefreshTeleports()
             -- Secure click to cast
             if known then
                 local spellName = C_Spell.GetSpellName(entry.id)
-                if spellName then
+                if spellName and not InCombatLockdown() then
                     tile:SetAttribute("type", "macro")
                     tile:SetAttribute("macrotext", "/cast " .. spellName)
                 end
