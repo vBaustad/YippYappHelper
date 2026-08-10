@@ -887,7 +887,10 @@ local function GatherFromTest(entry, idx)
     return {
         name  = entry.name,
         class = entry.class,
-        ready = entry.ready == "pending" and nil or entry.ready,
+        -- Not `== "pending" and nil or entry.ready`: nil is falsy, so that
+        -- form always falls through to the `or` and "pending" survives as
+        -- a ready state instead of meaning "no answer yet".
+        ready = (entry.ready ~= "pending") and entry.ready or nil,
         food  = foodState,
         aura  = {
             flask  = entry.flask  and { icon = pickSample(SAMPLE_FLASK_ICONS, idx) } or nil,

@@ -207,8 +207,16 @@ function UI:RenderCouncil(content, width)
     -- built. Rows come from a pool and are rebuilt on every refresh, so a
     -- captured flag is one render out of date the moment anything else
     -- changes the selection.
+    -- Written long-hand on purpose. The obvious `cond and nil or id` is
+    -- broken in Lua: nil is falsy, so the `and` branch falls straight
+    -- through to the `or` and the expression can never yield nil. That is
+    -- why this row expanded but would not collapse.
     local function toggle(id)
-        state.selected = (state.selected == id) and nil or id
+        if state.selected == id then
+            state.selected = nil
+        else
+            state.selected = id
+        end
         UI:Refresh()
     end
 
