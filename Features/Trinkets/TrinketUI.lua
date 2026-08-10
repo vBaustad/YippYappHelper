@@ -23,7 +23,15 @@ local TABS = {
 
 local ACCENT = { 0.45, 0.85, 1.0 }
 
-local state = { tab = "spec", selected = nil }
+-- Fight style applies to both views, so it is a separate control rather
+-- than four tabs: "My Spec / AoE" and "Loot Council / AoE" are the same
+-- question asked of two different lists.
+local STYLES = {
+    { id = "ST",  label = "Single Target" },
+    { id = "AOE", label = "AoE" },
+}
+
+local state = { tab = "spec", selected = nil, style = "ST" }
 
 ------------------------------------------------------------
 -- Row pool
@@ -124,13 +132,22 @@ function UI:RenderMySpec(content, width)
         return y - ROW_H
     end
 
-    local list, ilvl, stamp = T:GetForSpec(specKey)
+    local list, ilvl, stamp = T:GetForSpec(specKey, state.style)
     if not list then
         local fs = AcquireRow(self, content)
         fs:SetPoint("TOPLEFT", PAD, y)
         fs:SetWidth(width - PAD * 2)
-        fs.text:SetText(("|cff888888bloodmallet has no trinket sims for %s this tier.|r")
-            :format(T:SpecName(specKey)))
+        -- Distinguish "not simmed at all" from "simmed, but not for this
+        -- fight style" -- a few specs have single target only, and saying
+        -- "no sims for you" there reads as a data failure.
+        local otherStyle = (state.style == "ST") and "AOE" or "ST"
+        if T:GetForSpec(specKey, otherStyle) then
+            fs.text:SetText(("|cff888888bloodmallet has no %s sims for %s -- try the other tab.|r")
+                :format(state.style == "ST" and "single-target" or "AoE", T:SpecName(specKey)))
+        else
+            fs.text:SetText(("|cff888888bloodmallet has no trinket sims for %s this tier.|r")
+                :format(T:SpecName(specKey)))
+        end
         return y - ROW_H
     end
 
@@ -169,7 +186,7 @@ end
 
 function UI:RenderCouncil(content, width)
     local y = -6
-    local all = T:GetAllTrinkets()
+    local all = T:GetAllTrinkets(state.style)
 
     if not all or #all == 0 then
         local fs = AcquireRow(self, content)
@@ -183,8 +200,17 @@ function UI:RenderCouncil(content, width)
     intro:SetPoint("TOPLEFT", PAD, y)
     intro:SetWidth(width - PAD * 2)
     intro.icon:SetTexture(nil)
-    intro.text:SetText("|cffaaaaaaClick a trinket to see which specs want it.|r")
+    intro.text:SetText("|cffaaaaaaClick a trinket to expand it, click again to collapse.|r")
     y = y - ROW_H - 2
+
+    -- Read state.selected when the click happens, not when the row is
+    -- built. Rows come from a pool and are rebuilt on every refresh, so a
+    -- captured flag is one render out of date the moment anything else
+    -- changes the selection.
+    local function toggle(id)
+        state.selected = (state.selected == id) and nil or id
+        UI:Refresh()
+    end
 
     for _, bucket in ipairs(all) do
         local r = AcquireRow(self, content)
@@ -195,12 +221,10 @@ function UI:RenderCouncil(content, width)
         local top = bucket.specs[1]
         local isOpen = (state.selected == bucket.id)
         if top then
-            r.value:SetText(("|cff888888best: #%d|r"):format(top.rank))
+            r.value:SetText(("%s |cff888888best: #%d|r")
+                :format(isOpen and "|cff888888-|r" or "|cff888888+|r", top.rank))
         end
-        r:SetScript("OnClick", function()
-            state.selected = isOpen and nil or bucket.id
-            UI:Refresh()
-        end)
+        r:SetScript("OnClick", function() toggle(bucket.id) end)
         y = y - ROW_H
 
         if isOpen then
@@ -211,6 +235,11 @@ function UI:RenderCouncil(content, width)
                 sr.icon:SetTexture(nil)
                 sr.rank:SetText("|cff888888#" .. entry.rank .. "|r")
                 sr.text:SetText(T:ColorSpec(entry.key))
+                -- Collapse from the spec rows as well: with a long list
+                -- expanded, the header you opened it from can be scrolled
+                -- off, and clicking the block you are looking at is the
+                -- obvious way to close it.
+                sr:SetScript("OnClick", function() toggle(bucket.id) end)
                 if entry.rank == 1 then
                     sr.value:SetText("|cff40ff40top pick|r")
                 else
@@ -278,6 +307,38 @@ function UI:BuildInto(parent)
         buttons[def.id] = btn
         x = x + 116
     end
+
+    -- Fight style, right-aligned so it reads as a modifier on the view
+    -- rather than a third view. Styles with no data anywhere are skipped
+    -- outright instead of offered as a tab onto an empty list.
+    local styleButtons = {}
+    local function selectStyle(id)
+        state.style = id
+        state.selected = nil
+        for sid, btn in pairs(styleButtons) do
+            if sid == id then ns.SetTabActive(btn) else ns.SetTabInactive(btn) end
+        end
+        self:Refresh()
+    end
+
+    local sx = 0
+    for i = #STYLES, 1, -1 do
+        local def = STYLES[i]
+        if T:HasStyle(def.id) then
+            local btn = ns.CreateUnderlineTab(tabBar, def.label, ACCENT)
+            local w = (def.id == "ST") and 100 or 60
+            btn:SetSize(w, 24)
+            btn:SetPoint("TOPRIGHT", tabBar, "TOPRIGHT", -sx, 0)
+            btn:SetScript("OnClick", function() selectStyle(def.id) end)
+            styleButtons[def.id] = btn
+            sx = sx + w + 6
+        end
+    end
+    -- Fall back to whatever style does exist, so the page is never blank.
+    if not styleButtons[state.style] then
+        state.style = next(styleButtons) or "ST"
+    end
+    if styleButtons[state.style] then selectStyle(state.style) end
 
     -- Staleness banner
     local banner

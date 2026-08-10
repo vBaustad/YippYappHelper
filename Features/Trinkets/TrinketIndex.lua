@@ -95,17 +95,26 @@ end
 -- is what "only Frost DKs should roll on this" actually means: it is a
 -- top pick for them and buried for everyone else.
 ------------------------------------------------------------
-local byItem, allItems
+-- One index per fight style. bloodmallet sims single target and 5-target
+-- separately and the orders differ a lot -- a trinket that leads on one
+-- target can be mid-list in AoE -- so they cannot share a cache.
+local cache = {}
 
-local function build()
-    if byItem then return end
-    byItem, allItems = {}, {}
+T.DEFAULT_STYLE = "ST"
+
+local function build(style)
+    style = style or T.DEFAULT_STYLE
+    local c = cache[style]
+    if c then return c.byItem, c.allItems end
+
+    local byItem, allItems = {}, {}
+    cache[style] = { byItem = byItem, allItems = allItems }
 
     local data = ns.TrinketData
-    if type(data) ~= "table" then return end
+    if type(data) ~= "table" then return byItem, allItems end
 
     for specKey, styles in pairs(data) do
-        local block = styles and styles.ST
+        local block = styles and styles[style]
         local list = block and block.list
         if type(list) == "table" then
             for rank, row in ipairs(list) do
@@ -138,30 +147,40 @@ local function build()
         if a.bestRank ~= b.bestRank then return a.bestRank < b.bestRank end
         return (a.name or "") < (b.name or "")
     end)
+
+    return byItem, allItems
 end
 
 function T:Rebuild()
-    byItem = nil
-    build()
+    cache = {}
+    build(T.DEFAULT_STYLE)
+end
+
+--- True when any spec has data for this fight style. Healer specs are
+--- never simmed, and a few others (Blood, Fire) have no AoE chart, so the
+--- UI asks before offering a tab that would open on an empty list.
+function T:HasStyle(style)
+    local _, items = build(style)
+    return #items > 0
 end
 
 --- All specs that sim this trinket, best rank first. nil if unknown.
-function T:GetSpecsFor(itemID)
-    build()
+function T:GetSpecsFor(itemID, style)
+    local byItem = build(style)
     local bucket = byItem[itemID]
     return bucket and bucket.specs or nil, bucket
 end
 
 --- Every trinket we have data for, best-ranked first.
-function T:GetAllTrinkets()
-    build()
-    return allItems
+function T:GetAllTrinkets(style)
+    local _, items = build(style)
+    return items
 end
 
---- The ST ranking for one spec: list, itemLevel.
-function T:GetForSpec(specKey)
+--- The ranking for one spec in one fight style: list, itemLevel.
+function T:GetForSpec(specKey, style)
     local entry = ns.TrinketData and ns.TrinketData[specKey]
-    local block = entry and entry.ST
+    local block = entry and entry[style or T.DEFAULT_STYLE]
     if not block then return nil end
     return block.list, block.ilvl, block.timestamp
 end
