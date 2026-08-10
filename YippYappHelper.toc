@@ -7,7 +7,7 @@
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
 
-## X-Curse-Project-ID: 000000
+## X-Curse-Project-ID: 1488843
 ## X-Website: https://github.com/vbaustad/YippYappHelper
 
 # ─── Libraries ────────────────────────────────────────────

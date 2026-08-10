@@ -5,7 +5,6 @@ package-as: YippYappHelper
 # repo, so authoring tooling stays out of the shipped addon.
 ignore:
   - Tools
-  - .github
   - .claude
   - .gitignore
   - .pkgmeta
