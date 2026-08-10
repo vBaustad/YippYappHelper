@@ -1,0 +1,18 @@
+# Tools stay IN the repo: they regenerate the icon and Mr. Yeeper's
+# portrait, so losing them means losing the ability to change the art.
+# .pkgmeta already strips them from the CurseForge zip, which is the
+# thing that actually needed them gone.
+
+# Generated art source and output, kept out of the addon zip by .pkgmeta
+# but useful in the repo.
+
+# Editor / agent scratch
+.claude/
+*.bak
+*.orig
+*.rej
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

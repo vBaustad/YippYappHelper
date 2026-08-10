@@ -1,0 +1,90 @@
+## Interface: 120100
+## Title: YippYapp Helper
+## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
+## Author: vbaustad
+## Version: 3.0.0
+## SavedVariables: YippYappHelperDB
+## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
+## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
+
+## X-Curse-Project-ID: 000000
+## X-Website: https://github.com/vbaustad/YippYappHelper
+
+# ─── Libraries ────────────────────────────────────────────
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+# LibEditMode registers our movable frames as real Edit Mode systems, so
+# they get Blizzard's own selection outlines and settings dialogs.
+# Core/EditMode.lua falls back to hand-drawn boxes if this is missing.
+Libs\LibEditMode\embed.xml
+
+# ─── Core ─────────────────────────────────────────────────
+Core\YippYappHelper.lua
+Core\Data.lua
+Core\Core.lua
+
+# Crests is referenced by Core\UI.lua at load-time, so load it first.
+Features\Gear\Crests.lua
+Features\Gear\Recommend.lua
+
+Core\UI.lua
+
+# ─── Features ─────────────────────────────────────────────
+Features\Raid\SpecMeta.lua
+Features\Raid\RaidInspect.lua
+Features\Raid\ReadyCheck.lua
+Features\Raid\BattleResTimer.lua
+Features\Raid\RaidUI.lua
+
+Features\Progression\ProgressionData.lua
+Features\Progression\ProgressionUI.lua
+
+Features\Loot\LootBrowserData.lua
+Features\Loot\LootBrowserRow.xml
+Features\Loot\LootBrowserUI.lua
+
+Features\Consumables\ConsumablesData.lua
+Features\Consumables\ConsumablesUI.lua
+
+# TrinketData is generated from bloodmallet.com (see Tools/).
+Features\Trinkets\TrinketData.lua
+Features\Trinkets\TrinketIndex.lua
+Features\Trinkets\TrinketUI.lua
+
+Features\MythicPlus\MythicPlusData.lua
+Features\MythicPlus\MythicPlusUI.lua
+Features\MythicPlus\CompletionPopup.lua
+Features\MythicPlus\UtilityAdvisor.lua
+
+Features\Teleports\TeleportUI.lua
+
+Features\OmniumFolio\OmniumFolioData.lua
+Features\OmniumFolio\OmniumFolioUI.lua
+
+Features\Interrupts\InterruptsSettings.lua
+Features\Interrupts\InterruptsData.lua
+Features\Interrupts\InterruptsUI.lua
+
+# ─── Integrations (must load after Features) ──────────────
+# Planner data is consumed by AppFrame's home dashboard, so it must load
+# before AppFrame.lua. Kept under Features for locality.
+Features\Fun\FunStats.lua
+Features\Fun\Snark.lua
+Features\Fun\Advisor.lua
+Features\Fun\WhatsNew.lua
+
+Features\Planner\PlannerData.lua
+Core\AppFrame.lua
+
+# Edit Mode integration, then the Blizzard settings registration. Both
+# load after every feature they touch so their getters/setters can reach
+# them, and both register at PLAYER_LOGIN.
+Core\EditMode.lua
+Core\EditModeLib.lua
+Core\BlizzSettings.lua
+Integrations\Dashboard.lua
+Integrations\PVETab.lua
+Integrations\MinimapButton.lua

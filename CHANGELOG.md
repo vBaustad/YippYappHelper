@@ -1,0 +1,1195 @@
+# YippYapp Helper - Changelog
+
+## v3.0.0 - Mr. Yeeper, Edit Mode, and settings that look like settings (2026-08-10)
+
+### Mr. Yeeper
+- The Upgrade Summary is now a character. He reads your gear, crests,
+  vault, keystones, raid lockouts and guild activity, works out which
+  single fact is worth saying, and says it -- rudely.
+- He is a reasoning layer, not a quote list. A snapshot gathers facts, a
+  set of rules recognises situations and computes, and the personality is
+  applied last to a conclusion that was already reached on evidence.
+- Priority ordering decides what he says. Something being actively wasted
+  (idle crests, a capped week) always outranks entertainment, because a
+  joke is worthless while 200 crests rot in a bag.
+- Actionable messages carry tips underneath: the "so what do I do" that a
+  remark on its own leaves hanging.
+- **Season aware.** Keystones go live a week after the patch, so during
+  the first week he will not send you at Mythic+ content that does not
+  exist yet, and points at Mythic 0 and Heroic instead.
+- **Socially aware.** Remarks about never grouping with guildmates are
+  gated behind actually having a guild with people in it. There is no
+  version of that joke that lands when the honest answer is "I do not
+  have one", so those lines are never generated rather than softened.
+- Jokes are sourced from the community (punsnjokes.com, laffgaff.com,
+  punorbit.com) and keyed to your class, race and level. His reluctance
+  to deliver them is the second layer.
+- Lines are picked at random with a short memory, so a strict rotation
+  cannot make the running order predictable.
+
+### Edit Mode
+- Every movable frame -- interrupt tracker, battle res timer, ready check
+  overview, Mythic+ summary and utility advisor -- now positions through
+  Blizzard's Edit Mode via LibEditMode, with native selection outlines,
+  "Click to Edit", grid snapping and proper settings dialogs.
+- The old per-frame Unlock/Lock buttons are gone. They could not work:
+  the settings window is not movable and covers the screen, so you
+  unlocked a frame and then could not see it.
+- A toggle panel anchored to the Edit Mode manager picks which frames are
+  conjured for editing, since showing five at once buries the screen.
+- Positions are stored per Edit Mode layout, so a raid layout and a solo
+  layout can place the same frame differently.
+
+### Settings
+- Rebuilt on Blizzard's Settings API. Real checkboxes, the Defaults
+  button, keyboard navigation and options search -- inherited rather than
+  reimplemented. Saved variables are untouched; every entry is a proxy
+  over the existing getter and setter.
+- One page instead of four subcategories. Once appearance and position
+  moved to Edit Mode, what remained was a dozen switches.
+- Appearance settings live in Edit Mode, where you can see the change as
+  you make it. Each settings section points at it.
+
+### Fixes
+- **M9 great vault was wrong**: 318 corrected to 315 (Hero 4/6). Myth 1/6
+  does not start until M10.
+- Mr. Yeeper claimed the vault was the only way to replace last season's
+  gear. Dungeon and raid drops, delves, world content and crafting all
+  do, and the tips now say so.
+- "Biggest single jump" described an item's entire remaining track rather
+  than one upgrade step, overstating it badly.
+- The interrupt tracker never re-showed pooled slots after a rebuild, so
+  the first rebuild worked and every one after it produced an empty
+  frame.
+- Test mode persisted across reloads, stranding the tracker showing five
+  dummy bars with no switch left to turn it off.
+- The tracker drew a bare bordered rectangle when it had nothing to show.
+  It now hides when empty, and no longer draws an outer border at all --
+  each bar already has one.
+- Frames could end up off-screen: the Edit Mode handoff discarded the
+  relative anchor point, so a frame anchoring its TOPLEFT to UIParent's
+  CENTER moved by half a screen.
+- The settings panel could not be opened from anywhere -- the category ID
+  was being overwritten with a string, so OpenToCategory silently failed.
+- Progression's subtitle leaked through the app frame's own page title.
+
+### Also
+- A jump counter on the character bar, live-updating. It does nothing.
+- This "what's new" notice, shown once per version. `/yh whatsnew`
+  reopens it.
+
+
+## v2.12.0 — Omnium Folio page + PTR shakedown (2026-08-09)
+
+### New: Omnium Folio page
+- Tracks the five-week Rune chain from your real quest state
+  (`C_QuestLog`), not a checklist you maintain by hand — so it is correct
+  on every character and cannot drift.
+- Shows live objective progress when a step is in your log, and falls
+  back to counting the drops already in your bags when it is not.
+- Calls out the unlock chain separately when you have not started it, and
+  points at Magister Umbric in the Lycaneum for the weeklies.
+- A Runes tab lists all five rows and their choices, greyed until the
+  step that unlocks them.
+- **Clickable waypoints.** Coordinates are buttons that drop a real
+  Blizzard map pin and super-track it, rather than a `/way` string you
+  have to copy. Shared helper, so any page can use it.
+- Card-based layout with status stripes and pills, five progress pips,
+  and hoverable item chips with real tooltips for the collectibles.
+- The "Week N" labels are Blizzard's quest titles from when the chain
+  released one step per reset. Anyone starting now is catching up and can
+  usually take several at once, so the page says so rather than implying
+  you have to wait a week between steps.
+- Included because the Runes last the rest of Midnight: an unfinished
+  Folio is permanent lost power going into Season 2.
+
+### New icon, and a 49 MB Media folder down to 82 KB
+- New mark everywhere: a gold four-point compass rose on a runed purple
+  plate, hand-painted in Blizzard icon style. Minimap button, app header,
+  dashboard and the AddOns list all draw the same art.
+- Four points, not eight: below ~24px each point needs roughly 3px of
+  width to survive downsampling, and eight of them around a circle that
+  small collapses into a cog.
+- **The minimap button now fills its ring.** LibDBIcon draws the icon at
+  18x18 inside a 31x31 button and shows only the middle 90% of the
+  texture, which left the mark floating small inside the tracking border.
+  It is now 20x20 with the full texture visible. Press feedback is kept
+  but inverted — the icon dips inward while held rather than sitting
+  permanently cropped and springing outward on click.
+- One full-bleed texture everywhere, with each caller deciding its own
+  spacing by sizing its box. A cut with a built-in margin was tried for
+  the inline icons, but once those boxes grew the padding only made the
+  mark look small — spacing belongs to the layout, not the texture.
+- The header icon is 32px, up from 22, and the header itself is 2px
+  shorter with 6px less dead space beneath it. It is centred on the band
+  between the window edge and the content panel rather than on the header
+  alone, which is what made it look like it was riding high.
+- The 8% texcoord crops on the app header and dashboard icons were
+  removed; against full-bleed art they sliced the octagon's flat sides.
+- `/yh icon [size] [x] [y]` tunes the minimap icon's size and offset live,
+  since ring fit can only be judged on screen.
+- The icon texture was 844x880 (not a power of two) and 2.8 MB; it is now
+  a 128x128 32-bit TGA at 64 KB.
+- `bmc-logo-yellow.tga` was **3200x3200 and 39 MB**, displayed at 26x26.
+  Resampled to 64x64 (16 KB).
+- Removed `icon.tga`, `minimapbutton.tga` and `bmc-button.tga` — 7.3 MB
+  that nothing in the addon referenced.
+- `Art/icon-master.png` is the source of truth; `Tools/make_icon.py`
+  re-cuts the whole set from it. Both are excluded from the packaged zip
+  along with the CurseForge art.
+
+### Dashboard
+- Upgrade Summary now counts slots holding gear with **no upgrade track**
+  (last season's pieces). They were previously invisible — neither
+  upgradeable nor maxed, just missing from every count.
+- Upgrade Summary reports a crest **shortfall** when you cannot afford
+  everything pending, excluding free watermark upgrades.
+- Tonight's Plan surfaces the **Bonus Roll threshold**. Three filled vault
+  slots unlocks it, counted across all rows combined, so it is easy to be
+  one slot away without any single row hinting at it.
+
+Everything below came out of testing against the live 12.1 PTR. Most of
+it is corrections to data or assumptions that only broke once real
+Season 2 content was in front of them.
+
+### Item levels corrected against the game
+- **Raid drops are rank 4/6 of their track, not rank 1.** Verified from
+  in-game tooltips (Raid Finder reads "Veteran 4/6 / 289"; Mythic reads
+  "Myth 4/6 / 328"). LFR 289, Normal 302, Heroic 315, Mythic 328.
+- **Dungeon keystone levels** re-verified against the community sheet's
+  Dungeons Drops column. They walk one upgrade rank per step from
+  Champion 1/6 at M0 to Hero 3/6 at +10, anchored on M0 = 292 which an
+  in-game tooltip confirms.
+- Where tracks overlap (305 is both Champion 5/6 and Hero 1/6) the higher
+  track wins, matching what the game itself reports.
+
+### Loot Browser
+- **Difficulty selector.** Pick the content level you actually run —
+  Normal through M+12 for dungeons, Raid Finder through Mythic for raids —
+  and every drop is priced at it. Previously every dungeon drop showed the
+  Mythic 0 value forever.
+- The selected difficulty now drives the item **link** too, so Blizzard's
+  own tooltip agrees with ours. On keystones, where the journal has no
+  scaled item to link, the tooltip's item level and upgrade-rank lines are
+  rewritten in place and tagged with the difficulty.
+- Tooltips show the upgrade rank ("Champion 3/6") alongside the item
+  level, and the Great Vault value for that difficulty.
+- **Icon borders show item quality, not difficulty.** Difficulty colouring
+  was redundant once difficulty became a single global choice, and it read
+  as an item-quality lie — epic raid loot rendered green on Raid Finder.
+  Quality is read from the link, since the base item is Rare and the
+  difficulty versions are promoted to Epic by their bonus IDs.
+- **Favourites is its own star toggle** beside the slot dropdown instead
+  of a row buried inside it, with a lit/dim state and a starred count.
+- Removed the "Class:" / "Spec:" / "Slot:" / "Stats:" captions — every
+  control already shows its own value.
+- Housing decor is filtered by item class (20) instead of a tooltip
+  string. Blizzard moved decor to its own class in Midnight and changed
+  the tooltip wording, so a decor item was showing up under Sszorak.
+- Fixed loot icons that rendered uncropped and could not be hovered: boss
+  portraits share the icon pool and left `EnableMouse(false)`, a wrong
+  texcoord and a wrong size behind on recycled frames.
+
+### Gear Upgrades
+- **Season 1 gear is no longer read as upgradeable.** Last season's items
+  have their upgrade track stripped, and the code fell back to guessing
+  the track from item level — so a locked S1 Mythic 272 piece was being
+  offered as "Adventurer 3/6 → 282". The tooltip's track line is now the
+  only accepted source; no line means not upgradeable.
+- Added an off-track guard: if an item claims a track but its item level
+  does not match that rank, it is flagged rather than silently trusted.
+  Slots show "no track" or "off-track" instead of a bare row.
+
+### Fixes
+- **`MAX_ACCOUNT_MACROS` is nil at login** — it lives in the
+  load-on-demand Blizzard_MacroUI addon. Comparing against it threw and
+  aborted creation of the `/yh` macro, which is why the drag-to-actionbar
+  handle had nothing to pick up. Macro creation no longer consults it.
+- Season 2 Mythic+ teleports added to the Mythic+ page, which had none.
+  Entries accept multiple spell IDs so a dungeon reissued for a new season
+  works whether you earned the old or new teleport.
+- Progression page: removed the Season 1 raid wing tabs (Voidspire /
+  Dreamrift / Quel'Danas) — Season 2 is one raid. Fixed delve crests
+  rendering as "999-0" when no amount was known.
+- Season name comes from one constant; two pages still said "Season 1".
+
+### Settings
+- The settings panel is now also registered under **Escape → Options →
+  AddOns**. It is one panel re-parented between hosts, not a duplicate, so
+  your place in it follows you. Toggle which one opens by default under
+  Settings → General.
+
+### Diagnostics
+- `/yh crests` — which Mistcrest currency ID resolved per track.
+- `/yh lootdebug` — Loot Browser difficulty state and per-boss data.
+- `/yh ejtest` — probe the Encounter Journal's keystone item levels.
+
+## v2.11.0 — Loot Browser rework (2026-08-09)
+
+### Season 2 dungeons now resolve at runtime
+- The dungeon list was a hardcoded table of Season 1 Encounter Journal
+  instance IDs, so the dungeon view would have gone **completely blank**
+  on the season rollover. It now reads `C_ChallengeMode.GetMapTable()`
+  (locale-correct and self-updating every season) unioned with a named
+  fallback list, so it survives the next rollover without a code change.
+- Row backgrounds fall back to each instance's own Encounter Journal art
+  instead of a hand-maintained texture table, so new dungeons look right
+  with no lookup.
+
+### Grouped by boss
+- Dungeon loot is now grouped boss-by-boss under a dungeon header, the
+  same treatment raids already had, with boss portraits.
+- Bosses with nothing for the current filter are hidden in dungeon view
+  (a single-slot filter otherwise left ~30 empty rows to scroll past);
+  raids still list every boss so the pull order stays readable.
+- The old one-row-per-dungeon overview is still there behind the
+  **By boss** toggle — it is the better shape for scanning many
+  dungeons at once.
+
+### Upgrade marking
+- Every drop is compared against what you have equipped in that slot and
+  upgrades get a green `+13` badge (`new` for an empty slot). The tooltip
+  spells out the comparison.
+- Paired slots (rings, trinkets, weapons) compare against the weaker of
+  the two — the piece you would actually replace.
+- Item levels come from the Season 2 tables in `Core/Data.lua` rather
+  than the journal's item links, so the numbers are right immediately
+  instead of waiting on item data to cache.
+- Equipped item levels are cached per slot and dropped on gear change,
+  so a refresh doesn't rescan your gear once per icon.
+- Dungeon Mythic entries note that the journal figure is M0 and that
+  keystones drop 295-311 — the journal has no concept of key levels.
+- Toggle with the **Upgrades** chip.
+
+### Myth 9 bosses
+- The penultimate and final bosses of the current raid are badged
+  **Myth 9** with their 344 item level, since they and Very Rare items
+  are the only above-Myth-6/6 sources in the instance.
+
+## v2.10.0 — Season 2 data (2026-08-09)
+
+### Gearing rebuilt for Curse of Ula'tek
+- **New gear tracks.** Adventurer 266-282, Veteran 279-295, Champion
+  292-308, Hero 305-321, Myth 318-334. Cross-checked against the in-game
+  Mistcrest currency descriptions and norumu's community sheet, which
+  agree exactly. Season 2 tracks are perfectly regular, so every track
+  now overlaps the next by 2 free ranks (Veteran was 1 in Season 1).
+- **Above-Myth item levels** are modelled separately in `ns.ASCENDANT`:
+  Ascended Hero 328, Ascended Myth 341, and Myth 9 (344) for Very Rare
+  items and the last two Mythic bosses.
+- **Great Vault raid rewards.** LFR/Normal/Heroic vault slots now jump to
+  rank 1 of the next track (Heroic vault = Myth 1/6, 318) and the Mythic
+  vault always gives Myth 6/6 (334).
+- **Mistcrests replace Dawncrests.** Blizzard ships two currency IDs per
+  crest tier, so the addon resolves the live one at login instead of
+  betting on a hardcoded ID. `/yh crests` shows what resolved.
+- Progression tables rebuilt: M+, Venomous Abyss (8 bosses), Lairs,
+  Delves, Trovehunter's, Prey, world content, crafting, Venomstones and
+  Great Vault notes.
+- Season 2 M+ rotation and its eight teleports.
+
+### Consumables
+- **ConsumablesData.lua is now generated**, not hand-maintained. Rescrape
+  all 40 specs with `python Tools/scrape_consumables.py`.
+- Each spec records the season its guide was written for. Wowhead has not
+  published Season 2 enchant/gem guides yet, so every spec currently
+  shows a banner saying the advice is written for Season 1.
+
+### Trinkets (new page)
+- Trinket rankings for 29 specs scraped from bloodmallet.com.
+- **My Spec** tab: your trinkets ranked, with how far each is behind the
+  best pick.
+- **Loot Council** tab: pick a trinket and see every spec that sims it,
+  best rank first — the "only Frost DKs should roll on this" view.
+- **Tooltip integration**: hovering any trinket anywhere (loot window,
+  bags, chat links, Encounter Journal) lists the specs that want it and
+  where it lands for you. Toggle in Settings → General → Trinkets.
+- bloodmallet has no data for the six healer specs, nor for Augmentation,
+  Brewmaster, Windwalker or Assassination in this tier.
+- Its data is still tagged `MID1`, i.e. Season 1 sims, and the page and
+  tooltips say so.
+
+### Packaging
+- `Tools/` is excluded from CurseForge builds via `.pkgmeta` and ignored
+  by git, so the scrapers never ship inside the addon.
+
+### Known gaps
+- Utility Advisor has no entries for the Season 2 dungeons yet.
+- Crafting item levels are inferred and need verifying in-game.
+
+## v2.9.0 — Pre-12.1 strip-down (2026-08-09)
+
+Clearing the decks before patch 12.1 (2026-08-12). Everything removed
+here was either tied to a Midnight Season 1 encounter that stops
+existing on the 12th, or was guild-raid management rather than the
+"look it up in-game instead of googling it" job the addon is for.
+
+### Removed — dead on 12.1
+- **L'ura memory-game helper.** Hardcoded to encounter ID 3183
+  (Midnight Falls). Gone along with `Lura.lua`, `LuraUI.lua`, the
+  bundled pentagon symbol textures, the `/yh lura` command, and its
+  Settings → Raid section.
+- **Nexus-King Salhadaar interrupt marker.** Hardcoded to encounter ID
+  3179. Gone along with `/yh nk` and its settings checkbox.
+
+### Removed — off-mission
+- **Power Infusion auto-assign.** All six `Features/PowerInfusion`
+  files plus the PI target picker and PI-target column in Raid Tools.
+  The scoring model needed a manual bloodmallet JSON re-paste every
+  tier, which made it the highest-maintenance feature in the addon for
+  the narrowest audience.
+- **Raid split analysis and swap suggestions.** `RaidSwapLogic.lua`
+  and the Split Balance / Suggested Swaps UI. The Raid Tools page keeps
+  its group roster, composition counts, raid-buff strip and consumable
+  audit.
+- **Release Spirit blocker.** `ReleaseBlocker.lua`, `/yh release`, and
+  its settings row.
+- **Raid Addon Scanner.** `AddonScanner.lua`, the "Scan Addons" button
+  and `/yyhscan`.
+- **Welcome / What's New window.** `Integrations/Welcome.lua` and
+  `/yh welcome`. It was a feature tour that went stale every patch.
+- **Xal'atath's Toes.** The joke feature, its Settings → General "Fun"
+  section, and `/yh toes`.
+
+### Notes
+- Gear-track item levels, crest IDs, the dungeon pool, and the raid
+  progression tables are still carrying Midnight Season 1 values. Those
+  get updated in a follow-up pass once 12.1 numbers are confirmed.
+- Removed features leave their old `YippYappHelperDB` keys behind
+  harmlessly; they're simply no longer read.
+
+## v2.8.0 — Wipe-aware release blocker, M+ window movers, leak sweep (2026-05-13)
+
+### Bug fixes
+- **MoneyFrame "secret number" taint fix.** The Loot Browser's
+  EJ-suppression helper was calling `SetScript("OnEvent", …)` /
+  `Un/RegisterEvent` on the `EncounterJournal` frame to silence its
+  bulk-scan event chatter. Those writes tainted the EJ frame, which
+  then poisoned `MoneyFrame_Update` on item-sell-price tooltips
+  inside the Encounter Journal. Drop the script/event manipulation
+  entirely; keep the filter save/restore, which is taint-free.
+
+### Mythic+
+- **Battle Res Timer now shows in Mythic+ keystone runs.** Added
+  difficulty ID 8 (Mythic Keystone) to the brez-difficulty whitelist
+  and dropped the `IsInRaid()` gate, so the icon + cooldown swipe
+  light up the moment you engage in a keystone.
+- **New Mythic+ settings tab.** Completion Popup and Utility Advisor
+  toggles moved off the General tab into their own dedicated tab,
+  mirroring the Raid tab's grouping.
+- **Lock / Unlock for the M+ windows.** Both the Completion Popup
+  and the Utility Advisor now stay locked by default and grow a
+  cyan border + "drag to move" overlay when unlocked — same
+  affordance the Interrupt Tracker uses. Lock hides the overlay and
+  dismisses the preview window so it doesn't linger on screen.
+
+### Release Spirit Blocker — wipe-only redesign
+- **Trigger moved from PLAYER_DEAD to PLAYER_REGEN_ENABLED.** Dying
+  mid-fight no longer blocks the popup — you're free to release for
+  a corpse run if that's what you want. The blocker engages only
+  once combat has actually ended and the player is still dead in a
+  raid instance.
+- **Retry chain on popup-find race.** If the death `StaticPopup`
+  hasn't rendered by the time the block tries to attach, retries
+  at +0.25 s and +0.5 s before giving up. Cancels as soon as the
+  player ungohosts.
+- **Leader broadcast feature removed.** No more `YYH_RB` addon
+  messages between raid leaders' clients — the setting is now
+  strictly personal. Per-user checkbox in `Settings → Raid` is the
+  only control surface; the raid-tools header button is gone.
+- **Guild-majority check replaced with raid-instance check.** Simpler
+  and works for pug raids too.
+
+### Ready Check
+- **Cramped down sizing.** Window scale `0.95 → 0.85`, row heights
+  `26 → 22` (full) and `20 → 17` (compact), header height `38 → 30`,
+  paddings + status icon + check icon all trimmed proportionally.
+  Roughly 15–20 % shorter vertically on a 30-raider list.
+- **Preview / Hide buttons in settings.** Test the window with a
+  24-player dummy roster (or hide it again) without needing to type
+  `/yyhrc`.
+
+### L'ura helper
+- **Cleaner panel.** Removed the duplicated inner title, every
+  description/hint subtext block, and the "Solo Test (no raid
+  required)" sub-section. Panel height dropped from 560 px to 360 px.
+- **`/say debug mode` gone.** The `L:SetSayDebug` / `L:SayTest` /
+  `L:IsSayDebugOn` helpers and `CHAT_MSG_SAY` listener are removed;
+  `/yh lura say`/`saytest` sub-commands no longer exist.
+
+### Nexus-King Interrupt
+- **Stripped to one toggle.** Removed the marker-size slider, color
+  picker stubs, and Preview/Clear UI. Marker is now a fixed 36 px
+  orange triangle. Slash command trimmed to `/yh nk on|off`.
+
+### Settings UI
+- **Wider content area.** `SettingsContentWidth()` derives the
+  panel width from the live AppFrame size (≈ 760 px on a typical
+  screen) instead of the old hardcoded 500. Existing two-column
+  layouts (Interrupt Tracker) and full-width panels both benefit.
+- **Interrupt Tracker BETA banner removed.** Interrupt bars are no
+  longer beta-flagged in the General sub-tab.
+
+### Performance — memory-leak sweep
+- **Interrupt Tracker slot pool.** `rebuild()` now reuses slots from
+  per-mode pools (`bar`/`icon`) instead of `CreateFrame`-ing fresh
+  ones on every `GROUP_ROSTER_UPDATE` / zone change. Previously each
+  rebuild orphaned up to 5 frames.
+- **Interrupt Tracker GUID-state pruning.** `I.state` now drops
+  entries for GUIDs no longer in the party on roster updates, so
+  long pug-M+ sessions stop accumulating one entry per unique player
+  ever seen.
+- **Pooled UI rebuilds.** Progression raid cards, M+ Completion
+  Popup rows, Utility Advisor icons, and Addon Scanner rows are now
+  all backed by persistent pools instead of being rebuilt with fresh
+  `CreateFrame` calls each time.
+
+## v2.7.1 — Upgrade advisor: fix "wait for 6/6" on Myth 2/6+ (2026-04-22)
+
+- **Myth 2/6+ now recommends upgrade instead of "wait for raid
+  drop."** The upgrade advisor was telling players with Myth 2/6
+  (or any rank below 6/6) to save their crests because "Myth 6/6
+  drops from Mythic raid." That's wrong on two counts: raid bosses
+  drop a spread of ranks (3/6, 4/6, 5/6, only endbosses guarantee
+  6/6), and even if they did all drop 6/6, a 2/6 Myth item is
+  valuable enough to upgrade now rather than sit on precious
+  crests waiting for a specific drop.
+- **Root cause** was a fallback in `GetFarmableInfo` that assumed
+  raid reliably drops `#levels` (= 6) in the item's track when no
+  M+ source was available. The same bug affected Hero items at
+  Heroic raid tier (Hero 2/6 said "Hero 6/6 drops from Heroic
+  raid, save crests"). Both now flow to the slot-priority upgrade
+  rules (Rule 6-8).
+- **What Myth items recommend now:**
+
+  | Rank       | Path                    | Message                                 |
+  |------------|-------------------------|-----------------------------------------|
+  | Myth 1/6   | Rule 3 (overlap promo)  | "Max a Hero piece → free promo to 2/6"  |
+  | Myth 2-5/6 | Rule 6-8 (slot prio)    | "top priority" / "priority #N of X"     |
+  | Myth 6/6   | Rule 5 (maxed)          | "Fully upgraded"                        |
+
+- **No Myth-specific carve-out required.** M+ end-of-dungeon loot
+  in Midnight S1 caps at ilvl 266 (M+12), which is below Myth 1/6
+  (ilvl 272), so the same-track check can't enter a "wait for M+
+  drop" path for Myth items by construction. If a future season
+  adds M+ keys that drop Myth, the same-track rank-comparison
+  branch would start firing again and recommend saving crests —
+  behavior we'd probably want then anyway.
+
+## v2.7.0 — Raid split balancer rewrite + PI manual-only (2026-04-22)
+
+### Raid split balancer — group compaction rewrite
+
+- **Compaction is now raid-wide, not per-split.** The old pass
+  balanced each side (A / B) independently, which in odds mode
+  produced the alternating `5,4,5,4,5,4` layout — side A filled to
+  three fives, side B balanced to three fours. Visually it looked
+  broken because the raid window isn't split-aware; it just shows a
+  1..maxGroup list. New pass computes a single target across all
+  groups.
+- **Fill greedy, balance the last two groups.** Formula:
+  `k = min(maxGroup - 2, floor(N / 5))` groups filled to 5 (or
+  `k = maxGroup` when `N = 5 * maxGroup` exactly), then the
+  remainder spread across the tail with `ceil`/`floor(remainder /
+  tailCount)`. Result:
+
+  | N  | 6-group layout  |
+  |----|-----------------|
+  | 22 | 5,5,5,5,1,1     |
+  | 23 | 5,5,5,5,2,1     |
+  | 24 | 5,5,5,5,2,2     |
+  | 26 | 5,5,5,5,3,3     |
+  | 27 | 5,5,5,5,4,3     |
+  | 30 | 5,5,5,5,5,5     |
+
+  And at smaller group counts: `N=6, g=2 → 3,3`; `N=11, g=3 →
+  5,3,3`. The 2-tail shape is a consequence of the `g-2` clamp, not
+  a hardcode — it generalizes.
+- **Side-crossing accepted.** In odds mode a compaction move from
+  G5 → G4 crosses sides, so split balance can shift by a body when
+  the tail bridges the two halves. The balance panel rebalances on
+  the next pass; the user's explicit ask was visual density.
+
+### Raid split balancer — plan stickiness
+
+- **Plan cached across refreshes.** Single-row swaps used to call
+  `SwapRaidSubgroup`, wait 0.5s, then re-run `Suggest()` from
+  scratch. Because the whole sequence was re-ranked against the new
+  roster state, clicking step 1 could quietly rewrite steps 2 / 3
+  into a different plan. The plan is now cached on `ns._raidSwap`,
+  keyed by `(mode, maxGroup)`, serialized by player name so it
+  survives raid-index shifts.
+- **Reconcile on refresh, don't regenerate.** Each refresh walks
+  the cached plan and drops entries whose players are gone or
+  whose swap/move is already satisfied (someone got moved
+  manually). If any live entries remain, they're re-rendered and
+  `Suggest()` is skipped entirely. Regeneration only happens when
+  the cache is empty or the mode/maxGroup changed.
+- **Apply-All and Refresh flush.** Apply-All clears the cache
+  after dispatch (in case any `SetRaidSubgroup` silently no-oped
+  on a full destination) so the next pass replans any leftover.
+  The Refresh button is now the explicit escape hatch when PI
+  picks or manual moves should produce a brand-new ranking.
+
+### Power Infusion — auto-assign dropped, manual only
+
+- **Auto button removed.** WoW's inspect API is serial — one
+  `NotifyInspect` at a time, ~0.6-2.3s per reply depending on the
+  timeout path. In a 20-30-man raid the scan genuinely can't
+  complete inside any reasonable UI budget, and the retry pass
+  stacks on top. Auto-assign was printing "inspect data incomplete"
+  more reliably than it was assigning PI. The scan-orchestration
+  code (`PI:EnsureScan`, `PI:IsDataReady`, `PI:AutoAssign`,
+  `PI:Recommend`, plus their helpers) is gone.
+- **Manual picker unchanged.** Click a priest's row → pick a DPS
+  target. When the tier / iLvl scan (run by ReadyCheck / the loot
+  ranker) has happened, the picker still annotates rows with the
+  bloodmallet ST score and a "(best)" tag; otherwise it falls
+  back to alphabetical. Assignments still drive the swap
+  balancer's "PI pairing" criterion.
+
+### Bug fixes
+
+- **ReadyCheck "secret value" taint crash.** The per-unit aura
+  scan was comparing `a.spellId == 1459` (and four other stat
+  IDs) in an if/elseif chain. In 11.x, aura fields from
+  `C_UnitAuras.GetAuraDataByIndex` are marked "secret values" and
+  a direct `==` compare while execution is tainted raises
+  `attempt to compare local 'sid' (a secret number value, while
+  execution tainted by 'YippYappHelper')`. Converted the chain
+  to a `STAT_BUFF_IDS[sid]` table lookup — indexing with a secret
+  key is safe, same pattern already used for `flaskSet` / `foodSet`
+  / `bronzeSet`. Same class of crash as the L'ura `msg:match` fix
+  in v2.6.0, just on the number side. Two unused helpers
+  (`UnitHasAuraBySpellID`, `FindAuraBySpellID`) that would have
+  tripped the same bug if wired up were removed.
+
+### Under the hood
+
+- **Inspect retry queue** in `RaidInspect.lua`. Units that fail
+  `CanInspect` on the first pass (out-of-range at the repair
+  vendor, cross-phase, recently joined) are deferred to a retry
+  buffer and re-tried once after the main queue drains, rather
+  than being silently dropped. Helps the tier / iLvl / gear-
+  quality panel populate more completely without needing a manual
+  Rescan.
+
+## v2.6.0 — Tonight's Plan + L'ura revived (2026-04-19)
+
+### L'ura Memory-Game Helper — back, and this time it survives combat
+
+- **Root cause of the v2.0.x failure identified.** Midnight's encounter
+  system wraps `CHAT_MSG_RAID` / `CHAT_MSG_RAID_LEADER` payloads as
+  "secret string values" — any index op (`msg:match`, `msg:sub`,
+  `msg:find`, `msg:lower`) trips taint and crashes the handler with
+  `"attempt to index local 'msg' (a secret string value tainted by
+  'YippYappHelper')"`. The v2.0.x code did `msg:match("YYL[1-5]")`,
+  which is exactly the forbidden op.
+- **Protocol rebuilt to NSRT's shape (with our symbols).** Macros
+  broadcast a short code (`circle` / `diamond` / `t` / `triangle` /
+  `x`) via `/raid`; the receiver bakes the texture-path prefix into
+  its `SetFormattedText("|T<prefix>%s<suffix>|t", msg)` format
+  string, so `msg` flows through without ever being indexed or
+  concatenated. No taint. Uses our bundled symbol TGAs inside the
+  addon folder — no `Interface\ICONS\` file-install hack like the
+  NSRT+LuraMemoryFiles combo needs.
+- **Raid-leader-only listener.** Only `CHAT_MSG_RAID_LEADER` drives
+  the pentagon — regular raid chatter can't trigger a false render.
+- **Encounter-scoped by default.** Listener is armed only during
+  L'ura's memory-game windows (heroic: 10 / 80 / 150 s, mythic:
+  33 / 95 / 157 s + phase-4 re-arms). Checkbox flips to "always
+  listen" as a fallback for cross-realm / `/reload`-mid-pull cases.
+- **Full UI in Raid Tools → L'ura tab.** Enable toggle, scope
+  toggle, Preview / Simulate / Clear buttons, Unlock / Lock mover,
+  `Create / refresh macros` button, reference table (slot number,
+  symbol, name, macro name), and a `/say` debug mode for solo
+  end-to-end testing without a raid group.
+- **Macro generator.** Creates 5 macros named `YY_Lura_1..5` with
+  body `/raid <code>` and a shared numeric icon FileDataID (not an
+  addon path — those render transparently on macro slots). Deletes
+  stale old-schema macros (`YY_1..5`, previous `YY_Lura_*`) before
+  creating new ones so a broken prior save can't land on your bar.
+- **Chat payload shrunk** from the full path
+  `Interface\AddOns\YippYappHelper\Media\Textures\symbol_<name>`
+  (~60 chars) to just the short code. The prefix lives in the
+  receiver's format-string literal.
+
+### Ready Check dismissal + hover-to-pause
+
+- **Three-shape dismissal.** Combat start (`PLAYER_REGEN_DISABLED`)
+  snap-closes with no fade — the fight is live and the panel is in
+  the way. Raid pull countdown fires the fade immediately. Normal
+  finish / everyone-answered paths linger 3 s before fading so the
+  final status stays readable.
+- **Hover-to-pause, both directions.** If the cursor is over the
+  window when a fade is about to start, the fade is held. If the
+  user moves the cursor back into an already-fading window, the
+  fade stops and alpha restores to 1. The instant the cursor
+  leaves the window, the fade plays. Combat snap always wins —
+  hover does not pause a combat-start dismiss.
+- **Ticker-based hover detection.** Frame `OnLeave` fires when the
+  cursor moves onto a child row, even though `IsMouseOver()` still
+  reports true for the parent — unreliable signal. A 100 ms ticker
+  polls `IsMouseOver()` and self-cancels once neither a pending
+  fade nor an active fade remains.
+- **Position persistence fix.** `OnDragStop` was computing the
+  anchor via `GetLeft/GetTop - UIParent:GetLeft/GetTop` — brittle
+  math that could flip signs or diverge under differing effective
+  scales. Rewritten to use `frame:GetPoint()` directly and save
+  `point / relativePoint / x / y`; show path restores with the
+  matching `SetPoint`. Legacy `anchorLeft / anchorTop` still read
+  as fallback.
+- **"X missing" summary removed.** The counter conflated offline
+  members with players missing buffs — in a small test group you'd
+  see `1/2 ready · 1 missing` where the "missing" was just the
+  offline teammate. Per-row icons already show exactly which buffs
+  / food / flask / durability are missing. Summary now just reads
+  `X/Y ready`.
+
+### Raid Tools UI
+
+- **L'ura tab** lives next to Overview with its own purple accent.
+- Header row shifted so the Overview / Release Block / Scan Addons
+  buttons no longer slice the inner-panel border.
+
+### Loot Browser bug fixes
+
+- **Stale-texture pool bug fixed.** Icon pool entries cleared their
+  `itemID` / `itemLink` on release but not the texture itself. When
+  the pool handed a slot back out and the next row didn't explicitly
+  set a texture, the old item's icon stayed visible — rendered with
+  no tooltip and a dark-gray "unknown difficulty" border, which
+  looked like an errant bag-slot icon. `ReleaseAll` now calls
+  `SetTexture(nil)` on every pooled icon.
+- **Filtered Encounter Journal rows with no itemID.** The EJ
+  occasionally returns a loot entry that has a name and an icon but
+  no itemID — unlinkable, untooltippable. Those entries now get
+  dropped at scan time instead of rendering as a no-tooltip blank.
+
+### New features
+
+- **Tonight's Plan** — replaces the static Farm Guide on the home
+  dashboard with a live activity planner. Shows vault progress as three
+  dot-strips (M+, Raid, Delves) and up to three prioritized actions with
+  inline progress bars — "1 more M+ run » unlocks vault slot 2",
+  "2 raid bosses » unlocks raid slot 2", "40 Hero crests left this
+  week". Driven by a new `Features/Planner/PlannerData.lua` module that
+  reads `C_WeeklyRewards.GetActivities` and the profile's precious-crest
+  list. Auto-refreshes on currency / inventory update bursts.
+
+- **Utility Advisor description rewrite** — the dense per-dungeon prose
+  paragraph is now bulleted per mechanic, with color-coded response
+  keywords (interrupt = yellow, purge / dispel = cyan, enrage = red,
+  curse = violet, poison = green, bleed = dark red, stun = gold,
+  fear = violet, slow/snare = sky, grip = tan, incap = pink) and
+  bolded ability names (two-word Title Case auto-detected). The "lead"
+  one-liner still sits above the bullets as an intro.
+
+### ReadyCheck rewrite (30-man perf pass)
+
+- **Persistent rows** — removed the Acquire/Release pool churn; row
+  frames are created once and reused in-place. Icons anchored at
+  creation (previously 300 ClearAllPoints+SetPoint calls per render
+  at 30 raiders). Header labels / column dividers anchored once at
+  load instead of every render.
+- **Per-unit aura cache** — `ScanUnitAuras` results cached per unit
+  token, invalidated by `UNIT_AURA(arg1)` or `GROUP_ROSTER_UPDATE` or
+  the start of a new `READY_CHECK` session. A UNIT_AURA for one unit
+  now triggers a scan for that one unit; the other 29 hit the cache.
+- **Pulse animation no longer thrashes** — `_pulsing` flag avoids
+  the unconditional `Stop()` + `Play()` that restarted the eating
+  animation every render.
+- **Dismiss window on time** — removed the 3s post-finish delay and
+  shortened the fade to ~1.5s, so the window visibly fades away
+  "right as the 30 seconds end" instead of lingering with a tail.
+- **Pull-timer dismiss** — registered `START_TIMER`; when a player
+  countdown (`/cd`, `/countdown`, or BigWigs/DBM option to use the
+  native countdown) starts, the window fades immediately.
+- **Cross-realm name keys** — `readyStatus` now uses
+  `Ambiguate(name, "short")` consistently at all read/write sites;
+  previously mixed raw `UnitName` with short-ambiguated keys, causing
+  the initiator's seed to be missed on cross-realm players.
+- **OnHide unregister** — manual × close now stops UNIT_AURA tracking
+  too; previously only the finish paths did.
+
+### Interrupt Tracker
+
+- Bars no longer dim when on cooldown. The draining StatusBar was
+  already the cooldown signal — the extra 0.5/0.85 alpha just made
+  the bar harder to read.
+- Input values from SavedVariables are now type-validated and clamped
+  to sane ranges (`barWidth` 40–600, `posY` –8000 to 8000, etc.), so
+  a corrupted SV can't produce a 0-width bar or an off-screen frame.
+
+### Settings
+
+- **Quick Access sidebar tile** — the YippYapp macro drag icon is
+  pinned to the bottom of the settings tab column, always visible
+  regardless of which tab is open. "Drag to your bar, or type /yh"
+  hint inline.
+- **Slash commands reference** — new "Slash commands" section at the
+  bottom of the General tab listing /yh, /keys, /yyhrc, /yyhopts,
+  /yyhinterrupts, /yh toes off, /yh toes mover.
+
+### Fun
+
+- **Toes of the Harbinger** — Xal'atath's feet now hover at the top of
+  your screen. Yes, the feet. Just the feet. No, we will not be
+  answering questions. Drag them somewhere, rotate them upside-down,
+  flip them, resize them until they are an ominous 2× or a tasteful
+  0.5×. Saved across sessions, which is either charming or concerning
+  depending on your relationship with cosmic horror. Turn them off in
+  Settings → General → Fun when your raid group starts asking things,
+  or type `/yh toes off` and pretend you never saw them. Inspired by
+  Sakreble's [Xaltoes](https://www.curseforge.com/) addon, which itself
+  is a structured version of a ModelScene one-liner by @Herotherogue
+  on X.
+
+### Safety & perf
+
+- `ReleaseBlocker`'s mover overlay re-parented to `UIParent` (was
+  parented to the DEATH StaticPopup's release button); insecure +
+  mouse-enabled children on a frame whose OnClick runs protected
+  code is a taint path. OnUpdate also throttled to 20Hz so holding
+  CTRL for the override doesn't burn per-frame CPU during combat.
+- `RaidInspect` GUID scan replaced with a GUID→unit map rebuilt on
+  `GROUP_ROSTER_UPDATE` / `PLAYER_ENTERING_WORLD`. Fallback refresh
+  on stale lookup. Previously O(n) scan per `INSPECT_READY` of up
+  to 30 units.
+- `MythicPlusData` guild-keystone reply uses a 15s cooldown
+  (`lastGuildKSReplyAt`) so a burst of KSQ requests after a Tuesday
+  reset doesn't schedule 100+ independent `C_Timer.After` reply
+  timers.
+- `PVETab` defers `PanelTemplates_DeselectTab` via `C_Timer.After(0, …)`
+  so it never runs inline with Blizzard's click dispatch.
+- `Core/Core.lua :SendItemToUpgrade` has an explicit
+  `InCombatLockdown()` guard now (the right-click path into it was
+  bypassing the caller's guard).
+- `Welcome` `UISpecialFrames` insert is idempotent — fast Show/Hide/Show
+  sequences no longer stack duplicate entries.
+- Consolidated `CONSUMABLE_SPELL_IDS` (food / flask / bronze) into
+  `Core/Data.lua` — RaidUI used to carry stale Dragonflight flask IDs
+  that no longer matched Midnight S1 consumables.
+- Dashboard crest-refresh builds a single `track → crestData` map
+  per tick instead of nested scans (O(n²) → O(n)).
+- `ScheduleRefresh` in the gear panel coalesces rapid clicks via a
+  pending flag.
+- Removed duplicate `ns.CREST_COST_PER_UPGRADE` constant (was dead
+  code; `ns.BASE_CREST_COST` in Recommend.lua is the sole source).
+- `CompletionPopup` party class lookup uses party-unit tokens instead
+  of bare names — fixes missing class colors for cross-realm / out-of-
+  range cached keystone senders.
+
+## v2.5.0 - Midnight-ready (2026-04-15)
+
+### New features
+
+- **Interrupt Tracker (BETA)** — party-wide interrupt cooldown bars.
+  - Per-member bars with class-colored fill, class-colored border option,
+    icon, name, and countdown/elapsed timer.
+  - Tracks the player's own casts directly; attributes party interrupts
+    via a time-correlation model (ExwindTools-style) that sidesteps
+    Midnight's secret-value wrapping on friendly spellIDs.
+  - Fully configurable: bar/icon mode, texture, dimensions, orientation,
+    grow direction, anchor, multi-context visibility filters, backdrop,
+    and drag-to-move with an unlock overlay.
+  - Slash commands: `/yyhintlog` debug log, `/yyhintdebug` class rotation.
+
+- **Mythic+ completion popup (BETA)** — small window on
+  `CHALLENGE_MODE_COMPLETED` showing your new M+ rating, the party's new
+  keystones in Mythic+ page styling, and a button that navigates the
+  app frame to the M+ page. Row click casts the teleport directly via
+  `InsecureActionButtonTemplate` (BigWigs-style) so it works even when
+  the popup was opened from a tainted click path.
+
+- **Utility advisor (BETA)** — on entering a Mythic+ (or Mythic) dungeon,
+  shows a small window with per-class recommended utility spells for
+  that dungeon plus a short description. Spell icons hover to full
+  Blizzard tooltips. Gold border marks talent-dependent picks.
+  Show-once guard so it doesn't spam on reloads or re-entries.
+
+- **Raid Addon Scanner** — button in the Raid Tools header that pings
+  the party/raid via addon-comm and shows a modal listing who has
+  YippYappHelper installed vs not.
+
+### Settings overhaul
+
+- Removed the Blizzard AddOn Options integration. All settings now live
+  in the addon's own Settings page (accessible via the gear button,
+  `/yyhopts`, `/yyhsettings`, or `/yyhinterrupts`).
+- Top-level tabs (General / Interrupt Tracker) with vertical sub-nav
+  inside Interrupt Tracker for its many sections.
+- Feature-row widget with inline "Preview" buttons so you can test what
+  a popup looks like before enabling it in live play.
+- "Show in" visibility is now a multi-select (any of: Always / In a
+  group / Dungeons & raids / Mythic+ / Raid / PvP).
+
+### Mythic+ page
+
+- Views are now **strictly party-scoped** (5-man) regardless of whether
+  you're in a raid — no more raid-member keystones polluting the grid.
+- Tabs restyled to underline tabs matching the Loot Browser.
+- `/yyhmplustest` slash command injects 5 fake teammates with synthetic
+  keystones and scores so you can preview the full group layout solo.
+- Dungeon-tile tooltips now use an O(1) mapID-indexed lookup instead of
+  rescanning the keystone list per hover.
+
+### Raid Tools
+
+- **L'ura Runes feature removed.** Midnight locks down chat text,
+  addon-comm, raid markers, and custom channels during raid encounters
+  — there is no unprivileged signaling primitive left that works cross-
+  realm in a raid instance.
+- Ready Check performance: single-pass aura scanner (replaces 8 separate
+  FindAura calls per member — ~8x fewer `GetAuraDataByIndex` calls at
+  30-man), UNIT_AURA debounced to 0.5s, READY_CHECK_CONFIRM throttled
+  through `QueueRefresh`, CHAT_MSG_ADDON durability updates coalesced.
+- Durability broadcast staggered 0–1.5s to avoid CHAT_MSG_ADDON flood
+  on ready-check in full raids.
+- Durability name-key mismatch fixed (cross-realm raiders no longer
+  show as "not applicable").
+- Early-finish detection: window fades as soon as everyone answers,
+  rather than waiting the full 30s timer.
+- "Hearty" and "Well Fed" prefix patterns added to food detection.
+- ReadyCheck hide delay reduced 8s → 3s after everyone answers.
+- `Respond()` now fires `ConfirmReadyCheck` before any UI state touches,
+  plus optimistic local status update so the row flips instantly.
+
+### UI consistency
+
+- AppFrame uses a darker, flatter background (0.03 on black at 0.92
+  alpha) with a 1px black border.
+- Every page (Gear, Raid, Progression, Loot, Consumables, M+, Teleports,
+  Settings, Home) gets the same inner bordered panel — unified look.
+- Settings window lives inside the AppFrame as a page; Home-dashboard
+  and AppFrame header both have a "Settings" button that routes there.
+- Loot Browser and Consumables headers in app-mode dropped their card
+  border in favor of a single 1px bottom divider under the filter row.
+- All the in-addon widgets (checkbox, slider, dropdown, tab) rebuilt
+  to match the addon's dark palette — no more WoW default styling.
+
+### Performance
+
+- Interrupt slot OnUpdate throttled to 20 Hz and caches settings-
+  derived flags on the slot.
+- Interrupt events short-circuit when the feature is disabled.
+- Ready Check aura scanner batches 8+ independent aura iterations into
+  a single pass per member per render.
+- Mythic+ RefreshMythicPlus pre-builds `membersByName` and
+  `keystonesByMapID` lookups to avoid inner-loop rescans.
+- Loot Browser tooltipHiddenCache is now bounded (2048-entry cap with
+  wipe-on-fill).
+- AppFrame uses `UISpecialFrames` only out of combat to avoid the
+  `ADDON_ACTION_BLOCKED` taint we hit at combat end.
+
+### Bug fixes
+
+- Interrupt bar no longer snaps back when dragging to a new position
+  (atomic write + manual `applyPosition` instead of listener cascade).
+- Interrupt bar no longer jumps out from under the cursor when
+  GROUP_ROSTER_UPDATE fires mid-drag.
+- Active interrupt cooldowns now survive a rebuild — reattaching state
+  from `ns.Interrupts.state` to freshly-created slots so GROUP_ROSTER
+  doesn't visually reset ongoing bars.
+- Interrupt attribution flash no longer hides the slot (was passing
+  `showWhenDone=false` to `UIFrameFlash`).
+- Loot Browser filter row shifted down in app mode to clear the inner
+  panel top edge.
+- Consumables header matches Loot Browser styling in app mode.
+- Teleports / Progression / M+ page layouts nudged to fit the new
+  inner panel without gaps or overlaps.
+- All the tainted-value handlers we had to add while chasing the
+  Midnight secret-value system are removed now that we've landed on
+  ExwindTools' taint-free attribution model.
+
+---
+
+## v2.0.1 - Polish pass (2026-04-14)
+
+### L'ura Runes
+- Macros renamed from `O D G T X` to `YY_1` - `YY_5` with a blank question-mark icon. Raid leader copies the bundled symbol TGAs into `Interface\ICONS\`, restarts WoW, then manually picks each symbol from the macro icon browser's Items tab.
+- Tab fully redesigned into two full-width sections (Settings & Simulation, Raid Leader Macros) with a side-by-side reference table showing each macro number, its symbol icon, and the filename.
+- Macro listener now only responds to `CHAT_MSG_RAID_LEADER`, not `CHAT_MSG_RAID` - so only raid leaders / assists can drive the pentagon display.
+- Removed the per-slot icon picker; bundled symbol TGAs are the only display textures.
+- Description now correctly states runes fill the pentagon right-to-left in press order.
+
+### Ready Check
+- Response tracking rewritten to capture `READY_CHECK_CONFIRM` arguments directly into an internal status map (MRT-style) instead of polling `GetReadyCheckStatus`, which could be stale for a tick after the event fired.
+- Blizzard's own ready-check popup is now dismissed reliably (multi-tick safety sweep).
+- Footer collapses after you respond so the window shrinks up to the bottom of the roster.
+
+### UI polish
+- Main app window close button restyled to match the Ready Check / Settings header buttons.
+- Buy Me a Coffee icon moved to the home dashboard bottom-right with "if you want to support" label.
+- Welcome / What's New window: Unicode em-dashes and arrows replaced with ASCII (no more square glyphs on certain fonts), and bullet wrapping estimator now strips color codes so long bullets stop overlapping.
+- L'ura tab reference header reworded from "Reference" to "Pick this icon for each macro:" with explicit Items-tab instruction in the guide.
+
+### Other
+- `/keys` / `/yhkeys` slash command opens the Mythic+ page directly.
+- Settings panel two-way sync: toggling the in-raid-frame Release Blocker button now updates the settings checkbox immediately.
+- Guild keystone cache: 1-week TTL so stale entries from players who no longer have keys age out on their own.
+- Loot Browser cache no longer invalidates while the panel is closed - keeps re-opens instant.
+- Deleted orphaned `GetTrinketMythInfo` / `GetTrinketMaxIlvl` helpers left over after Trinket Rankings was retired.
+
+## v2.0.0 - Raid companion rewrite (2026-04-13)
+
+### New features
+- **L'ura Memory-Game Helper** - live rune pentagon display, macro generator (`O D G T X`), per-slot icon picker, bundled rune symbol textures, and built-in simulation for dry-runs. Works in both Heroic and Mythic with press-order rendering.
+- **Ready Check Window** - opens automatically on any ready check. Shows food, flask, vantus rune, Int/AP/Vers/Stam/Haste/Move, and durability % for every raider. Collapse/expand toggle, countdown timer, Ready/Not-Ready buttons, and live refresh as buffs change mid-check.
+- **Settings Panel** - full entry in Blizzard's standard Options UI. Toggle Release Blocker, Ready Check, L'ura Runes, and the minimap button. `/yhopts` opens it directly.
+- **Keys tab on the group-finder window** - opens the Mythic+ page without closing the current LFG panel.
+
+### Major improvements
+- Loot Browser: class dropdown (inspect any class), horizontal-scroll icon rows, housing decor + recipe filter, mount border distinction, and login prewarm so re-opens feel instant.
+- Mythic+ Guild Keystones: auto-request on login, manual Refresh button that sits cleanly next to the Vault row.
+- Raid Split Balance: added melee vs ranged DPS counts for each split.
+- Dashboard panels restyled with accent underlines and consistent typography. Upgrade Summary rewritten into readable "Slot - Action (reason)" lines.
+- Release Blocker simplified to work in any raid zone with guild-majority detection.
+- New `YippYappHelper` logo used for the minimap button and in-app header.
+- Full folder reorganization: `Core/`, `Features/`, `Integrations/`, `Media/`.
+
+### Retired
+- Trinket Rankings (too expensive to keep accurate via sim).
+- Raid Tools - Tier Tracker tab.
+- Raid Tools - Performance tab.
+
+## v1.4.0 — Mythic+, Teleports & More (2026-03-30)
+
+### Mythic+ Helper (new)
+- Dungeon overview with clickable teleport icons showing your best key level and score
+- Group ratings grid with color-coded per-dungeon scores for all party members
+- Group keystones section with dungeon icons and class colors
+- Great Vault tracker with Blizzard-native tooltips — click slots to open vault
+- Rating goals (2000/2500/3000) with progress bars and focus dungeons
+- Guild tab for viewing guild members' keystones (shared via addon comms)
+- Home/Guild tab navigation
+- Accessible from dashboard, app nav, and `/yh mplus`
+
+### Dungeon Teleports (new)
+- All Hero's Path dungeon teleports from MoP through Midnight
+- Organized by expansion with clickable secure buttons
+- Greyed-out icons for teleports not yet unlocked
+- Accessible from dashboard, app nav
+
+### Release Spirit Blocker (new)
+- Hides the Release Spirit button in current expansion guild raids
+- Hold CTRL for 1 second to override — progress bar shows hold time
+- Does not interfere with combat resurrections
+- Toggle with `/yh release` (enabled by default)
+
+### Loot Browser
+- Instance-aware filtering: detects current dungeon/raid and shows only that instance's loot
+- Slot tabs grey out when no items match the instance + stat filter combo
+- Auto-enables instance filter when entering a dungeon
+
+### Dashboard
+- Upgrade summary and farm guide now auto-refresh on gear/crest changes
+- Top 3 actionable recommendations sorted by priority
+
+### Trinket Rankings
+- Fixed Hunter Beast Mastery spec key mismatch in "Your Spec" mode
+- Fixed Rogue Assassination mapped to Outlaw rankings
+- Added missing AOE trinket rankings for all Demon Hunter specs
+
+### Raid Tools
+- Fixed swap suggestions reusing the same player as swap partner across multiple triggers
+
+### UI
+- All frames use dynamic sizing based on screen resolution
+- Responsive dungeon icons scale to fit available width
+- Font sizes scale proportionally at different UI scales
+
+## v1.3.6 — What's New Screen (2026-03-26)
+- Updated What's New popup to show v1.3 and v1.3.5 highlights
+- Removed features list from welcome screen, now shows only what's new
+
+## v1.3.5 — Polish & Fixes (2026-03-26)
+
+### Consumables
+- Shift-click items to link in chat or search the Auction House
+
+### Bug Fixes
+- Fixed sub-panels (Gear, Raid Tools, Loot Browser, Consumables) being independently draggable when embedded in the app shell
+- Fixed consumables icon pool contamination causing greyed-out icons
+- Added nil-safety to consumables object pool functions
+
+## v1.3.0 — Consumables Guide, Loot Browser & More (2026-03-26)
+
+### Consumables Guide (new)
+- Full enchant, gem, and consumable recommendations for every class and spec (all 40 specs)
+- Three-tab layout: Enchants, Gems, Consumables — each with item icons, quality-colored links, and tooltips on hover
+- Class dropdown and spec buttons to browse any spec's recommendations (defaults to your class/spec)
+- Guide text below each tab with detailed reasoning (flask choices, potion tradeoffs, weapon buff notes, food comparisons)
+- Alternative items shown inline with "or" label (e.g. flask alternatives)
+- Accessible from dashboard, app nav bar, and integrated as full page in the app shell
+
+### Loot Browser (new)
+- Browse all dungeon, raid, and world boss loot by slot
+- EJ-based scanning with spec and secondary stat filtering (Crit/Haste/Mastery/Vers)
+- Two-row slot tabs: armor on top, accessories + weapons on bottom
+- Difficulty columns (Normal/Heroic/Mythic for dungeons, LFR/N/H/M for raids)
+- Item icons with difficulty-colored borders, tooltips on hover, shift-click to link
+- Trinket tier badges (S/A/B) cross-referenced from SimC rankings
+- Spec dropdown to browse loot for any spec
+- Remembers selected slot across open/close (defaults to Head)
+- Accessible from dashboard, app nav bar, and `/yh loot`
+
+### Raid Tools
+- Group display reordered: top row shows groups 1, 3, 5 and bottom row shows 2, 4, 6 for split visualization
+- DK Grip distribution: suggests splitting Death Knights across raid splits for Mass Grip coverage
+- Healer stacking fix: only suggests swaps when source split has 3+ healers (5-healer raids handled correctly)
+
+### Profile System Simplified
+- 6 profiles → 3: **Normal** (Casual/Delves/M+ up to 8), **Heroic** (Heroic Raid/M+ 10), **Mythic** (Mythic Raid/M+ 10+)
+- Old profile IDs auto-migrate (heroic_raider → heroic, mplus_high → heroic, etc.)
+- Each profile defines farmable track for smarter recommendations
+
+### Recommendation Engine Improvements
+- **SAVE_FOR_DROP**: "Hero drops from M+6-10 / Heroic raid — save Champion crests, wait for replacement"
+  - Only triggers for low-rank items (1-3/6) with precious crests
+  - Shows source hint (M+ key range + raid tier)
+- **CREST_CAPPED**: "Need 20 Champion — capped until next reset"
+  - Detects both weekly caps (Hero/Myth) and season cumulative caps
+- Myth 2/6+ always recommended for upgrade (top track, nothing replaces it)
+- Myth 1/6 still suggests using Hero crests for free promotion via overlap
+
+### Trinket Rankings Refreshed
+- Fresh SimC data: 60,000 iterations, 30 specs (ST + AOE), latest nightly profiles
+- New spec: Rogue Assassination
+- Item level shown on all trinket rows (Myth 6/6 = 289)
+- Tooltips now show Myth 6/6 stats; shift-click links the Myth 6/6 version
+- Removed legacy trinkets not in current loot pool
+
+### UI Polish
+- Unified underline tab style across all panels (Raid Tools, Consumables, Loot Browser)
+- Dashboard app nav buttons in a 3x2 grid instead of single row
+- Magisters' Terrace trinket sources corrected
+
+## v1.2.0 — Raid Tools, Data Overhaul & Polish (2026-03-25)
+
+### Recommendation System Reworked
+- Crests can only be spent on their own track — addon no longer suggests "hold crests for higher track gear"
+- Items now show explicit upgrade priority: "Upgrade 1st of 5 Champion", "Upgrade 2nd", etc.
+- Priority based on slot value (weapons/chest/legs first, neck/wrist last)
+- Crest scarcity calculated from total season budget (current + still earnable), not just inventory
+- Overlap zone fix: "Use cheaper crests" only shows at rank 1 (not rank 2 where free ranks are already used)
+- Profile changes instantly refresh all recommendations on the dashboard
+
+### Raid Tools — Performance Tab (new)
+- DPS rankings from Blizzard's built-in Damage Meter API (C_DamageMeter)
+- Average DPS per player per split (A vs B) with imbalance detection
+- Avoidable damage taken leaderboard
+- Death count tracker
+- Interrupt count tracker
+- Uses current combat segment, falls back to overall
+
+### Raid Tools — Overview Improvements
+- Two-column layout: groups + swaps on left, composition + consumables on right
+- Consumable checker: flask, food, augment rune status per player (spell ID based, taint-safe)
+- Missing players listed by name next to each consumable type
+- Raid buff list: one per line, cleaner layout
+- Composition shown in large font with role breakdown
+- Swap suggestions now show player names in bordered badges with class-colored borders
+- "Swap All" button executes all suggested swaps via SwapRaidSubgroup API (raid leader/assistant only, out of combat)
+- Debuff class distribution: suggests spreading Monk (Mystic Touch) and DH (Chaos Brand) across splits
+- PI targets need same split (not same group) — corrected from 40yd range
+- Player count balance: suggests moving healer if it fixes both size and healer imbalance
+- Auto-refreshes on GROUP_ROSTER_UPDATE (instant update when players are moved)
+- Group display always reserves 2 rows (no layout shift with fewer than 4 groups)
+
+### Season 1 Data Updated
+- Gear tracks: Champion 249/252/255, Hero 262/265/268, Myth 275/278/281 (ranks 2-4 corrected)
+- Champion free ranks from Veteran: 2 (was 1)
+- M+ crests: Heroic=Adventurer, M0=Champion, +2-3=Champion, +4-8=Hero, +9-12=Myth
+- Raid: per-boss crest amounts, Void 6 bonus crest (20 base + 10 next tier), per-wing detail view
+- Raid progression: clickable wing buttons (All / Voidspire / Dreamrift / Quel'Danas) with boss-by-boss detail
+- Delves: Tiers 1-4 give Adventurer crests, Tier 10=Champion, Tier 11=Gilded Stash (10 Hero + 5 Myth)
+- Delve cards grouped by crest type: Tier 1-4, 5-6, 7-10, 11
+- Trovehunter's Bounty Map data added (tiers 4-11)
+- Prey: Normal=Adventurer, Hard=Veteran, Nightmare=Champion
+- Crafting: added Veteran tier, Spark of Radiance (no crests) tier
+- M+ cards show ilvl ranges with track names (e.g. "259 - 263 Hero")
+- M+ grouped as +2-5, +6-8, +9, +10-12
+
+### Profile System
+- Clickable dropdown on dashboard to switch profiles
+- Profile change refreshes dashboard, gear recommendations, and suggestions instantly
+- Hero crests now precious for Mythic Raider and M+ High profiles (weekly cap makes them limited)
+- "What's New" window shows on version update with profile selector built in
+
+### Trinket Panel — ChonkyCharacterSheet Support
+- Trinket tab and panel now anchor to the actual visual right edge of the character frame
+- Detects ChonkyCharacterSheet and anchors to CharacterFrameBg instead of CharacterFrame
+- Panel inherits CharacterFrame scale when Chonky is active
+- OnSizeChanged hook re-anchors on dynamic resize
+- "All Specs" button collapses sidebar then opens app (no more panel stealing)
+
+### Minimap Button — LibDBIcon
+- Replaced custom minimap button with LibDBIcon-1.0
+- Works correctly with ElvUI square minimap, SexyMap, and other minimap addons
+- Draggable, position saved automatically by the library
+- Embedded libraries: LibStub, CallbackHandler-1.0, LibDataBroker-1.1, LibDBIcon-1.0
+
+### Visual Polish (inspired by Plumber addon)
+- DisableSharpening on all frame borders for smooth edges at any UI scale
+- ADD blend mode highlights on hover (subtle glow instead of flat color change)
+- Text shadows on all headers and titles for depth
+- Consistent color hierarchy: primary (0.92), secondary (0.55), tertiary (0.35)
+- All frames adapt to screen resolution (dynamic sizing via GetAppFrameSize)
+- All popups clamped to screen (trinket detail, PI picker, profile dropdown)
+- Frame z-ordering fixed: sub-panels normalized when inside app, no addon interleaving
+
+### What's New Window
+- Welcome screen now doubles as a "What's New" popup on version updates
+- Shows "Welcome to YippYapp Helper" on first install, "What's New" on updates
+- Features list + version-specific highlights
+- Profile selector built in for immediate setup
+- "Got it" saves the version — only shows again on next update
+- `/yh whatsnew` to re-show
+
+### Bug Fixes
+- Frost DK and Devourer DH spec keys corrected for trinket rankings
+- TIER_QUALITY defined before use (trinket detail popup quality borders)
+- Swap badge frames and PI picker rows now pooled (memory leak fix)
+- Tier tracker rows pooled (memory leak fix)
+- Tainted aura name strings handled via spell ID lookup + pcall fallback
+- Dashboard.lua removed call to nonexistent RefreshRaidTrinketDisplay
+- quickBtnText dead references removed
+
+---
+
+## v1.1.0 — Midnight Season 1 Overhaul (2026-03-23)
+
+### Unified App Window
+- Replaced the old popup dashboard with a single unified app frame
+- All features accessible from one window with back-button navigation
+- Home page dashboard with character info, crest overview, upgrade summary, farm guide, and navigation buttons
+
+### Gear Upgrades (redesigned in-app)
+- Equipment panel scaled up for readability
+- Info panel widened with 2-column crest display
+- Suggestions redesigned as card-style rows
+- New recommendation: "Use cheaper crests" for overlap zones
+
+### Trinket Rankings (redesigned in-app)
+- 3-column layout: S-Tier, A-Tier, B-Tier side by side
+- Class/spec browser with ST/AOE toggle
+- Fixed persistent "Loading..." issue
+- Trinket data updated with latest SimC nightly
+
+### Raid Tools (redesigned)
+- Overview tab with composition, buffs, splits, PI assignments
+- Tier Tracker tab (scan-on-demand)
+
+### Progression Dashboard (redesigned)
+- Card-based single-page layout
+- M+ breakpoints, Raid by difficulty, Delve breakpoints, Prey, Crafting
+- Crest Sources side panel
+
+### Welcome Screen
+- Draggable macro icon for action bar
+- Macro auto-created on login
+
+### Quality of Life
+- Minimap button opens the unified app
+- `/yh welcome` to reset welcome screen

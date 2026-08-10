@@ -1,0 +1,9 @@
+# Normalise to LF in the repository. Without this, editing on Windows
+# checks files in as CRLF and every file churns the moment anyone else
+# touches it -- and the CurseForge packager builds on Linux.
+* text=auto eol=lf
+
+# Binary assets: never touch these.
+*.tga  binary
+*.png  binary
+*.blp  binary

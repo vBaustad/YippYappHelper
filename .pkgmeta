@@ -1,0 +1,19 @@
+package-as: YippYappHelper
+
+# The CurseForge packager reads this file, not .gitignore. Anything listed
+# here is stripped from the uploaded zip even if it is committed to the
+# repo, so authoring tooling stays out of the shipped addon.
+ignore:
+  - Tools
+  - .github
+  - .claude
+  - .gitignore
+  - .pkgmeta
+  - curseforge-icon.png
+  - Art
+  - Libs/LibEditMode/.git
+  - Libs/LibEditMode/.github
+  - Libs/LibEditMode/tests
+  - Libs/LibEditMode/.luacheckrc
+
+enable-nolib-creation: no
