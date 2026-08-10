@@ -47,7 +47,13 @@ ENDPOINT = "https://bloodmallet.com/chart/get/{dtype}/{style}/{cls}/{spec}"
 # with no data is skipped per spec, so add them back when bloodmallet
 # starts publishing them.
 FIGHT_STYLES = [
-    ("ST", "castingpatchwerk"),
+    ("ST",  "castingpatchwerk"),
+    # 5-target. The chart page renders, but the data endpoint still
+    # answers "No standard chart with these values found" -- checked
+    # 2026-08-10 against death_knight/blood. Listed anyway: a style with
+    # no data is skipped per spec, so the day bloodmallet publishes it a
+    # re-scrape picks it up with no code change.
+    ("AOE", "castingpatchwerk5"),
 ]
 
 # (addon key, bloodmallet class slug, bloodmallet spec slug)
