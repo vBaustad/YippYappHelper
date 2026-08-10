@@ -110,11 +110,11 @@ local function BuildAll(category, layout)
     -- as visible text, where there is room for it.
     AddModuleCheckbox(category, "mplusCompletion", "Mythic+ summary",
         "Shows a summary when a keystone run finishes, with timer, upgrade "
-        .. "level, and party breakdown. Currently in beta.")
+        .. "level, and party breakdown.")
 
     AddModuleCheckbox(category, "utilityAdvisor", "Utility advisor",
         "Surfaces a per-spec utility checklist (defensives, dispels, CC) "
-        .. "when you enter a Mythic+ dungeon. Currently in beta.")
+        .. "when you enter a Mythic+ dungeon.")
 
     AddCheckbox(category, "trinketTooltips", "Trinket sim rankings",
         "Adds simulated DPS rankings from bloodmallet to trinket tooltips.",

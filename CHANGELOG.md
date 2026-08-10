@@ -73,6 +73,10 @@
   was being overwritten with a string, so OpenToCategory silently failed.
 - Progression's subtitle leaked through the app frame's own page title.
 
+### Out of beta
+- The **Interrupt Tracker**, **Mythic+ summary** and **Utility Advisor**
+  are no longer beta-flagged. They have been in use across a full season.
+
 ### Also
 - A jump counter on the character bar, live-updating. It does nothing.
 - This "what's new" notice, shown once per version. `/yh whatsnew`

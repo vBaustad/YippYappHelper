@@ -119,16 +119,16 @@ Assassination this tier.
 - `/yyhmplustest` fills the view with five dummy teammates so you can
   preview the layout solo.
 
-### Mythic+ Completion Popup (BETA)
+### Mythic+ Completion Popup
 On keystone completion, shows your new rating and the party's new keys.
 Click a row to teleport straight there.
 
-### Utility Advisor (BETA)
+### Utility Advisor
 On entering a mythic keystone, a compact window lists your class's
 recommended utility spells for that dungeon plus a short mechanic note.
 Gold border marks talent-dependent picks.
 
-### Interrupt Tracker (BETA)
+### Interrupt Tracker
 Party-wide kick cooldown bars, with a time-correlation attribution model
 that works under Midnight's secret-value system. Class-coloured fills and
 borders, icon mode, drag-to-move, and a multi-context visibility filter.
