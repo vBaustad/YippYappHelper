@@ -8,6 +8,10 @@ available in-game.** Gear upgrade advice, what drops where and whether
 it's actually an upgrade, trinket sim rankings, keystone planning,
 consumables, and dungeon teleports — in one window.
 
+Season 2 also brings **Mr. Yeeper**, who reads your character and tells
+you what is worth doing, and moves every frame the addon owns into
+**Blizzard's Edit Mode**.
+
 ---
 
 ## Season 2 at a glance
@@ -193,6 +197,14 @@ Character bar, crest overview with weekly caps, an activity planner built
 from your vault progress and crest headroom, and a farm guide for which
 crests to chase and where.
 
+The character bar also carries a jump counter, which serves no purpose
+whatsoever and is not going anywhere.
+
+### What's New
+On the first login after an update, Mr. Yeeper summarises what changed.
+Once per version, never again for that version. `/yh whatsnew` reopens
+it if you closed it too quickly.
+
 ### Mr. Yeeper
 The dashboard's advisor. He reads your gear, crests, vault, keystones,
 raid lockouts and guild activity, works out which single fact is worth
@@ -298,12 +310,15 @@ community gearing sheet.
 
 ## Known gaps
 
-- **Utility Advisor** has no entries for the Season 2 dungeons yet — they
-  only finished PTR testing days before launch. It degrades gracefully
-  until then.
-- **Great Vault item levels** for dungeons and delves are estimates. The
-  journal has no vault preview, so they can only be confirmed from the
-  Great Vault UI once slots are filled.
+- **Utility Advisor** has no entries for the Season 2 dungeons yet.
+  Wowhead's per-dungeon guides were still unpublished at launch, and the
+  notes are only worth having if they are right — a wrong dispel type is
+  worse than none. The dungeon list, map IDs and timers are already in
+  place for when they land. It degrades gracefully until then.
+- **Great Vault item levels** for delves are estimates. The journal has
+  no vault preview, so they can only be confirmed from the Great Vault UI
+  once slots are filled. The Mythic+ column is now sourced and correct —
+  M9 previously claimed 318, which was wrong; Myth 1/6 starts at M10.
 - **Crafting item levels** in the progression tables are inferred and
   want verifying against the crafting order UI in-game.
 - **Consumables and trinket data** are still Season 1 upstream; both
@@ -312,10 +327,10 @@ community gearing sheet.
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest:
-**v2.12.0** — PTR shakedown: raid and dungeon item levels corrected
-against the game, a difficulty selector for the Loot Browser, quality
-borders, a favourites toggle, and fixes for Season 1 gear being offered
-as upgradeable and the `/yh` macro failing to create.
+**v3.0.0** — Mr. Yeeper on the dashboard, every movable frame migrated to
+Blizzard's Edit Mode, settings rebuilt on Blizzard's own Settings API,
+and the Season 2 data pass. Also a corrected M9 vault item level, and a
+fix for the interrupt tracker showing an empty frame after any rebuild.
 
 ## Feedback
 
