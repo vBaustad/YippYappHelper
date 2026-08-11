@@ -50,6 +50,33 @@
 - Appearance settings live in Edit Mode, where you can see the change as
   you make it. Each settings section points at it.
 
+### Gear: crest-efficiency warnings
+- **The addon now warns you before a wasteful crest spend.** Every Season
+  2 track overlaps the one below it by two ranks, so Hero 5/6 -> 6/6 and
+  Myth 1/6 -> 2/6 both land on 321 and both cost 20 crests. The game
+  charges the same either way and never mentions that only one of those
+  two currencies still has a season of use in it.
+- Myth crests buy ranks 3-6 and nothing else does. Hero crests go dead the
+  week every Hero-track slot is maxed, around week 3-4. Spending the
+  scarcer crest inside the overlap is strictly dominated -- it buys an
+  item level the cheaper crest was going to give you anyway.
+- The same shape one tier down: Hero crests on Hero 1/6 -> 2/6 duplicate
+  Champion 5/6 -> 6/6 at 308. That one only starts mattering once you are
+  farming +10 keys and Champion crests have gone abundant, so it is gated
+  on the profile rather than shown to everyone from day one.
+- Slots get a red "Wasteful crest spend" verdict naming the crests at
+  stake, the item level band, and which lower-track piece to put the cheap
+  crests into instead. With nothing left on the lower track to spend on it
+  softens back to the old "use cheaper crests" note -- the advice is still
+  true, but there is no move to make.
+- Mr. Yeeper reports it across the whole character, just under idle
+  crests in priority. Several wasteful slots on different tiers are
+  totalled per crest track, and the suggested sinks are grouped by which
+  crest actually pays for them.
+- Tracks whose crests are abundant for your profile are no longer nagged
+  about at all. Veteran ranks used to draw the promotion note even though
+  Veteran crests are free and there is nothing to save.
+
 ### Fixes
 - **M9 great vault was wrong**: 318 corrected to 315 (Hero 4/6). Myth 1/6
   does not start until M10.

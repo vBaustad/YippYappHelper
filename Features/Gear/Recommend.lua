@@ -14,6 +14,7 @@ ns.RECOMMEND = {
     BAD_INVESTMENT    = { label = "Bad investment",           color = "ffff0000" }, -- red
     CRAFT_INSTEAD     = { label = "Craft instead",            color = "ffcc66ff" }, -- purple
     USE_LOWER_TRACK   = { label = "Use cheaper crests",        color = "ff66bbff" }, -- light blue
+    WASTED_CREST      = { label = "Wasteful crest spend",      color = "ffff3333" }, -- red
     WAIT_BETTER       = { label = "Wait for better source",   color = "ffaaaaaa" }, -- grey
     MAXED             = { label = "Max rank",                 color = "ff888888" }, -- dark grey
     NO_ITEM           = { label = "",                         color = "ff555555" },
@@ -217,6 +218,142 @@ function ns:GetTotalCrestBudget(crestTrack)
     return ns:GetCrestCountByTrack(crestTrack) + ns:GetEarnableCrests(crestTrack)
 end
 
+------------------------------------------------------------
+-- Crest waste: paying a scarce crest for an item level a cheaper
+-- crest already reaches.
+--
+-- Season 2 tracks overlap by exactly two ranks (ns.TRACK_FREE_RANKS),
+-- so rank 1 -> 2 of the higher track lands on the same item level as
+-- rank 5 -> 6 of the one below it, at the same 20-crest price:
+--
+--   Champion 5/6 305 -> 6/6 308   ==   Hero 1/6 305 -> 2/6 308
+--   Hero     5/6 318 -> 6/6 321   ==   Myth 1/6 318 -> 2/6 321
+--
+-- The two crests are not worth the same, though. Myth crests keep
+-- buying ranks 3-6 for the whole season; Hero crests stop mattering the
+-- week every Hero-track slot is maxed, around week 3-4. So the higher
+-- crest spent inside the overlap is strictly dominated: it buys nothing
+-- the cheaper one could not, and burns one that still had somewhere
+-- else to go. Same shape one tier down, which is why the Hero/Champion
+-- case only starts to matter once the player is farming +10 keys and
+-- Champion crests have gone abundant.
+--
+-- The addon already advised the free promotion out of this band; what
+-- it never did was say the spend itself is a mistake before you make
+-- it. That is what this returns.
+--
+-- nil when nothing is at stake. Otherwise a table describing the spend.
+-- `sinkSlots` names the equipped lower-track pieces that could absorb
+-- the cheaper crests instead; with none of those the advice is still
+-- true, but there is no move to make right now, so callers should
+-- soften it rather than shout.
+------------------------------------------------------------
+function ns:GetCrestWaste(slotID)
+    local canUpgrade, upgradeInfo = ns:CanUpgradeItem(slotID)
+    if not canUpgrade or not upgradeInfo then return nil end
+
+    local track = upgradeInfo.track
+    local overlap = track and ns.TRACK_FREE_RANKS[track]
+    if not overlap then return nil end
+
+    -- Only ranks below the overlap count are duplicated by the track
+    -- underneath. Myth 2 -> 3 is Myth-only ground and is never waste.
+    local rank = upgradeInfo.currUpgrade or 0
+    if rank < 1 or rank >= overlap.count then return nil end
+
+    local crestTrack = ns.TRACK_CREST[track]
+    local prevCrestTrack = ns.TRACK_CREST[overlap.prevTrack]
+    if not crestTrack or not prevCrestTrack then return nil end
+
+    -- Nothing to protect if the crest being spent is not scarce for this
+    -- player -- the warning would be pure noise. This is also what gates
+    -- the Hero case by content level: Hero -> Champion is only worth
+    -- saying once Champion crests are free, which the profiles model as
+    -- "farming +10 keys or better".
+    if not ns:IsCrestPrecious(crestTrack) then return nil end
+
+    local levels = ns.GEAR_TRACKS[track]
+    if not levels or not levels[rank] or not levels[overlap.count] then return nil end
+
+    -- Where could the cheaper crests go instead? Only equipped pieces
+    -- still sitting on the lower track can absorb them.
+    --
+    -- A candidate that is itself parked in ITS own overlap band earns
+    -- this same warning one tier down, so leading with it would have the
+    -- addon pointing at a slot it is simultaneously telling the player
+    -- to leave alone. It is still a real sink -- the ranks above the
+    -- band do need genuine crests -- so it stays in the list, just not
+    -- at the front of it.
+    local prevOverlap = ns.TRACK_FREE_RANKS[overlap.prevTrack]
+    local prevOverlapRanks = 0
+    if prevOverlap then prevOverlapRanks = prevOverlap.count end
+
+    local clean, muddy, sinkRanks = {}, {}, 0
+    for _, si in ipairs(ns.SLOT_IDS) do
+        if si.slot ~= slotID then
+            local canUp, up = ns:CanUpgradeItem(si.slot)
+            if canUp and up and up.track == overlap.prevTrack then
+                sinkRanks = sinkRanks + ((up.maxUpgrade or 0) - (up.currUpgrade or 0))
+                if (up.currUpgrade or 0) >= prevOverlapRanks then
+                    table.insert(clean, si.name)
+                else
+                    table.insert(muddy, si.name)
+                end
+            end
+        end
+    end
+
+    local sinkSlots = clean
+    for _, name in ipairs(muddy) do
+        table.insert(sinkSlots, name)
+    end
+
+    local cost = ns:GetCrestCost(crestTrack)
+    local prevCost = ns:GetCrestCost(prevCrestTrack)
+    local prevCount = ns:GetCrestCountByTrack(prevCrestTrack)
+    local prevAffordable = 0
+    if prevCost > 0 then
+        prevAffordable = math.floor(prevCount / prevCost)
+    end
+
+    local wastedRanks = overlap.count - rank
+
+    return {
+        slotID         = slotID,
+        track          = track,
+        prevTrack      = overlap.prevTrack,
+        crestTrack     = crestTrack,
+        prevCrestTrack = prevCrestTrack,
+        rank           = rank,
+        maxRank        = upgradeInfo.maxUpgrade,
+        overlapRanks   = overlap.count,
+        fromIlvl       = levels[rank],
+        toIlvl         = levels[overlap.count],
+        wastedRanks    = wastedRanks,
+        wastedCrests   = wastedRanks * cost,
+        sinkSlots      = sinkSlots,
+        cleanSinks     = #clean,
+        sinkRanks      = sinkRanks,
+        prevCrestCount = prevCount,
+        prevAffordable = prevAffordable,
+    }
+end
+
+--- Every slot whose next crest purchase lands inside the overlap band.
+--- Returns the list, plus crestTrack -> total crests at stake.
+function ns:GetAllCrestWaste()
+    local list, totals = {}, {}
+    for _, si in ipairs(ns.SLOT_IDS) do
+        local waste = ns:GetCrestWaste(si.slot)
+        if waste then
+            waste.slotName = si.name
+            table.insert(list, waste)
+            totals[waste.crestTrack] = (totals[waste.crestTrack] or 0) + waste.wastedCrests
+        end
+    end
+    return list, totals
+end
+
 -- Achievement progress: how many slots still need upgrades to earn a discount achievement?
 -- Uses ilvl thresholds so cross-track items count (e.g. Champion 1/5 at 246 satisfies Veteran).
 -- Returns: slotsRemaining, totalCrestCost, upgradeableCount, perSlotInfo[]
@@ -380,10 +517,6 @@ function ns:GetRecommendation(slotID)
     local totalBudget = ns:GetTotalCrestBudget(crestTrack)
     local earnable = ns:GetEarnableCrests(crestTrack)
 
-    -- Track overlap: first N ranks of Hero/Myth are covered by cheaper crests
-    local overlap = ns.TRACK_FREE_RANKS[track]
-    local overlapRanks = overlap and overlap.count or 0
-
     -- High-water mark: upgrades are free up to previously reached ilvl
     local freeIlvl = ns:GetFreeUpgradeIlvl(slotID)
     local freeRanks = 0
@@ -444,18 +577,38 @@ function ns:GetRecommendation(slotID)
     end
 
     -- ============================================================
-    -- RULE 3: Precious crest savings via lower-tier upgrade path
-    -- For Hero/Myth items at low ranks (within the overlap zone),
-    -- advise spending cheaper crests on a lower-track piece first.
-    -- This fires BEFORE save-for-drop so promoted items (e.g.
-    -- Champion 6/6 → Hero 2/6) get correct upgrade advice.
+    -- RULE 3: Wasteful spend inside the track overlap
+    --
+    -- The first ranks of this track sit on item levels the track below
+    -- also reaches, for the same price. Buying them with the scarcer
+    -- crest is strictly dominated — see ns:GetCrestWaste for why. Warn
+    -- loudly when there is a lower-track piece to spend on instead;
+    -- fall back to the old promotion advice when there is not.
+    --
+    -- Fires BEFORE save-for-drop so promoted items (e.g. Champion 6/6
+    -- → Hero 2/6) still get correct upgrade advice.
     -- ============================================================
-    if overlap and rank < overlapRanks then
-        local prevCrestCount = ns:GetCrestCountByTrack(ns.TRACK_CREST[overlap.prevTrack])
+    local waste = ns:GetCrestWaste(slotID)
+    if waste then
+        local sinks = #waste.sinkSlots
+        if sinks > 0 then
+            local where = waste.sinkSlots[1]
+            if sinks > 1 then
+                where = where .. " +" .. (sinks - 1) .. " more"
+            end
+            return ns.RECOMMEND.WASTED_CREST,
+                waste.wastedCrests .. " " .. waste.crestTrack .. " for " ..
+                waste.fromIlvl .. "→" .. waste.toIlvl .. " — a maxed " ..
+                waste.prevTrack .. " piece lands there too. Spend " ..
+                waste.prevCrestTrack .. " on " .. where ..
+                " (" .. waste.prevCrestCount .. " held); keep " ..
+                waste.crestTrack .. " for rank " .. (waste.overlapRanks + 1) .. "+"
+        end
         return ns.RECOMMEND.USE_LOWER_TRACK,
-            "Rank " .. rank .. "/" .. maxRank .. " — max a " .. overlap.prevTrack ..
-            " piece to get free promotion to rank " .. overlapRanks ..
-            " (" .. prevCrestCount .. " " .. overlap.prevTrack .. " available)"
+            "Rank " .. rank .. "/" .. maxRank .. " — " .. waste.toIlvl ..
+            " is also a maxed " .. waste.prevTrack .. " piece, so " ..
+            waste.prevCrestTrack .. " crests reach it. Keep " ..
+            waste.crestTrack .. " for rank " .. (waste.overlapRanks + 1) .. "+"
     end
 
     -- ============================================================

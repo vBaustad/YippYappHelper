@@ -395,6 +395,7 @@ function ns:RefreshSuggestions()
         [ns.RECOMMEND.FREE_UPGRADE]   = 0,
         [ns.RECOMMEND.UPGRADE_NOW]    = 1,
         [ns.RECOMMEND.BAD_INVESTMENT] = 2,
+        [ns.RECOMMEND.WASTED_CREST]   = 2,
         [ns.RECOMMEND.HOLD_CRESTS]    = 3,
         [ns.RECOMMEND.SAFE_TEMP]      = 4,
         [ns.RECOMMEND.UPGRADE_LATER]  = 5,
@@ -818,7 +819,7 @@ function ns:RefreshAllSlots()
                     btn.glowFrame.ants:SetVertexColor(0.0, 1.0, 1.0, 1.0)
                 elseif rec == ns.RECOMMEND.UPGRADE_NOW then
                     btn.glowFrame.ants:SetVertexColor(0.3, 1.0, 0.3, 1.0)
-                elseif rec == ns.RECOMMEND.BAD_INVESTMENT then
+                elseif rec == ns.RECOMMEND.BAD_INVESTMENT or rec == ns.RECOMMEND.WASTED_CREST then
                     btn.glowFrame.ants:SetVertexColor(1.0, 0.2, 0.2, 0.8)
                 elseif rec == ns.RECOMMEND.HOLD_CRESTS then
                     btn.glowFrame.ants:SetVertexColor(1.0, 0.6, 0.0, 0.9)

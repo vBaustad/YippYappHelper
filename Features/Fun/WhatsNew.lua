@@ -27,6 +27,9 @@ WN.INTRO = "You are back. I have been busy while you were not looking."
 WN.ITEMS = {
     { "Season 2 data", "Gear tracks, crest costs, dungeon and raid item "
         .. "levels, and the new keystone pool -- all rebuilt for 12.1." },
+    { "Crest warnings", "Hero 5/6 and Myth 1/6 both cost 20 crests to "
+        .. "upgrade and both land on 321. Only one of those currencies "
+        .. "is still worth anything in a month. I will say so first." },
     { "Omnium Folio", "A page that tracks the five-week Rune chain from "
         .. "your real quest log, with clickable map pins." },
     { "Settings, rewritten", "Now Blizzard's own options panel under "

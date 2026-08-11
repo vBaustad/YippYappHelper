@@ -225,6 +225,51 @@ function AD:Snapshot()
         end
     end
 
+    -- Scarce crests about to buy an item level a cheaper crest reaches
+    -- (Features/Gear/Recommend.lua, ns:GetCrestWaste). Only the
+    -- actionable ones are kept: with no lower-track piece to redirect
+    -- the spend onto, the warning is true and useless, and Yeeper
+    -- saying true useless things is how he gets closed.
+    s.crestWaste, s.crestWasteTotal, s.crestWasteTotals = {}, 0, {}
+    -- Sinks are grouped by the crest that pays for them. Two slots can
+    -- be wasteful on different tiers at once -- a Myth trinket and a
+    -- Hero weapon -- and their sinks are not interchangeable, so a
+    -- flat union would offer Champion slots as somewhere to put Hero.
+    s.crestWasteSinks = {}
+    if ns.GetAllCrestWaste then
+        local ok, list = pcall(ns.GetAllCrestWaste, ns)
+        if ok and type(list) == "table" then
+            local seenSink = {}
+            for _, w in ipairs(list) do
+                if #w.sinkSlots > 0 then
+                    table.insert(s.crestWaste, w)
+                    s.crestWasteTotal = s.crestWasteTotal + w.wastedCrests
+                    s.crestWasteTotals[w.crestTrack] =
+                        (s.crestWasteTotals[w.crestTrack] or 0) + w.wastedCrests
+
+                    local into = w.prevCrestTrack
+                    s.crestWasteSinks[into] = s.crestWasteSinks[into] or {}
+                    seenSink[into] = seenSink[into] or {}
+                    for _, name in ipairs(w.sinkSlots) do
+                        if not seenSink[into][name] then
+                            seenSink[into][name] = true
+                            table.insert(s.crestWasteSinks[into], name)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- Scarcest crest first, so the exemplar the advice is written around
+    -- is the one that actually hurts to lose. Slot name breaks ties to
+    -- keep the ordering total -- table.sort rejects anything less.
+    table.sort(s.crestWaste, function(a, b)
+        local ra = (ns.TRACK_RANK and ns.TRACK_RANK[a.crestTrack]) or 0
+        local rb = (ns.TRACK_RANK and ns.TRACK_RANK[b.crestTrack]) or 0
+        if ra ~= rb then return ra > rb end
+        return (a.slotName or "") < (b.slotName or "")
+    end)
+
     return s
 end
 
@@ -251,6 +296,54 @@ AD.RULES = {
                     "Spend down before the weekly cap wastes new income",
                 } }
         end
+    end,
+    -- Sits just under idle crests: crests rotting in a bag is worse than
+    -- crests about to be spent slightly wrong, but only just. This one
+    -- is the single most broadly applicable gearing mistake of the
+    -- season, and it is invisible at the upgrade vendor -- the game
+    -- charges 20 crests either way and never mentions that one of the
+    -- two currencies has months of use left in it.
+    function(s)
+        local n = #s.crestWaste
+        if n == 0 then return end
+        local w = s.crestWaste[1]
+
+        local tips = {}
+        for i = #ns.TRACK_ORDER, 1, -1 do
+            local into = ns.TRACK_ORDER[i]
+            local names = s.crestWasteSinks[into]
+            if names then
+                table.insert(tips, ("Put %s crests into %s instead")
+                    :format(into, table.concat(names, ", ")))
+            end
+        end
+        table.insert(tips, ("Only %s crests buy rank %d and up -- nothing else does")
+            :format(w.crestTrack, w.overlapRanks + 1))
+        table.insert(tips, ("%s crests go dead the week every %s slot is maxed")
+            :format(w.prevCrestTrack, w.prevTrack))
+
+        if n == 1 then
+            return { p = 98, text = ("%s is %s %d/%d. The next rank costs %d %s and lands "
+                .. "on %d, which is exactly where a maxed %s piece lands for the same "
+                .. "price. One of those two currencies still has a season in it.")
+                :format(w.slotName, w.track, w.rank, w.maxRank or 6, w.wastedCrests,
+                        w.crestTrack, w.toIlvl, w.prevTrack),
+                tips = tips }
+        end
+
+        -- Several slots, possibly across two crest tracks. Name the
+        -- damage per track rather than picking one and hoping.
+        local parts = {}
+        for i = #ns.TRACK_ORDER, 1, -1 do
+            local track = ns.TRACK_ORDER[i]
+            local amount = s.crestWasteTotals[track]
+            if amount then table.insert(parts, ("%d %s"):format(amount, track)) end
+        end
+        return { p = 98, text = ("%d slots sit one rank below item level the track under "
+            .. "them already reaches. Buying those ranks the expensive way costs %s, and "
+            .. "gets you an item level the cheap crests were going to give you anyway.")
+            :format(n, table.concat(parts, " and ")),
+            tips = tips }
     end,
     function(s)
         for track, c in pairs(s.crests) do
