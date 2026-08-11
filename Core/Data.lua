@@ -8,8 +8,19 @@ ns.SEASON_NAME = "Midnight Season 2"
 -- and Mythic 0 only, and keystones go live the following reset. Anything
 -- that advises about Mythic+ has to know which of those two weeks it is,
 -- or it will send people at content that does not exist yet.
-ns.SEASON_PATCH_START = time({ year = 2026, month = 8, day = 11, hour = 0 })
-ns.SEASON_MPLUS_START = time({ year = 2026, month = 8, day = 18, hour = 0 })
+-- Dates below are the US unlock days. Europe resets a day later, so the
+-- same content opens on the 12th and the 19th there -- Blizzard's own
+-- announcements are headlined "Goes Live August 11" and "Goes Live 12
+-- August" for the two regions. Hardcoding the US day told EU players
+-- keystones were live a full day before they were.
+local function SeasonDate(month, day)
+    local region = GetCurrentRegion and GetCurrentRegion() or 1
+    if region == 3 then day = day + 1 end     -- 3 = Europe
+    return time({ year = 2026, month = month, day = day, hour = 0 })
+end
+
+ns.SEASON_PATCH_START = SeasonDate(8, 11)
+ns.SEASON_MPLUS_START = SeasonDate(8, 18)
 
 ------------------------------------------------------------
 -- Gear Tracks: track name -> ordered item levels per rank
