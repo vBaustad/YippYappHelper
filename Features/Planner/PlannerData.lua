@@ -168,6 +168,13 @@ local function countFilledSlots(vault)
 end
 
 local function describeBonusRoll(vault)
+    -- Nothing to chase before Voidcore rolls exist. The planner lists
+    -- actionable work, so this drops out entirely rather than showing a
+    -- row the player cannot act on.
+    if ns.SEASON_VOIDCORE_START and time() < ns.SEASON_VOIDCORE_START then
+        return nil
+    end
+
     local filled = countFilledSlots(vault)
     if filled >= BONUS_ROLL_SLOTS then return nil end
     local need = BONUS_ROLL_SLOTS - filled

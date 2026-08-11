@@ -22,6 +22,12 @@ end
 ns.SEASON_PATCH_START = SeasonDate(8, 11)
 ns.SEASON_MPLUS_START = SeasonDate(8, 18)
 
+-- Voidcore bonus rolls are absent from the first Season 2 vault and only
+-- appear the week after, for anyone with three panes unlocked. Without a
+-- date to check, the planner would spend the opening fortnight telling
+-- players to unlock a reward the game has not switched on yet.
+ns.SEASON_VOIDCORE_START = SeasonDate(8, 25)
+
 ------------------------------------------------------------
 -- Gear Tracks: track name -> ordered item levels per rank
 --
