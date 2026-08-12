@@ -257,6 +257,23 @@ def parse_sections(block, names):
     return out
 
 
+def raw_sections(block):
+    """Section bodies with the BBCode left intact.
+
+    parse_sections() runs strip_bbcode over each body, which is correct
+    for the prose it feeds to the UI but destroys every [item=ID] token
+    on the way. Anything extracting items needs the markup, so it needs
+    this instead -- and it needs it per section, or gem bullets get read
+    out of enchant prose two headings away.
+    """
+    out = {}
+    parts = re.split(r"\[h3[^\]]*\]([\s\S]*?)\[/h3\]", block)
+    for i in range(1, len(parts), 2):
+        title = re.sub(r"\[[^\]]*\]", "", parts[i]).strip()
+        out[title] = parts[i + 1] if i + 1 < len(parts) else ""
+    return out
+
+
 ENCHANT_SLOT_ROWS = {
     "helm": "Head", "head": "Head", "chest": "Chest", "shoulders": "Shoulders",
     "shoulder": "Shoulders", "legs": "Legs", "boots": "Boots", "feet": "Boots",
@@ -341,22 +358,50 @@ def parse_spec(markup, names):
     # e.g. "[b]Peridot[/b]: [item=240894]". Search only the gems chapter —
     # scanning the whole guide also swept up prose bullets like
     # "Raiding: <potion>" and filed potions as gems.
+    # Scope to the Gems section itself. This used to locate the right
+    # section and then assign the whole enchants+gems body regardless,
+    # which the old narrow bullet regex hid: it matched so little that
+    # the over-broad haystack never showed. Widen the pattern and the
+    # bug surfaces instantly as Vengeance "recommending" 23 gems, half
+    # of them picked out of enchant prose and alternate-scenario asides.
     gem_chunk = ""
-    for k, _v in ge_sections.items():
+    for k, v in raw_sections(gem_enchant_body).items():
         if "gem" in k.lower():
-            gem_chunk = gem_enchant_body
-            break
+            gem_chunk += v
     if gem_chunk:
-        for m in re.finditer(r"\[li\]\[b\]([^\[]+)\[/b\]:\s*\[item=(\d+)",
-                             gem_chunk):
-            label, iid = m.group(1).strip(), int(m.group(2))
-            resolved = names["item"].get(iid, "")
-            if "gem" not in label.lower() and not re.search(
-                    r"peridot|lapis|garnet|amethyst|diamond|ruby|sapphire|"
-                    r"emerald|topaz|onyx", (label + " " + resolved).lower()):
+        # Guides write gem bullets in at least two dialects, and an
+        # earlier pattern that only understood the first silently
+        # under-parsed 17 of 40 specs -- Enhancement Shaman came out with
+        # zero gems while its page listed six.
+        #
+        #   Frost Mage:   [li][b]Amethyst[/b]: [item=240898][/li]
+        #   Enhancement:  [li][color=q6]Other Gems[/color] [b]&ndash;[/b]
+        #                 one each of [item=A], [item=B], [item=C] & [item=D]
+        #
+        # So: split into bullets, take the label from whichever wrapper
+        # opens it, and collect EVERY item in the bullet rather than the
+        # first. The multi-item case is the one that hurt most -- "one
+        # each of A, B, C & D" is four gems, and only A was being kept.
+        #
+        # Splitting on [li] also flattens nested [ul] lists for free: the
+        # outer "With 5+ Sockets" bullet holds no items of its own and
+        # contributes nothing, while each inner bullet gets its own
+        # fragment.
+        for frag in re.split(r"\[li\]", gem_chunk):
+            ids = [int(x) for x in re.findall(r"\[item=(\d+)", frag)]
+            if not ids:
                 continue
-            if not any(g["itemID"] == iid for g in gems):
-                gems.append({"label": label, "itemID": iid, "alt": None})
+            lab = re.match(r"\s*\[b\]([^\[]+)\[/b\]", frag) \
+                or re.match(r"\s*\[color=[^\]]*\]([^\[]+)\[/color\]", frag)
+            label = lab.group(1).strip(" :-–&;ndash") if lab else "Gem"
+            for iid in ids:
+                resolved = names["item"].get(iid, "")
+                if "gem" not in label.lower() and not re.search(
+                        r"peridot|lapis|garnet|amethyst|diamond|ruby|sapphire|"
+                        r"emerald|topaz|onyx", (label + " " + resolved).lower()):
+                    continue
+                if not any(g["itemID"] == iid for g in gems):
+                    gems.append({"label": label, "itemID": iid, "alt": None})
 
     def joined(sections, *keys, exclude=()):
         seen, chunks = set(), []
@@ -473,7 +518,7 @@ def main():
             print("no specs matched", file=sys.stderr)
             return 2
 
-    results, problems = [], []
+    results, problems, emptied = [], [], []
     for key, cls, spec, role in targets:
         url = BASE.format(cls=cls, spec=spec, role=role)
         html = fetch(url)
@@ -489,14 +534,32 @@ def main():
             problems.append("%s: parsed 0 enchants and 0 consumables" % key)
             continue
         results.append((key, data))
+
+        # An empty category is the failure that actually happens, and it
+        # used to pass silently: the guard above only fires when BOTH
+        # enchants and consumables are empty, so Enhancement Shaman
+        # shipped `gems = {}` for a page that listed six of them, and
+        # nothing said a word. Seventeen specs were under-parsed before
+        # anyone noticed. Empty is not always wrong -- but it is always
+        # worth a look, so say so on the line and again at the end.
+        empty = [name for name in ("enchants", "gems", "consumables")
+                 if not data[name]]
+        if empty:
+            emptied.append("%s: no %s" % (key, ", ".join(empty)))
+
         stale = "" if data["season"] == CURRENT_SEASON else \
             "  [stale: %s]" % (data["season"] or "unknown season")
-        print("%-24s %2d enchants  %2d gems  %2d consumables%s"
+        print("%-24s %2d enchants  %2d gems  %2d consumables%s%s"
               % (key, len(data["enchants"]), len(data["gems"]),
-                 len(data["consumables"]), stale))
+                 len(data["consumables"]), stale,
+                 "  <-- EMPTY: " + ", ".join(empty) if empty else ""))
         time.sleep(0.4)  # be polite to Wowhead
 
     print("\n%d/%d specs parsed" % (len(results), len(targets)))
+    if emptied:
+        print("EMPTY CATEGORIES (check the guide before trusting these):")
+        for e in emptied:
+            print("  " + e)
     if problems:
         print("PROBLEMS:")
         for p in problems:

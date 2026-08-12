@@ -31,7 +31,12 @@ ns.PROGRESSION.MYTHIC_PLUS = {
     { key = 6,  loot = 305, vault = 311, crestType = "Hero",     crestAmount = "" },
     { key = 7,  loot = 305, vault = 315, crestType = "Hero",     crestAmount = "" },
     { key = 8,  loot = 308, vault = 315, crestType = "Hero",     crestAmount = "" },
-    { key = 9,  loot = 308, vault = 318, crestType = "Myth",     crestAmount = "" },
+    -- M9 vaults 315 (Hero 4/6), not 318 -- Myth 1/6 does not start until
+    -- M10. That correction landed in ns.DUNGEON_LOOT and was missed here,
+    -- so this page went on quoting the old number. ns.DUNGEON_LOOT is the
+    -- source of truth for key -> item level; keep this table in step with
+    -- it rather than editing either in isolation.
+    { key = 9,  loot = 308, vault = 315, crestType = "Myth",     crestAmount = "" },
     { key = 10, loot = 311, vault = 318, crestType = "Myth",     crestAmount = "" },
     { key = 11, loot = 311, vault = 318, crestType = "Myth",     crestAmount = "" },
     { key = 12, loot = 311, vault = 318, crestType = "Myth",     crestAmount = "" },

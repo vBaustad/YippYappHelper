@@ -439,5 +439,3 @@ f:SetScript("OnEvent", function(_, event)
     end
 end)
 
-SLASH_YYHMPLUSPOPUP1 = "/yyhmpluspopup"
-SlashCmdList.YYHMPLUSPOPUP = showTest

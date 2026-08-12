@@ -30,7 +30,7 @@ WN.ITEMS = {
     { "Crest warnings", "Hero 5/6 and Myth 1/6 both cost 20 crests to "
         .. "upgrade and both land on 321. Only one of those currencies "
         .. "is still worth anything in a month. I will say so first." },
-    { "Omnium Folio", "A page that tracks the five-week Rune chain from "
+    { "Omnium Folio", "A page that tracks the five-step Rune chain from "
         .. "your real quest log, with clickable map pins." },
     { "Settings, rewritten", "Now Blizzard's own options panel under "
         .. "AddOns, instead of a hand-drawn imitation of one." },

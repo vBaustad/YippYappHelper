@@ -473,6 +473,9 @@ local TAB_DEFS = {
 
 local tabButtons = {}
 local containers = {}
+-- The scroll frame that owns each container. Shown/hidden with the tab;
+-- the container itself is the scroll child and is always "visible".
+local scrolls = {}
 
 for i, def in ipairs(TAB_DEFS) do
     local btn = ns.CreateUnderlineTab(frame, def.label, def.color)
@@ -483,10 +486,24 @@ for i, def in ipairs(TAB_DEFS) do
     btn:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", (i - 1) * 114, -2)
     tabButtons[def.id] = btn
 
-    local container = CreateFrame("Frame", nil, frame)
-    container:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -28)
-    container:SetPoint("BOTTOMRIGHT", 0, 0)
-    container:Hide()
+    -- Scrolled, because the guide text is scraped and its length is not
+    -- ours to control. These were plain frames pinned to the panel edge,
+    -- so a long guide simply drew past the bottom and over whatever was
+    -- behind it.
+    local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -28)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -26, 8)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local v = sf:GetVerticalScroll() - delta * 30
+        sf:SetVerticalScroll(math.max(0, math.min(v, sf:GetVerticalScrollRange())))
+    end)
+    scroll:Hide()
+
+    local container = CreateFrame("Frame", nil, scroll)
+    container:SetSize(math.max(frame:GetWidth() - 40, 400), 400)
+    scroll:SetScrollChild(container)
+
+    scrolls[def.id] = scroll
     containers[def.id] = container
 end
 
@@ -494,10 +511,10 @@ local function UpdateTabs()
     for id, btn in pairs(tabButtons) do
         if id == currentTab then
             ns.SetTabActive(btn)
-            containers[id]:Show()
+            scrolls[id]:Show()
         else
             ns.SetTabInactive(btn)
-            containers[id]:Hide()
+            scrolls[id]:Hide()
         end
     end
 end
@@ -691,7 +708,11 @@ local function DrawRow(parent, y, itemID, label)
     btn:SetSize(pw - PAD * 2, ROW_H)
     btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
     btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
+        -- row, so anchoring to the owner's right edge put the tooltip
+        -- against the far side of the panel however close to the left
+        -- the pointer actually was.
+        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
         GameTooltip:SetHyperlink(itemLink)
         GameTooltip:Show()
     end)
@@ -746,7 +767,11 @@ local function DrawAltRow(parent, y, itemID)
     btn:SetSize(pw - PAD * 2, ROW_H)
     btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
     btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
+        -- row, so anchoring to the owner's right edge put the tooltip
+        -- against the far side of the panel however close to the left
+        -- the pointer actually was.
+        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
         GameTooltip:SetHyperlink(altLink)
         GameTooltip:Show()
     end)
@@ -792,6 +817,19 @@ local function DrawStaleBanner(parent, y, data)
     fs:SetText(("|cffffcc00%s advice|r — %s guides are not published yet.")
         :format(data.season or "Earlier season", target))
     return y - 24
+end
+
+--- Match the scroll child to what was actually drawn into it.
+---
+--- Every Draw* function already returned the y it finished at and every
+--- caller discarded it, so the child kept its placeholder height and the
+--- scroll bar never knew there was anything to scroll.
+---
+--- y runs negative downwards, hence the negation.
+local function SizeContent(parent, y)
+    local width = parent:GetParent() and parent:GetParent():GetWidth() or 0
+    if width > 20 then parent:SetWidth(width - 4) end
+    parent:SetHeight(math.max(-y + PAD, 1))
 end
 
 local function DrawGuide(parent, y, text)
@@ -917,6 +955,7 @@ function ns:RefreshConsumables()
     if data.enchantGuide then
         ey = DrawGuide(ep, ey, data.enchantGuide)
     end
+    SizeContent(ep, ey)
 
     -- Gems tab
     local gp = containers.gems
@@ -930,6 +969,7 @@ function ns:RefreshConsumables()
     if data.gemGuide then
         gy = DrawGuide(gp, gy, data.gemGuide)
     end
+    SizeContent(gp, gy)
 
     -- Consumables tab
     local cp = containers.consumables
@@ -946,4 +986,5 @@ function ns:RefreshConsumables()
     if data.consumableGuide then
         cy = DrawGuide(cp, cy, data.consumableGuide)
     end
+    SizeContent(cp, cy)
 end

@@ -12,17 +12,35 @@ local _, ns = ...
 -- preference order and ResolveCrestIDs() picks the one the client
 -- actually recognises at login. `id` starts as the preferred candidate
 -- so anything reading ns.CRESTS before PLAYER_LOGIN still works.
---
--- Primary set (3437-3441) is the one whose in-game descriptions name
--- the Season 2 item level ranges and sources. Run /yh crests to see
--- what resolved on your client.
 ------------------------------------------------------------
+-- VERIFIED against Wowhead's canonical currency pages, Aug 2026.
+--
+-- There are TWO complete sets of Mistcrest currency rows in the client:
+--
+--   3437-3441   dead
+--   3442-3446   live      <-- this one
+--
+-- The addon shipped pointed at the dead block, so a character holding 80
+-- Champion Mistcrests read as zero -- and everything that hangs off crest
+-- counts (affordability, the waste warning, the whole upgrade advisor)
+-- was working from an empty wallet.
+--
+-- Nothing in the client distinguishes the pairs. Both rows of a track
+-- share a name AND a description, and even Wowhead serves both under the
+-- same slug: currency=3437 and currency=3442 are both
+-- "adventurer-mistcrest". So this cannot be derived, only recorded --
+-- and the recorded value cannot be sanity-checked by reading a name
+-- back. Verify against wowhead.com/currency=<id> when a season rolls.
+--
+-- The dead twin stays as a fallback candidate: if a patch swaps which
+-- block is live, ResolveCrestIDs follows whichever the player actually
+-- holds rather than showing zero until someone edits this file.
 ns.CRESTS = {
-    { id = 3437, candidates = { 3437, 3442 }, name = "Adventurer Mistcrest", color = "ff1eff00", track = "Adventurer" },
-    { id = 3438, candidates = { 3438, 3443 }, name = "Veteran Mistcrest",    color = "ff0070dd", track = "Veteran"    },
-    { id = 3439, candidates = { 3439, 3444 }, name = "Champion Mistcrest",   color = "ffa335ee", track = "Champion"   },
-    { id = 3440, candidates = { 3440, 3445 }, name = "Hero Mistcrest",       color = "ffff8000", track = "Hero"       },
-    { id = 3441, candidates = { 3441, 3446 }, name = "Myth Mistcrest",       color = "ffff0000", track = "Myth"       },
+    { id = 3442, candidates = { 3442, 3437 }, name = "Adventurer Mistcrest", color = "ff1eff00", track = "Adventurer" },
+    { id = 3443, candidates = { 3443, 3438 }, name = "Veteran Mistcrest",    color = "ff0070dd", track = "Veteran"    },
+    { id = 3444, candidates = { 3444, 3439 }, name = "Champion Mistcrest",   color = "ffa335ee", track = "Champion"   },
+    { id = 3445, candidates = { 3445, 3440 }, name = "Hero Mistcrest",       color = "ffff8000", track = "Hero"       },
+    { id = 3446, candidates = { 3446, 3441 }, name = "Myth Mistcrest",       color = "ffff0000", track = "Myth"       },
 }
 
 -- Season 1 Dawncrests. Kept only so the addon can warn about crests
@@ -69,11 +87,29 @@ end
 
 local resolver = CreateFrame("Frame")
 resolver:RegisterEvent("PLAYER_LOGIN")
+-- Re-resolve whenever the wallet moves.
+--
+-- Resolving once at login is wrong for the case that matters most: on a
+-- fresh season a character has ZERO of both candidate rows, so the tie
+-- breaks on listed order and the pick is a coin toss. The moment crests
+-- actually arrive -- unboxed, earned, whatever -- the evidence changes,
+-- and the pick has to change with it. Before this, unboxing 80 Champion
+-- Mistcrests onto the other row left the addon reading the empty one
+-- until the next login.
+resolver:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
 resolver:SetScript("OnEvent", function()
     ns:ResolveCrestIDs()
 end)
 
 function ns:GetCrestInfo()
+    -- Resolved here too, not only on the event. Core.lua answers
+    -- CURRENCY_DISPLAY_UPDATE by refreshing the crest panel, and the
+    -- order two frames receive the same event is not defined -- so
+    -- relying on the resolver alone would leave the display one event
+    -- behind whenever Core happened to run first. It is ten currency
+    -- lookups; correctness is worth more than that.
+    ns:ResolveCrestIDs()
+
     local crests = {}
     for _, crest in ipairs(ns.CRESTS) do
         local info = C_CurrencyInfo.GetCurrencyInfo(crest.id)
@@ -96,6 +132,11 @@ function ns:GetCrestInfo()
 end
 
 function ns:GetCrestWeeklyInfo(track)
+    -- Same reason as GetCrestInfo: this is the other read path, used by
+    -- the upgrade recommender and the planner, and Recommend.lua reads
+    -- crest.id directly straight after calling it.
+    ns:ResolveCrestIDs()
+
     for _, crest in ipairs(ns.CRESTS) do
         if crest.track == track then
             local info = C_CurrencyInfo.GetCurrencyInfo(crest.id)

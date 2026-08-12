@@ -1,6 +1,6 @@
 # YippYapp Helper - Changelog
 
-## v3.0.0 - Mr. Yeeper, Edit Mode, and settings that look like settings (2026-08-10)
+## v3.0.0 - Mr. Yeeper, Best in Slot, and a season's worth of gear maths (2026-08-12)
 
 ### Mr. Yeeper
 - The Upgrade Summary is now a character. He reads your gear, crests,
@@ -26,6 +26,86 @@
   to deliver them is the second layer.
 - Lines are picked at random with a short memory, so a strict rotation
   cannot make the running order predictable.
+- **He knows where keys stop paying.** +10, +11 and +12 all drop 311 and
+  all vault 318, so above +10 a higher key buys rating and nothing else.
+  The game never says this and people grind +12s believing the vault is
+  still climbing. The ceiling is derived from the key table rather than
+  written down, so correcting a row moves the answer instead of leaving a
+  stale number behind it, and he only raises it with players who have
+  actually gone past it -- said to someone sitting at +5 it is not an
+  observation, it is a reason to stop trying.
+
+### Best in Slot (new page)
+- Every spec's best-in-slot list, scraped from Wowhead's class guides,
+  laid out as a paper doll: the icons sit where the character panel puts
+  them, so "how far off am I" is one glance rather than reading a list
+  and rebuilding the shape in your head.
+- Items resolve through the Encounter Journal, so they render as what
+  they actually are -- Epic quality, real stats, the right item level.
+  A modern item's base entry is Rare at item level 28 with "+5
+  Intellect", which is a real number answering a question nobody asked.
+- Item level and upgrade rank come from the same GEAR_TRACKS the Loot
+  Browser uses, so both pages can never disagree about what a rank means.
+- **Bags count.** A drop you have not equipped yet is still a drop you
+  got. The doll shows four states: missing, in your bags, have it at a
+  lower rank, and have it at the target -- because "have it" and "have it
+  at the rank this list means" are different answers.
+- Stat priority per spec, and an honest caveat that this is a starting
+  point rather than a substitute for simming.
+
+### Crests
+- **Fixed: the addon was reading the wrong currency.** There are two
+  complete sets of Mistcrest rows in the client and the addon pointed at
+  the dead one, so a character holding 80 Champion Mistcrests read as
+  zero -- and affordability, the waste warning and every upgrade
+  recommendation were computed against an empty wallet. Both rows of a
+  pair share a name *and* a description, so nothing in the game
+  distinguishes them.
+- Crest IDs now re-resolve whenever the wallet changes rather than once
+  at login. Resolving once was worst exactly when it mattered: on a fresh
+  season you have none of either row, so the pick was a coin toss that
+  then never got revisited.
+- Warns *before* a wasteful crest spend, not only after. Hero 5->6 and
+  Myth 1->2 cover the same item level band at the same price, so spending
+  the scarce crest there is dominated by spending the one that goes dead
+  in three weeks.
+
+### Teleports
+- Reorganised so every teleport has one home: the expansion its dungeon
+  came from. The current season is a view over those same entries, not a
+  copy, so a returning dungeon appears twice and cannot read as unlocked
+  in one place and locked in the other.
+- **Fixed: returning dungeons read as locked.** A dungeon brought back
+  for a new season can be unlocked from either its original expansion or
+  the current season, and only the season's spell was checked -- so a
+  Ruby Life Pools port earned in Dragonflight showed as missing.
+- Rolling to a new season is now editing one list of names.
+
+### Trinkets
+- Top ten by default with a search box and autocomplete, instead of every
+  trinket at once.
+- **Fixed: clearing the search did not reset the list.** The clear button
+  empties the box programmatically, and the handler ignored anything that
+  was not typed -- so the text vanished while the filter stayed, with no
+  way back short of a reload. Clicking a suggestion failed the same way.
+- **Fixed:** the "Search" placeholder drew on top of what you typed.
+
+### Consumables
+- Guides now scroll instead of running off the bottom of the panel.
+- Tooltips follow the cursor rather than pinning to the far edge.
+
+### Fixed
+- **Blizzard settings panel threw on every module row.** The module
+  toggles it reads were never implemented, so opening settings errored --
+  and the two features that honour them were silently always on.
+- **Views only refreshed on the home page.** Spending crests, upgrading
+  an item or equipping something left the Gear Upgrades page unchanged
+  until you navigated away and back. Every state change now reaches
+  whichever view is actually on screen.
+- The Great Vault filling was not signalled to anything, so a finished
+  key left the Mythic+ page showing an empty slot.
+- Omnium Folio's unlock check tested the first quest in its chain instead
+  of the last, so it reported locked for anyone who had finished it.
 
 ### Edit Mode
 - Every movable frame -- interrupt tracker, battle res timer, ready check
@@ -80,6 +160,11 @@
 ### Fixes
 - **M9 great vault was wrong**: 318 corrected to 315 (Hero 4/6). Myth 1/6
   does not start until M10.
+- That M9 correction only landed in one of the two key tables. The
+  Progression page reads its own copy and went on showing 318, so the
+  page and the upgrade advisor disagreed about the same key level. Both
+  now say 315, with the duplicate pointed at the original as the source
+  of truth.
 - Mr. Yeeper claimed the vault was the only way to replace last season's
   gear. Dungeon and raid drops, delves, world content and crafting all
   do, and the tips now say so.

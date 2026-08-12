@@ -551,6 +551,104 @@ function ns:ScanLootBrowserSlot(specIndex, slotFilter)
 end
 
 ------------------------------------------------------------------------
+-- Journal link index (itemID -> real item link)
+--
+-- Built for the Best in Slot page, which only has bare item IDs. That is
+-- not enough to show an item: a modern item's BASE entry is Rare, item
+-- level 28, "+5 Intellect, 7 Armor". Everything real -- Epic quality,
+-- +96 Intellect, 103 Armor, the upgrade track -- lives in the bonus IDs,
+-- and the journal is where we can get them without inventing any.
+--
+-- Highest difficulty only. A BiS list is a target, so the Mythic version
+-- is the one it means; the remaining gap to max rank is closed by
+-- RewriteTooltipIlvl, exactly as the keystone rows do it.
+------------------------------------------------------------------------
+local journalLinks = nil
+-- When the last build attempt failed. The journal is not always
+-- populated the first time we ask, so failure must not be cached
+-- forever -- but nor can it be free to retry: the Best in Slot page asks
+-- once per row, so an unguarded retry would run a full journal scan
+-- thirty-odd times per render.
+local journalTriedAt = nil
+local JOURNAL_RETRY = 30
+
+-- Highest difficulty per source type, mirroring LOOT_DIFFICULTIES.
+local BEST_DIFFICULTY = { dungeon = 23, raid = 16, worldboss = 0 }
+
+local function IndexInstances(instances, sourceType)
+    local diff = BEST_DIFFICULTY[sourceType]
+    for _, inst in ipairs(instances or {}) do
+        for _, boss in ipairs(inst.bosses or {}) do
+            EJ_SelectInstanceCompat(inst.instanceID)
+            EJ_SelectEncounterCompat(boss.encounterID)
+            EJ_SetDifficultyCompat(diff)
+
+            local index = 1
+            while true do
+                local info = EJ_GetLootInfoByIndexCompat(index)
+                if not info or not info.name then break end
+                -- First link wins. An item that drops from several bosses
+                -- is the same item; re-indexing it just costs work.
+                if info.itemID and info.link and not journalLinks[info.itemID] then
+                    journalLinks[info.itemID] = info.link
+                end
+                index = index + 1
+            end
+        end
+    end
+end
+
+--- The journal's own link for an item, or nil if it does not drop.
+---
+--- nil is a normal answer, not a failure: crafted gear, tier tokens and
+--- catalyst output are not in any loot table, and the caller falls back
+--- to the bare item for those.
+---
+--- The index is built once and reused. It deliberately clears the loot
+--- and slot filters first -- with the player's own class filter left in
+--- place the journal returns only their armour type, so every other
+--- spec's list would silently come back empty.
+function ns:GetJournalItemLink(itemID)
+    if not itemID then return nil end
+    if journalLinks then return journalLinks[itemID] end
+    if journalTriedAt and (time() - journalTriedAt) < JOURNAL_RETRY then
+        return nil
+    end
+    journalTriedAt = time()
+
+    if not instanceCache and not BuildInstanceCache() then return nil end
+
+    journalLinks = {}
+    SuppressEJ()
+    ns.isLootScanning = true
+
+    local ok, err = pcall(function()
+        EJ_SetLootFilterCompat(0, 0)
+        if EISFT and EISFT.NoFilter then EJ_SetSlotFilterCompat(EISFT.NoFilter) end
+        IndexInstances(instanceCache.dungeons,    "dungeon")
+        IndexInstances(instanceCache.raids,       "raid")
+        IndexInstances(instanceCache.worldBosses, "worldboss")
+    end)
+
+    -- Never keep an empty index. The journal is not always populated the
+    -- first time we ask, and caching {} here would mean the page showed
+    -- base items for the rest of the session with no way to recover.
+    if not ok or not next(journalLinks) then
+        journalLinks = nil
+    else
+        journalTriedAt = nil
+    end
+
+    UnsuppressEJ()
+    ns.isLootScanning = false
+    if not ok then
+        print("|cff00ff00YippYapp|r |cffff6060Loot Browser:|r Link index error: " .. tostring(err))
+        return nil
+    end
+    return journalLinks and journalLinks[itemID] or nil
+end
+
+------------------------------------------------------------------------
 -- Secondary Stat Filtering (client-side post-processing)
 ------------------------------------------------------------------------
 function ns:FilterLootByStats(results, statKeys)

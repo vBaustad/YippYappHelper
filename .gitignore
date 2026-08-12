@@ -6,8 +6,22 @@
 # Generated art source and output, kept out of the addon zip by .pkgmeta
 # but useful in the repo.
 
-# Editor / agent scratch
-.claude/
+# Editor / agent scratch. Skills are the exception: yeeper-voice and its
+# line bank are authored work, not scratch, and losing them to a clean
+# would cost real effort. Same argument as Tools above -- .pkgmeta already
+# strips .claude from the CurseForge zip, which is the part that actually
+# needed it gone, so it can live in the repo safely.
+.claude/*
+!.claude/skills/
+# Scraper page cache. Re-running a parser should be free; refetching 80
+# Wowhead pages to test a regex is how you earn a 403.
+Tools/.cache/
+
+# Python bytecode. Regenerated on every run and versioned by interpreter
+# version, so a committed .pyc is pure diff noise that never merges.
+__pycache__/
+*.pyc
+
 *.bak
 *.orig
 *.rej

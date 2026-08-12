@@ -10,34 +10,50 @@ local HEADER_H = 20
 local SECTION_GAP = 8
 
 ------------------------------------------------------------
--- Teleport data: grouped by expansion, newest first
--- { spellID, name, type ("dungeon"|"raid") }
+-- Teleport data.
+--
+-- Every teleport has ONE canonical home: the expansion its dungeon comes
+-- from. That is the whole organising rule, and it is why a dungeon that
+-- returns for a new season is not filed under that season -- Ruby Life
+-- Pools is a Dragonflight dungeon in Midnight Season 2 exactly as much
+-- as it was in Dragonflight Season 1.
+--
+-- The current season is then a VIEW over those canonical entries rather
+-- than a copy of them (see CURRENT_SEASON). A returning dungeon appears
+-- twice on the page -- once at the top under the season, once under its
+-- expansion -- but it is the same entry both times, so it cannot read as
+-- unlocked in one place and locked in the other, and it is counted only
+-- once in the summary.
+--
+-- When the season rolls over, the season list is replaced and the page
+-- reorganises itself: nothing has to be moved between groups, because
+-- nothing was ever filed under a season to begin with.
+--
+-- { id | ids, name }
 ------------------------------------------------------------
 local TELEPORT_GROUPS = {
     {
-        header = "Midnight S2 — Current",
+        header = "Midnight",
         entries = {
             { id = 1289772, name = "Altar of Fangs" },
+            -- These three read like older-expansion dungeons and are
+            -- not. Midnight rebuilds the zones they sit in, so what
+            -- looks like a returning dungeon is new content wearing a
+            -- familiar name: Murder Row is not the Suramar street,
+            -- Zul'Aman is a new Midnight zone built over the old one,
+            -- and Magisters' Terrace is a new version of the Quel'Thalas
+            -- original rather than the Burning Crusade one.
+            --
+            -- The test for filing a dungeon is whether Midnight remade
+            -- it, not whether the name predates Midnight. Leave them.
             { id = 1289775, name = "Murder Row" },
             { id = 1289773, name = "Den of Nalorakk" },
+            { id = 1254572, name = "Magisters' Terrace" },
             { id = 1289776, name = "The Blinding Vale" },
             { id = 1289777, name = "Voidscar Arena" },
-            { id = 1289778, name = "Kings' Rest" },
-            { id = 1289780, name = "Ruby Life Pools" },
-            { id = 1289782, name = "Temple of Sethraliss" },
-        },
-    },
-    {
-        header = "Midnight S1",
-        entries = {
-            { id = 1254572, name = "Magisters' Terrace" },
             { id = 1254400, name = "Windrunner Spire" },
             { id = 1254563, name = "Nexus-Point Xenas" },
             { id = 1254559, name = "Maisara Caverns" },
-            { id = 1254555, name = "Pit of Saron" },
-            { id = 1254551, name = "Seat of the Triumvirate" },
-            { id = 159898,  name = "Skyreach" },
-            { id = 393273,  name = "Algeth'ar Academy" },
         },
     },
     {
@@ -65,7 +81,14 @@ local TELEPORT_GROUPS = {
             { id = 424197,  name = "Dawn of the Infinite" },
             { id = 393279,  name = "The Azure Vault" },
             { id = 393262,  name = "The Nokhud Offensive" },
-            { id = 393256,  name = "Ruby Life Pools" },
+            { id = 393273,  name = "Algeth'ar Academy" },
+            -- Two spells for one dungeon. A returning dungeon can be
+            -- unlocked from the expansion it came from OR from the season
+            -- that brought it back, and either one means you have the
+            -- port. That is the bug this fixes: the season tile checked
+            -- only the season's spell, so it read as locked for anyone
+            -- who earned the Dragonflight version years ago.
+            { ids = { 393256, 1289780 }, name = "Ruby Life Pools" },
         },
     },
     {
@@ -92,6 +115,8 @@ local TELEPORT_GROUPS = {
             { id = 373274,  name = "Operation: Mechagon" },
             { id = 445418,  name = "Siege of Boralus" },
             { id = 272268,  name = "The MOTHERLODE!!" },
+            { id = 1289778, name = "Kings' Rest" },
+            { id = 1289782, name = "Temple of Sethraliss" },
         },
     },
     {
@@ -103,6 +128,7 @@ local TELEPORT_GROUPS = {
             { id = 393764,  name = "Halls of Valor" },
             { id = 393766,  name = "Court of Stars" },
             { id = 373262,  name = "Return to Karazhan" },
+            { id = 1254551, name = "Seat of the Triumvirate" },
         },
     },
     {
@@ -115,6 +141,7 @@ local TELEPORT_GROUPS = {
             { id = 159895,  name = "Bloodmaul Slag Mines" },
             { id = 159899,  name = "Shadowmoon Burial Grounds" },
             { id = 159902,  name = "Upper Blackrock Spire" },
+            { id = 159898,  name = "Skyreach" },
         },
     },
     {
@@ -139,7 +166,97 @@ local TELEPORT_GROUPS = {
             { id = 131229,  name = "Scarlet Monastery" },
         },
     },
+    {
+        header = "Wrath of the Lich King",
+        entries = {
+            { id = 1254555, name = "Pit of Saron" },
+        },
+    },
 }
+
+-- The current season's dungeon pool, by name. Every name must match a
+-- canonical entry above. One that does not is skipped and collected in
+-- ns.TELEPORT_MISSING_SEASON, which the test suite asserts is empty --
+-- a typo here would otherwise quietly shrink the section people look at
+-- first, and a missing tile is not something you notice.
+--
+-- Rolling the season over means editing this list and nothing else.
+local CURRENT_SEASON = {
+    header = "Midnight Season 2 - Current",
+    names = {
+        "Altar of Fangs",
+        "Murder Row",
+        "Den of Nalorakk",
+        "The Blinding Vale",
+        "Voidscar Arena",
+        "Kings' Rest",
+        "Ruby Life Pools",
+        "Temple of Sethraliss",
+    },
+}
+
+------------------------------------------------------------
+-- Derived views
+------------------------------------------------------------
+-- Normalise `id` into `ids` once, so everything downstream has a single
+-- shape to handle instead of two.
+for _, group in ipairs(TELEPORT_GROUPS) do
+    for _, entry in ipairs(group.entries) do
+        if not entry.ids then entry.ids = { entry.id } end
+    end
+end
+
+local byName = {}
+for _, group in ipairs(TELEPORT_GROUPS) do
+    for _, entry in ipairs(group.entries) do
+        byName[entry.name] = entry
+    end
+end
+
+--- True when the player has this teleport, plus the spell to cast.
+---
+--- Any of the entry's spells counts. Returns the KNOWN spell when there
+--- is one, so the tile casts what they actually have, and the first
+--- otherwise, so a locked tile still has an icon and a tooltip.
+local function EntryKnown(entry)
+    for _, id in ipairs(entry.ids) do
+        if IsSpellKnown(id) then return true, id end
+    end
+    return false, entry.ids[1]
+end
+
+-- The season section, resolved to the same entry TABLES the expansion
+-- groups hold -- not copies. That identity is what keeps the two
+-- sections from ever disagreeing about a dungeon.
+local seasonGroup, missingSeasonNames = nil, {}
+do
+    local entries = {}
+    for _, name in ipairs(CURRENT_SEASON.names) do
+        local entry = byName[name]
+        if entry then
+            entries[#entries + 1] = entry
+        else
+            missingSeasonNames[#missingSeasonNames + 1] = name
+        end
+    end
+    if #entries > 0 then
+        seasonGroup = { header = CURRENT_SEASON.header, entries = entries }
+    end
+end
+
+-- What gets drawn: the current season first, then expansions newest
+-- first. TELEPORT_GROUPS remains the list of canonical entries, so the
+-- summary can count each teleport once however often it is shown.
+local DISPLAY_GROUPS = {}
+if seasonGroup then DISPLAY_GROUPS[#DISPLAY_GROUPS + 1] = seasonGroup end
+for _, group in ipairs(TELEPORT_GROUPS) do
+    DISPLAY_GROUPS[#DISPLAY_GROUPS + 1] = group
+end
+
+ns.TELEPORT_GROUPS = TELEPORT_GROUPS
+ns.TELEPORT_DISPLAY_GROUPS = DISPLAY_GROUPS
+ns.TELEPORT_MISSING_SEASON = missingSeasonNames
+ns.TeleportEntryKnown = EntryKnown
 
 ------------------------------------------------------------
 -- Main frame
@@ -308,10 +425,14 @@ function ns:RefreshTeleports()
     -- Count how many teleports the player has
     local knownCount = 0
     local totalCount = 0
+    -- Counted over the canonical groups, never the display list: a
+    -- dungeon shown under both its expansion and the current season is
+    -- still one teleport, and counting the display list would have read
+    -- "8 / 82" for someone who owns seven.
     for _, group in ipairs(TELEPORT_GROUPS) do
         for _, entry in ipairs(group.entries) do
             totalCount = totalCount + 1
-            if IsSpellKnown(entry.id) then knownCount = knownCount + 1 end
+            if EntryKnown(entry) then knownCount = knownCount + 1 end
         end
     end
 
@@ -321,11 +442,11 @@ function ns:RefreshTeleports()
     summaryFs:SetText("|cff888888" .. knownCount .. " / " .. totalCount .. " teleports unlocked|r")
     y = y - 18
 
-    for _, group in ipairs(TELEPORT_GROUPS) do
+    for _, group in ipairs(DISPLAY_GROUPS) do
         -- Check if any entry in group is known
         local anyKnown = false
         for _, entry in ipairs(group.entries) do
-            if IsSpellKnown(entry.id) then anyKnown = true; break end
+            if EntryKnown(entry) then anyKnown = true; break end
         end
 
         -- Header divider
@@ -353,8 +474,10 @@ function ns:RefreshTeleports()
             local tx = col * (TILE_SIZE + TILE_GAP)
             local ty = y - row * (TILE_SIZE + 12 + TILE_GAP)
 
-            local known = IsSpellKnown(entry.id)
-            local spellIcon = C_Spell.GetSpellTexture(entry.id)
+            -- spellID, not entry.id: a returning dungeon has more than
+            -- one, and the tile has to cast the one they actually own.
+            local known, spellID = EntryKnown(entry)
+            local spellIcon = C_Spell.GetSpellTexture(spellID)
 
             local tile = AcquireBtn(content)
             tile:SetSize(TILE_SIZE, TILE_SIZE + 12)
@@ -396,7 +519,7 @@ function ns:RefreshTeleports()
 
             -- Secure click to cast
             if known then
-                local spellName = C_Spell.GetSpellName(entry.id)
+                local spellName = C_Spell.GetSpellName(spellID)
                 if spellName and not InCombatLockdown() then
                     tile:SetAttribute("type", "macro")
                     tile:SetAttribute("macrotext", "/cast " .. spellName)
@@ -404,7 +527,6 @@ function ns:RefreshTeleports()
             end
 
             -- Tooltip
-            local spellID = entry.id
             local spellName = entry.name
             tile:SetScript("OnEnter", function(self)
                 if known then

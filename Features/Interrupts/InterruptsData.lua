@@ -208,29 +208,6 @@ SlashCmdList.YYHINTLOG = function()
     print(("|cff00ff00YippYapp|r interrupt log: %s"):format(I._debug and "ON" or "OFF"))
 end
 
-local DEBUG_CLASSES = { "WARRIOR", "ROGUE", "MAGE", "DEATHKNIGHT", "PALADIN",
-                        "DEMONHUNTER", "HUNTER", "DRUID", "SHAMAN", "PRIEST",
-                        "MONK", "EVOKER" }
-local debugIdx = 0
-SLASH_YYHINTDEBUG1 = "/yyhintdebug"
-SlashCmdList.YYHINTDEBUG = function()
-    debugIdx = (debugIdx % #DEBUG_CLASSES) + 1
-    local class = DEBUG_CLASSES[debugIdx]
-    local spellID = I:GetDefaultInterrupt(class)
-    if not spellID then return end
-    local fakeGUID = "YYH-DEBUG-" .. class
-    I.state[fakeGUID] = {
-        name = "Debug" .. class:sub(1, 4), class = class, unit = "player",
-        spellID = spellID, cdBase = I.SPELLS[spellID],
-        lastCastAt = GetTime(),
-        readyAt = GetTime() + (I.SPELLS[spellID] or 15),
-    }
-    if ns.InterruptsUI and ns.InterruptsUI.OnCast then
-        ns.InterruptsUI:OnCast(fakeGUID, I.state[fakeGUID])
-    end
-    print(("|cff00ff00YippYapp|r interrupt debug: fired %s cast"):format(class))
-end
-
 ------------------------------------------------------------
 -- Events
 ------------------------------------------------------------

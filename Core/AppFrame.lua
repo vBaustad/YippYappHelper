@@ -319,7 +319,7 @@ MakePage("consumables")
 MakePage("mythicplus")
 MakePage("teleports")
 MakePage("trinkets")
-MakePage("omnium")
+MakePage("bis")
 
 ------------------------------------------------------------
 -- Page navigation
@@ -333,7 +333,7 @@ local PAGE_INFO = {
     mythicplus  = { title = "|cff00d4ffMythic+|r" },
     teleports   = { title = "|cff88ccffTeleports|r" },
     trinkets    = { title = "|cff70d0ffTrinkets|r" },
-    omnium      = { title = "|cffb885ffOmnium Folio|r" },
+    bis         = { title = "|cff73ff8cBest in Slot|r" },
 }
 
 local CONTENT_W = FRAME_W
@@ -483,9 +483,9 @@ local function EnterPage(id)
             ns.TrinketUI:BuildInto(pages.trinkets)
         end
 
-    elseif id == "omnium" then
-        if ns.OmniumFolioUI and ns.OmniumFolioUI.BuildInto then
-            ns.OmniumFolioUI:BuildInto(pages.omnium)
+    elseif id == "bis" then
+        if ns.BisUI and ns.BisUI.BuildInto then
+            ns.BisUI:BuildInto(pages.bis)
         end
 
     elseif id == "teleports" and ns.TeleportFrame then
@@ -1083,13 +1083,25 @@ end
 -- feeling like he chose. Random with a short memory of what he last said
 -- keeps it fresh without letting the same line land twice in a row.
 local yeeperRecent = {}
-local YEEPER_MEMORY = 4
+local yeeperLast = nil
+-- How many recent lines he refuses to repeat.
+--
+-- Was 4, chosen when the pool was a handful of asides. With jabber in
+-- the playlist the pool is two to three times bigger, and a memory of
+-- four let the vault line come back after eight or nine opens. If memory
+-- ever eats the whole pool the code below falls back to repeating, so
+-- raising this cannot make him mute.
+local YEEPER_MEMORY = 10
 
 local function YeeperRefresh()
     if not ns.Advisor then return end
     -- Counted here rather than on frame show: this runs once per visit to
     -- the home screen, which is what "opening the tab again" means.
     if ns.FunStats and ns.FunStats.Bump then ns.FunStats:Bump("homeOpens") end
+    -- Counted per addon version, so the introduction replays after an
+    -- update: a returning player knows as little about what changed as
+    -- a new one does.
+    if ns.Advisor and ns.Advisor.NoteOpen then ns.Advisor:NoteOpen() end
     local ok, lines = pcall(function() return ns.Advisor:Playlist() end)
     lines = (ok and lines) or {}
     if #lines == 0 then return end
@@ -1097,6 +1109,15 @@ local function YeeperRefresh()
     -- Urgent business always leads: anything the rules raised is a real
     -- problem and outranks entertainment.
     local msg = lines[1]
+    -- Never the same line twice running, whatever its priority. A
+    -- genuinely urgent line still leads -- but repeating it verbatim on
+    -- the next open reads as a stuck addon rather than an insistent one,
+    -- and the player has already read it.
+    if #lines > 1 and msg.text == yeeperLast then
+        for _, m in ipairs(lines) do
+            if m.text ~= yeeperLast then msg = m break end
+        end
+    end
     if #lines > 1 and not (msg.p and msg.p >= 60) then
         -- Everything he could say, minus what he has said recently.
         local fresh = {}
@@ -1114,6 +1135,14 @@ local function YeeperRefresh()
 
     table.insert(yeeperRecent, msg.text)
     while #yeeperRecent > YEEPER_MEMORY do table.remove(yeeperRecent, 1) end
+    -- Tracked separately from yeeperRecent: that list only gates the
+    -- random path, and the back-to-back guard above has to apply to the
+    -- high-priority path too.
+    yeeperLast = msg.text
+    -- Only the panel knows which line it picked, so the count of "times
+    -- actually said" has to be recorded here. It is what demotes a
+    -- standing problem out of the urgent slot once he has led with it.
+    if ns.Advisor.NoteShown then ns.Advisor:NoteShown(msg.text) end
 
     YeeperSay(msg.text)
     YeeperShowTips(msg.tips)
@@ -1292,16 +1321,28 @@ plannerEmpty:SetTextColor(0.65, 0.65, 0.65)
 plannerEmpty:Hide()
 
 -- ── Row 4: Navigation buttons ────────────────────────────
+-- Ordered so each row of three is one kind of question, at NAV_COLS = 3:
+--
+--   what do I wear      Gear Upgrades  Best in Slot  Trinkets
+--   what do I bring     Consumables    Progression   Loot Browser
+--   what am I running   Mythic+        Raid Tools    Teleports
+--
+-- Nine entries, three clean rows. The Omnium Folio used to sit here as a
+-- tenth; it is a one-evening chain with a permanent reward, which makes
+-- it something to be chased by Yeeper rather than a tab to maintain.
 local NAV_DEFS = {
     { id = "gear",        label = "Gear Upgrades",   hex = "ff00ff00" },
-    { id = "raid",        label = "Raid Tools",       hex = "ff00aaff" },
-    { id = "progression", label = "Progression",      hex = "ffffff00" },
-    { id = "loot",        label = "Loot Browser",     hex = "ff00ccff" },
-    { id = "consumables", label = "Consumables",      hex = "ffff00ff" },
-    { id = "mythicplus", label = "Mythic+",          hex = "ff00d4ff" },
-    { id = "teleports", label = "Teleports",        hex = "ff88ccff" },
-    { id = "trinkets",  label = "Trinkets",         hex = "ff70d0ff" },
-    { id = "omnium",    label = "Omnium Folio",     hex = "ffb885ff" },
+    { id = "bis",         label = "Best in Slot",    hex = "ff73ff8c" },
+    { id = "trinkets",    label = "Trinkets",        hex = "ff70d0ff" },
+
+    { id = "consumables", label = "Consumables",     hex = "ffff00ff" },
+    { id = "progression", label = "Progression",     hex = "ffffff00" },
+    { id = "loot",        label = "Loot Browser",    hex = "ff00ccff" },
+
+    { id = "mythicplus",  label = "Mythic+",         hex = "ff00d4ff" },
+    { id = "raid",        label = "Raid Tools",      hex = "ff00aaff" },
+    { id = "teleports",   label = "Teleports",       hex = "ff88ccff" },
+
 }
 
 local NAV_COLS = 3
@@ -1311,13 +1352,44 @@ local NAV_H = 36
 local NAV_ROW_GAP = 8
 local NAV_Y = SUMMARY_Y - SUMMARY_H - 12
 
+-- Buttons are kept rather than discarded: some entries hide themselves
+-- once they have nothing left to say (see RefreshNav), and a hidden
+-- button must close the gap instead of leaving a hole in the grid.
+local navButtons = {}
+
+--- The marching-ants border the gear slots use for "this is ready".
+--- Reused verbatim so "there is something to do here" looks the same
+--- everywhere in the addon rather than inventing a second visual
+--- language for the same idea.
+local function AddAntsGlow(btn, r, g, b)
+    if btn.antsGlow then return btn.antsGlow end
+
+    local glow = CreateFrame("Frame", nil, btn)
+    glow:SetPoint("TOPLEFT", -6, 6)
+    glow:SetPoint("BOTTOMRIGHT", 6, -6)
+    glow:SetFrameLevel(math.max(btn:GetFrameLevel() - 1, 0))
+    glow:Hide()
+
+    glow.ants = glow:CreateTexture(nil, "ARTWORK")
+    glow.ants:SetAllPoints()
+    glow.ants:SetAtlas("ActionBarSpellHighlightBorder")
+    glow.ants:SetVertexColor(r, g, b, 0.9)
+
+    glow.animGroup = glow.ants:CreateAnimationGroup()
+    glow.animGroup:SetLooping("BOUNCE")
+    local fade = glow.animGroup:CreateAnimation("Alpha")
+    fade:SetFromAlpha(0.5)
+    fade:SetToAlpha(1.0)
+    fade:SetDuration(0.6)
+    fade:SetSmoothing("IN_OUT")
+
+    btn.antsGlow = glow
+    return glow
+end
+
 for i, def in ipairs(NAV_DEFS) do
-    local col = (i - 1) % NAV_COLS
-    local row = math.floor((i - 1) / NAV_COLS)
-    local x = PAD + col * (NAV_W + NAV_GAP)
     local btn = CreateFrame("Button", nil, homePage, "BackdropTemplate")
     btn:SetSize(NAV_W, NAV_H)
-    btn:SetPoint("TOPLEFT", homePage, "TOPLEFT", x, NAV_Y - row * (NAV_H + NAV_ROW_GAP))
     btn:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1342,7 +1414,33 @@ for i, def in ipairs(NAV_DEFS) do
     btn:SetScript("OnClick", function()
         ns:ShowAppPage(def.id)
     end)
+
+    btn.navID = def.id
+    navButtons[#navButtons + 1] = btn
 end
+
+--- Position only the visible buttons, so hiding one closes the gap
+--- rather than leaving a blank cell where it used to be.
+local function LayoutNav()
+    local slot = 0
+    for _, btn in ipairs(navButtons) do
+        if btn.navHidden then
+            btn:Hide()
+        else
+            local col = slot % NAV_COLS
+            local row = math.floor(slot / NAV_COLS)
+            btn:ClearAllPoints()
+            btn:SetPoint("TOPLEFT", homePage, "TOPLEFT",
+                PAD + col * (NAV_W + NAV_GAP),
+                NAV_Y - row * (NAV_H + NAV_ROW_GAP))
+            btn:Show()
+            slot = slot + 1
+        end
+    end
+end
+
+
+LayoutNav()
 
 ------------------------------------------------------------
 -- Dashboard refresh (called when home page is shown)

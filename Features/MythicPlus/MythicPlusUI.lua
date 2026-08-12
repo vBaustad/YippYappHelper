@@ -1296,6 +1296,14 @@ local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 eventFrame:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 eventFrame:RegisterEvent("MYTHIC_PLUS_CURRENT_AFFIX_UPDATE")
+-- This page draws the Great Vault's progress and its example rewards
+-- from C_WeeklyRewards, and nothing in the addon listened for the vault
+-- changing. Finishing a key filled a slot the page kept showing empty.
+eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
+-- The run that just filled it. CHALLENGE_MODE_MAPS_UPDATE covers the
+-- keystone changing, which is not the same thing and does not always
+-- follow a completion.
+eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 
 eventFrame:SetScript("OnEvent", function()
     if frame:IsShown() then

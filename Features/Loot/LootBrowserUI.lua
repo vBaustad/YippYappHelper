@@ -78,7 +78,15 @@ local function RewriteTooltipIlvl(tooltip, ilvl, rankText, diffLabel)
             end
         end
     end
+    return didIlvl, didRank
 end
+
+-- Shared with the Best in Slot page, which has the same problem from the
+-- other direction: it knows the rank an item tops out at, but the
+-- tooltip it can build shows the item's base level. Reporting whether
+-- each line was actually replaced lets that caller add a rank line when
+-- the item has no upgrade track of its own to rewrite.
+ns.RewriteTooltipIlvl = RewriteTooltipIlvl
 
 local function QualityBorderColor(itemID, itemLink)
     local quality

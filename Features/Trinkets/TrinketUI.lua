@@ -31,7 +31,52 @@ local STYLES = {
     { id = "AOE", label = "AoE" },
 }
 
-local state = { tab = "spec", selected = nil, style = "ST" }
+local state = { tab = "spec", selected = nil, style = "ST",
+                search = "", showAll = false }
+
+-- A ranked list is a top-N question. Twenty-five rows is a wall that
+-- also forces a scrollbar; ten answers "what should I use" and the rest
+-- are one click away.
+local TOP_N = 10
+local MAX_SEARCH_ROWS = 15
+local MAX_SUGGEST = 5
+
+------------------------------------------------------------
+-- Search
+------------------------------------------------------------
+-- Names live in the sim data, so matching needs no item API and works
+-- for items this client has never seen.
+--
+-- Lowercased once and cached on the entry itself. The alternative --
+-- string.lower over every trinket on every keystroke -- is essentially
+-- the entire cost of having a search box, and it buys nothing: the data
+-- is static for the session.
+local function lowerName(entry)
+    local lc = entry._lc
+    if not lc then
+        lc = (entry.name or ""):lower()
+        entry._lc = lc
+    end
+    return lc
+end
+
+--- Plain-text find, not a pattern match: trinket names contain "(", "-"
+--- and "'", any of which would either error or silently mean something
+--- else as a Lua pattern.
+local function matches(entry, needle)
+    if needle == "" then return true end
+    return lowerName(entry):find(needle, 1, true) ~= nil
+end
+
+--- Whatever the active tab is listing, for search and suggestions.
+local function currentEntries()
+    if state.tab == "spec" then
+        local specKey = T:GetPlayerSpecKey()
+        local list = specKey and T:GetForSpec(specKey, state.style)
+        return list or {}
+    end
+    return T:GetAllTrinkets(state.style) or {}
+end
 
 ------------------------------------------------------------
 -- Row pool
@@ -74,11 +119,41 @@ local function AcquireRow(self, parent)
     return row
 end
 
+-- Wrapped multi-line text. AcquireRow is a fixed 22px single line, and
+-- the caveat needs to breathe: clipping it to one row would truncate a
+-- warning into a confident-looking fragment, which is the exact failure
+-- the caveat exists to prevent.
+--
+-- Returns the fontstring so the caller can measure it — the height
+-- depends on how the text wraps at the current panel width.
+local function AcquireNote(self, parent, width, text)
+    self._notes = self._notes or {}
+    self._noteIdx = (self._noteIdx or 0) + 1
+    local fs = self._notes[self._noteIdx]
+    if not fs then
+        fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        self._notes[self._noteIdx] = fs
+    end
+    fs:SetParent(parent)
+    fs:ClearAllPoints()
+    fs:SetWidth(width)
+    fs:SetJustifyH("LEFT")
+    fs:SetWordWrap(true)
+    fs:SetTextColor(0.60, 0.60, 0.66)
+    fs:SetText(text)
+    fs:Show()
+    return fs
+end
+
 local function ReleaseRows(self)
     for i = 1, (self._rowIdx or 0) do
         if self._rows[i] then self._rows[i]:Hide() end
     end
     self._rowIdx = 0
+    for i = 1, (self._noteIdx or 0) do
+        if self._notes and self._notes[i] then self._notes[i]:Hide() end
+    end
+    self._noteIdx = 0
 end
 
 ------------------------------------------------------------
@@ -151,6 +226,17 @@ function UI:RenderMySpec(content, width)
         return y - ROW_H
     end
 
+    -- Above the list, not below it. A spec's ranking runs to 25 rows --
+    -- roughly 550px against a 500px panel -- so a caveat placed after it
+    -- sits permanently below the scroll fold, where it qualifies nothing
+    -- because nobody reads it. It frames the numbers, so it goes first.
+    local caveat = ns.GEAR_CAVEAT and ns.GEAR_CAVEAT.trinket
+    if caveat then
+        local note = AcquireNote(self, content, width - PAD * 2, caveat)
+        note:SetPoint("TOPLEFT", PAD, y - 2)
+        y = y - (note:GetStringHeight() or 30) - 10
+    end
+
     local hdr = AcquireRow(self, content)
     hdr:SetPoint("TOPLEFT", PAD, y)
     hdr:SetWidth(width - PAD * 2)
@@ -160,17 +246,76 @@ function UI:RenderMySpec(content, width)
     hdr.value:SetText("|cff666666vs best|r")
     y = y - ROW_H - 4
 
+    -- Long-hand on purpose. `state.showAll and #list or TOP_N` reads
+    -- fine and is wrong the moment #list is 0, because 0 is truthy in
+    -- Lua and the fallback never fires.
+    local needle = state.search
+    local limit
+    if needle ~= "" then
+        limit = MAX_SEARCH_ROWS
+    elseif state.showAll then
+        limit = #list
+    else
+        limit = TOP_N
+    end
+
+    -- rank comes from the position in the FULL list, not from the loop
+    -- counter. Filtering must not renumber things: a trinket that is
+    -- 14th stays 14th when you search for it, or the number is a lie.
+    local shown, hidden = 0, 0
     for rank, row in ipairs(list) do
-        local r = AcquireRow(self, content)
-        r:SetPoint("TOPLEFT", PAD, y)
-        r:SetWidth(width - PAD * 2)
-        r.rank:SetText("|cff888888" .. rank .. ".|r")
-        applyItem(r, row.id, row.name)
-        if rank == 1 then
-            r.value:SetText("|cff40ff40best|r")
-        else
-            r.value:SetText(("%s%.1f%%|r"):format(relColor(row.rel), row.rel))
+        if matches(row, needle) then
+            if shown < limit then
+                local r = AcquireRow(self, content)
+                r:SetPoint("TOPLEFT", PAD, y)
+                r:SetWidth(width - PAD * 2)
+                r.rank:SetText("|cff888888" .. rank .. ".|r")
+                applyItem(r, row.id, row.name)
+                if rank == 1 then
+                    r.value:SetText("|cff40ff40best|r")
+                else
+                    r.value:SetText(("%s%.1f%%|r"):format(relColor(row.rel), row.rel))
+                end
+                y = y - ROW_H
+                shown = shown + 1
+            else
+                hidden = hidden + 1
+            end
         end
+    end
+
+    if shown == 0 then
+        local fs = AcquireRow(self, content)
+        fs:SetPoint("TOPLEFT", PAD, y)
+        fs:SetWidth(width - PAD * 2)
+        fs.text:SetText("|cff888888No trinket matches that name.|r")
+        y = y - ROW_H
+    elseif hidden > 0 then
+        local more = AcquireRow(self, content)
+        more:SetPoint("TOPLEFT", PAD, y)
+        more:SetWidth(width - PAD * 2)
+        more.icon:SetTexture(nil)
+        if needle ~= "" then
+            more.text:SetText(("|cff888888%d more match — refine the search.|r")
+                :format(hidden))
+        else
+            more.text:SetText(("|cff888888+%d more|r  |cffaaaaaaShow all|r"):format(hidden))
+            more:SetScript("OnClick", function()
+                state.showAll = true
+                UI:Refresh()
+            end)
+        end
+        y = y - ROW_H
+    elseif state.showAll and needle == "" then
+        local less = AcquireRow(self, content)
+        less:SetPoint("TOPLEFT", PAD, y)
+        less:SetWidth(width - PAD * 2)
+        less.icon:SetTexture(nil)
+        less.text:SetText(("|cffaaaaaaShow top %d only|r"):format(TOP_N))
+        less:SetScript("OnClick", function()
+            state.showAll = false
+            UI:Refresh()
+        end)
         y = y - ROW_H
     end
 
@@ -181,12 +326,25 @@ function UI:RenderMySpec(content, width)
         fs.text:SetText("|cff666666Simmed " .. stamp .. " — bloodmallet.com|r")
         y = y - ROW_H - 6
     end
+
     return y
 end
 
 function UI:RenderCouncil(content, width)
     local y = -6
     local all = T:GetAllTrinkets(state.style)
+
+    -- Above the list, not below it. A spec's ranking runs to 25 rows --
+    -- roughly 550px against a 500px panel -- so a caveat placed after it
+    -- sits permanently below the scroll fold, where it qualifies nothing
+    -- because nobody reads it. It frames the numbers, so it goes first.
+    local caveat = ns.GEAR_CAVEAT and ns.GEAR_CAVEAT.trinket
+    if caveat then
+        local note = AcquireNote(self, content, width - PAD * 2, caveat)
+        note:SetPoint("TOPLEFT", PAD, y - 2)
+        y = y - (note:GetStringHeight() or 30) - 10
+    end
+
 
     if not all or #all == 0 then
         local fs = AcquireRow(self, content)
@@ -220,7 +378,23 @@ function UI:RenderCouncil(content, width)
         UI:Refresh()
     end
 
+    local needle = state.search
+    local limit
+    if needle ~= "" then
+        limit = MAX_SEARCH_ROWS
+    elseif state.showAll then
+        limit = #all
+    else
+        limit = TOP_N
+    end
+    local shown, hidden = 0, 0
+
     for _, bucket in ipairs(all) do
+      if matches(bucket, needle) then
+       if shown >= limit then
+        hidden = hidden + 1
+       else
+        shown = shown + 1
         local r = AcquireRow(self, content)
         r:SetPoint("TOPLEFT", PAD, y)
         r:SetWidth(width - PAD * 2)
@@ -258,7 +432,34 @@ function UI:RenderCouncil(content, width)
             end
             y = y - 4
         end
+       end
+      end
     end
+
+    if shown == 0 then
+        local fs = AcquireRow(self, content)
+        fs:SetPoint("TOPLEFT", PAD, y)
+        fs:SetWidth(width - PAD * 2)
+        fs.text:SetText("|cff888888No trinket matches that name.|r")
+        y = y - ROW_H
+    elseif hidden > 0 then
+        local more = AcquireRow(self, content)
+        more:SetPoint("TOPLEFT", PAD, y)
+        more:SetWidth(width - PAD * 2)
+        more.icon:SetTexture(nil)
+        if needle ~= "" then
+            more.text:SetText(("|cff888888%d more match — refine the search.|r")
+                :format(hidden))
+        else
+            more.text:SetText(("|cff888888+%d more|r  |cffaaaaaaShow all|r"):format(hidden))
+            more:SetScript("OnClick", function()
+                state.showAll = true
+                UI:Refresh()
+            end)
+        end
+        y = y - ROW_H
+    end
+
     return y
 end
 
@@ -359,8 +560,151 @@ function UI:BuildInto(parent)
         banner:SetText(T:StaleText())
     end
 
+    ------------------------------------------------------------
+    -- Search
+    ------------------------------------------------------------
+    local searchBox = CreateFrame("EditBox", nil, host, "SearchBoxTemplate")
+    searchBox:SetPoint("TOPLEFT", tabBar, "BOTTOMLEFT", 4, banner and -22 or -4)
+    searchBox:SetSize(220, 20)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(40)
+    if searchBox.Instructions then
+        searchBox.Instructions:SetText("Search trinkets")
+    end
+
+    -- Suggestions hang off host rather than the scroll content so they
+    -- float over the list instead of pushing it down, and so scrolling
+    -- cannot carry them out of view while the box still has focus.
+    local suggest = CreateFrame("Frame", nil, host, "BackdropTemplate")
+    suggest:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", 8, -2)
+    suggest:SetWidth(260)
+    suggest:SetFrameStrata("DIALOG")
+    suggest:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1,
+    })
+    suggest:SetBackdropColor(0.06, 0.06, 0.08, 0.97)
+    suggest:SetBackdropBorderColor(0.30, 0.30, 0.34, 1)
+    suggest:Hide()
+
+    local suggestRows = {}
+    local function suggestRow(i)
+        local b = suggestRows[i]
+        if not b then
+            b = CreateFrame("Button", nil, suggest)
+            b:SetHeight(18)
+            b:SetPoint("TOPLEFT", 4, -2 - (i - 1) * 18)
+            b:SetPoint("RIGHT", suggest, "RIGHT", -4, 0)
+            b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            b.text:SetPoint("LEFT", 2, 0)
+            b.text:SetJustifyH("LEFT")
+            local hl = b:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.10)
+            suggestRows[i] = b
+        end
+        return b
+    end
+
+    -- Stops at MAX_SUGGEST rather than collecting everything and
+    -- trimming: with a few hundred trinkets in the council view the
+    -- difference is the whole loop versus five iterations, on every
+    -- keystroke.
+    local applyingSuggestion = false
+
+    local function updateSuggestions(text)
+        local needle = text:lower()
+        if needle == "" then suggest:Hide() return end
+
+        local n = 0
+        local seen = {}
+        for _, entry in ipairs(currentEntries()) do
+            local name = entry.name
+            if name and not seen[name] and matches(entry, needle) then
+                seen[name] = true
+                n = n + 1
+                local b = suggestRow(n)
+                b.text:SetText(name)
+                b:SetScript("OnClick", function()
+                    -- Flagged so OnTextChanged does not immediately
+                    -- rebuild the suggestion list we are about to hide.
+                    applyingSuggestion = true
+                    searchBox:SetText(name)
+                    applyingSuggestion = false
+                    searchBox:ClearFocus()
+                    suggest:Hide()
+                end)
+                b:Show()
+                if n >= MAX_SUGGEST then break end
+            end
+        end
+        for i = n + 1, #suggestRows do suggestRows[i]:Hide() end
+        if n == 0 then
+            suggest:Hide()
+        else
+            suggest:SetHeight(n * 18 + 6)
+            suggest:Show()
+        end
+    end
+
+    -- Debounced. Typing "alnseer" is seven refreshes without this, each
+    -- rebuilding every row; coalescing means one. The token guards
+    -- against an earlier timer firing after a later keystroke.
+    local searchToken = 0
+    -- HookScript, NOT SetScript, on every script the template defines.
+    --
+    -- SearchBoxTemplate's own OnTextChanged is what hides the "Search"
+    -- placeholder and shows the clear button; its OnEditFocusLost puts
+    -- the placeholder back; its OnEscapePressed empties the box.
+    -- Replacing them left the placeholder painted over whatever was
+    -- typed and the clear button out of step with the field.
+    searchBox:HookScript("OnTextChanged", function(box, userInput)
+        -- Deliberately NOT gated on userInput.
+        --
+        -- SearchBoxTemplate's clear button empties the box
+        -- programmatically, so userInput is false and the old guard
+        -- dropped the event -- the text vanished while state.search kept
+        -- its old needle and the list stayed filtered with no way back
+        -- short of a reload. Clicking a suggestion had the same fault
+        -- from the other side: it set the text and the search never
+        -- applied.
+        --
+        -- Re-entrancy is handled by the applyingSuggestion flag and by
+        -- the no-op check below, so the guard bought nothing.
+        local text = box:GetText() or ""
+        if not applyingSuggestion then updateSuggestions(text) end
+
+        searchToken = searchToken + 1
+        local mine = searchToken
+        C_Timer.After(0.12, function()
+            if mine ~= searchToken then return end
+            local needle = text:lower()
+            if needle == state.search then return end
+            state.search = needle
+            state.selected = nil
+            UI:Refresh()
+        end)
+    end)
+
+    searchBox:HookScript("OnEscapePressed", function(box)
+        box:SetText("")
+        box:ClearFocus()
+        suggest:Hide()
+        if state.search ~= "" then
+            state.search = ""
+            UI:Refresh()
+        end
+    end)
+    searchBox:HookScript("OnEnterPressed", function(box)
+        box:ClearFocus()
+        suggest:Hide()
+    end)
+    searchBox:HookScript("OnEditFocusLost", function() suggest:Hide() end)
+
+    self._searchBox = searchBox
+
     local scroll = CreateFrame("ScrollFrame", nil, host, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", tabBar, "BOTTOMLEFT", 0, banner and -24 or -6)
+    scroll:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", -4, -6)
     scroll:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -26, 8)
     scroll:SetScript("OnMouseWheel", function(sf, delta)
         local newVal = sf:GetVerticalScroll() - delta * 30

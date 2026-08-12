@@ -99,6 +99,21 @@ the season rollover instead of needing a code change.
 > lines are rewritten to the level you picked and tagged with it, rather
 > than left contradicting the rest of the tooltip.
 
+### Best in Slot
+Each spec's best-in-slot list from Wowhead's class guides, laid out as a
+paper doll so the icons sit where the character panel puts them.
+
+- **Bags count as collected.** Four states per slot: missing, sitting in
+  your bags, owned at a lower rank, and owned at the target rank.
+- Item level and upgrade rank come from the same gear-track data the Loot
+  Browser uses, so the two pages cannot disagree.
+- Items resolve through the Encounter Journal, so tooltips show the real
+  item rather than its base entry.
+- Stat priority per spec.
+
+A guide is one opinion at one point in time. Sim your own character —
+the page says so itself.
+
 ### Trinkets
 SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
 
@@ -170,27 +185,18 @@ guide text inline.
 > silently stale.
 
 ### Omnium Folio
-The five-week Rune chain from 12.0.7, tracked from your actual quest log
-rather than a checklist you tick yourself.
-
-- Progress bar and per-week status: done, in progress, or not started.
-- Live objective text when a step is in your log ("3/8 Ritualized
-  Arcana"), and a bag count when it isn't but you're already hoarding
-  the drops.
-- Where each step is done, who gives the quests (Magister Umbric, in the
-  Lycaneum inside Magisters' Terrace), and **clickable coordinates** that
-  drop a real map pin and super-track it.
-- Hoverable item chips for the collectibles, with full item tooltips.
-- A **Runes** tab listing all five rows and every choice, greyed until
-  the week that unlocks them.
-
-Its Runes last the rest of Midnight, so an unfinished Folio follows you
-into Season 2 — which is why it gets its own page rather than a line on
-the dashboard.
+Tracked from your actual quest log rather than a checklist you tick
+yourself. It no longer has its own page: the chain became catch-up
+content that finishes in an afternoon, so a full page for it was more
+furniture than help. Mr. Yeeper raises it instead, and only when you have
+started it and then stopped.
 
 ### Dungeon Teleports
-Every Hero's Path teleport from MoP through Midnight, grouped by
-expansion, with Season 2 first. Unlearned teleports are greyed out.
+Every Hero's Path teleport from MoP through Midnight, filed under the
+expansion its dungeon came from, with the current season shown first.
+A dungeon brought back for a new season appears in both places and is the
+same entry, so it cannot read as unlocked in one and locked in the other.
+Unlearned teleports are greyed out.
 
 ### Dashboard
 Character bar, crest overview with weekly caps, an activity planner built
@@ -321,16 +327,19 @@ community gearing sheet.
   M9 previously claimed 318, which was wrong; Myth 1/6 starts at M10.
 - **Crafting item levels** in the progression tables are inferred and
   want verifying against the crafting order UI in-game.
-- **Consumables and trinket data** are still Season 1 upstream; both
-  surface a warning in-game and need a rescrape once updated.
+- **Trinket data** is still Season 1 upstream; it surfaces a warning
+  in-game and needs a rescrape once bloodmallet updates.
+- **Best in Slot and Consumables** are scraped from class guides, which
+  lag tuning passes. Both say so on the page.
 
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest:
-**v3.0.0** — Mr. Yeeper on the dashboard, every movable frame migrated to
-Blizzard's Edit Mode, settings rebuilt on Blizzard's own Settings API,
-and the Season 2 data pass. Also a corrected M9 vault item level, and a
-fix for the interrupt tracker showing an empty frame after any rebuild.
+**v3.0.0** — Mr. Yeeper on the dashboard, a new Best in Slot page, every
+movable frame migrated to Blizzard's Edit Mode, and settings rebuilt on
+Blizzard's own Settings API. Also the fix that matters most: the addon
+was reading the wrong crest currency, so every affordability and upgrade
+number was computed against an empty wallet.
 
 ## Feedback
 

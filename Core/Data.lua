@@ -28,6 +28,15 @@ ns.SEASON_MPLUS_START = SeasonDate(8, 18)
 -- players to unlock a reward the game has not switched on yet.
 ns.SEASON_VOIDCORE_START = SeasonDate(8, 25)
 
+-- The raid does not open with the patch either. Advising someone to go
+-- get a raid lockout in week one is advice they cannot act on, and the
+-- vault's raid row cannot fill until this date.
+--
+-- Confirmed: the raid opens on the same reset as keystones, 18 August in
+-- the US and the 19th in Europe. SeasonDate applies the regional day
+-- itself, so this is one date rather than two.
+ns.SEASON_RAID_START = SeasonDate(8, 18)
+
 ------------------------------------------------------------
 -- Gear Tracks: track name -> ordered item levels per rank
 --
@@ -205,6 +214,41 @@ ns.DUNGEON_LOOT = {
 }
 
 ------------------------------------------------------------
+-- The key level above which gear stops improving.
+--
+-- Both columns above flatten before the key ceiling does: +10, +11 and
+-- +12 all drop 311 and all vault 318. So past that point a higher key
+-- buys rating and nothing else -- which the game never says, and which
+-- is why people grind +12s believing the vault is still climbing.
+--
+-- Derived rather than written down, so a corrected row in DUNGEON_LOOT
+-- moves the answer instead of leaving a stale constant behind it.
+-- Returns keyLevel, loot, vault, or nil if the table has no M+ rows.
+------------------------------------------------------------
+function ns:GetKeyGearCeiling()
+    local maxLoot, maxVault = 0, 0
+    for _, entry in ipairs(ns.DUNGEON_LOOT or {}) do
+        if tonumber(entry.key:match("M(%d+)")) then
+            if (entry.loot or 0) > maxLoot then maxLoot = entry.loot end
+            if (entry.vault or 0) > maxVault then maxVault = entry.vault end
+        end
+    end
+    if maxLoot == 0 then return nil end
+
+    -- Lowest key that reaches both ceilings: the first level at which
+    -- pushing further stops paying in item level.
+    local best
+    for _, entry in ipairs(ns.DUNGEON_LOOT) do
+        local level = tonumber(entry.key:match("M(%d+)"))
+        if level and entry.loot == maxLoot and entry.vault == maxVault then
+            if not best or level < best then best = level end
+        end
+    end
+    if not best then return nil end
+    return best, maxLoot, maxVault
+end
+
+------------------------------------------------------------
 -- Raid reference anchors
 ------------------------------------------------------------
 ns.RAID_TRACKS = {
@@ -232,6 +276,34 @@ ns.RAID_VAULT_TRACKS = {
     Mythic = { track = "Myth",     rank = 6, ilvl = 334 },
 }
 ns.RAID_VERY_RARE_ILVL = 344   -- Very Rare + last two Mythic bosses
+
+------------------------------------------------------------
+-- Honest framing for "best" lists.
+--
+-- A best-in-slot table and a sim ranking both answer a question the
+-- player is not asking. They ask "is this drop good for me"; both
+-- sources answer "here is the best item in the abstract". Those are
+-- different questions, because an item's value depends on the set it
+-- lands in — stat weights move as gear changes, and a table presented
+-- without that caveat implies a certainty it does not have.
+--
+-- Shared rather than written per page so the trinket list and the
+-- best-in-slot list cannot drift into saying different things about the
+-- same limitation.
+------------------------------------------------------------
+ns.GEAR_CAVEAT = {
+    bis = "This is where the season ends, not the route there — you will "
+        .. "spend most of it wearing things that are not on this list.\n"
+        .. "Whether a drop is an upgrade depends on the rest of your gear. "
+        .. "Stat weights shift as your set changes, so a piece ranked lower "
+        .. "here can still be the better one on you. Sim what actually drops.",
+
+    trinket = "These sim one trinket at a time against a fixed character, "
+        .. "and you are not that character.\n"
+        .. "Trinkets interact with your stats, your other trinket and your "
+        .. "set bonuses, so a lower-ranked one can win in your bags. Use this "
+        .. "to narrow the field, then sim the pair you actually own.",
+}
 
 ------------------------------------------------------------
 -- Slot priority (higher = more valuable to upgrade)

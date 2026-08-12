@@ -3,9 +3,14 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Omnium Folio
 --
--- A five-week player-power chain introduced in 12.0.7 whose Runes last
--- the rest of Midnight — so it stays worth finishing well into Season 2,
--- and an alt that never started it is permanently behind.
+-- A five-STEP player-power chain introduced in 12.0.7, whose Runes last
+-- the rest of Midnight.
+--
+-- It gated one step per week on release. In 12.1 it is catch-up: every
+-- step is available at once, so the whole thing is an evening rather
+-- than five weeks. Nothing here is time-gated any more, and an alt that
+-- never started it is behind by one evening, not by a month -- worth
+-- knowing before writing any advice that leans on urgency.
 --
 -- Progress is read from the quest log rather than stored by us: each
 -- step is a real quest ID, so completion survives reinstalls, works on
@@ -18,8 +23,55 @@ local OF = ns.OmniumFolio
 -- Unlock chain. The intro can be skipped on alts once any character on
 -- the account has finished it, but the weekly quests still have to be
 -- picked up on a character that completed it.
-OF.INTRO_QUEST = 96223          -- The Magisters' Call
+OF.INTRO_QUEST = 96223          -- The Magisters' Call — chain STARTS here
+OF.UNLOCK_QUEST = 96233         -- The Omnium Reawakens — chain ENDS here
 OF.ACHIEVEMENT = 63325          -- Omnium Folio Studies (earn 5 Motes)
+
+-- One achievement per week, and they are ACCOUNT-WIDE — which the quest
+-- flags are not. That difference is the whole point: an alt that never
+-- touched the chain has no quest completions, so a purely quest-based
+-- read shows it 0/5 and nags about work the character cannot do and the
+-- account has already finished.
+--
+-- Confirmed as the five criteria of 63325 rather than guessed: that meta
+-- ("earn 5 Motes") references exactly 62606-62610 and nothing else.
+--
+-- Caveat worth keeping: Wowhead's guide says 62606 "The Sunstrider
+-- Omnium" is granted by the unlock quest, yet it also sits in the meta
+-- as one of the five motes. Both may be true — the unlock hands over the
+-- first mote. So it is mapped to week 1 for progress, but the unlock
+-- gate deliberately does NOT hang on it; that stays on quest 96233,
+-- which is per-character and is the thing that decides whether this
+-- character can pick the weeklies up at all.
+OF.WEEK_ACHIEVEMENTS = { 62606, 62607, 62608, 62609, 62610 }
+
+-- The unlock is a questline, not a single quest, and IsUnlocked() used
+-- to test the quest that STARTS it. Finish the first step and the addon
+-- declared the Folio open and pointed at Week 1 — while the player was
+-- still eight quests from the thing existing. It reported "unlocked" to
+-- someone sitting on "Return to the Omnium", two steps short.
+--
+-- Blizzard allocated the chain contiguously from the intro, and the
+-- guide is explicit that "The Omnium Reawakens" is the one that opens
+-- the Folio, so that is the quest the gate hangs on.
+--
+-- 96224/96225 share a name and 96238 duplicates "Return to the Omnium";
+-- they look like alternates or an alt-skip path. Progress is therefore
+-- measured by the FURTHEST step reached rather than by counting
+-- completions, so a player who only ever sees one of a pair does not
+-- get a progress bar that can never fill.
+OF.INTRO_CHAIN = {
+    { id = 96223, name = "The Magisters' Call" },
+    { id = 96224, name = "The Magisters' Conundrum" },
+    { id = 96226, name = "Omnium Anomalies" },
+    { id = 96227, name = "Lycaneum Chaos" },
+    { id = 96228, name = "The Shadowed Spire" },
+    { id = 96229, name = "The Void Reveals" },
+    { id = 96230, name = "Unraveling the Wards" },
+    { id = 96231, name = "The Grand Magister's Key Cipher" },
+    { id = 96232, name = "Return to the Omnium" },
+    { id = 96233, name = "The Omnium Reawakens" },
+}
 
 OF.INTRO = {
     name = "The Magisters' Call",
@@ -37,7 +89,9 @@ OF.QUEST_GIVER = {
     portals = "Portals in Silvermoon: Thalassian University, and the upper bazaar by the Ritual Site vendors",
 }
 
--- The five weekly steps, in order. `items` are tracked so the page can
+-- The five steps, in order. Called "weeks" by the game's own quest
+-- titles ("Seeking Knowledge Week 1 of 5") even though 12.1 no longer
+-- makes you wait between them. `items` are tracked so the page can
 -- show "3/8 collected" from your bags when the quest is not in the log.
 OF.STEPS = {
     {
@@ -173,6 +227,19 @@ end
 
 --- Items already in your bags toward a step, for the case where the
 --- quest is not in the log yet but the drops are hoarded.
+--- Achievements are account-wide, which is the whole reason this exists
+--- alongside the per-character quest checks above.
+---
+--- Declared here, with the other helpers, because Lua locals are not
+--- hoisted: defined below GetStepStatus it would resolve to a nil global
+--- inside it, and the call only fires on an alt — so the error would
+--- have waited for exactly the case this was written for.
+local function achievementEarned(achieveID)
+    if not achieveID or not GetAchievementInfo then return false end
+    local ok, _, _, _, completed = pcall(GetAchievementInfo, achieveID)
+    return (ok and completed) and true or false
+end
+
 local function bagCount(itemID)
     if not itemID or not C_Item or not C_Item.GetItemCount then return nil end
     local ok, count = pcall(C_Item.GetItemCount, itemID, true)
@@ -181,10 +248,47 @@ local function bagCount(itemID)
 end
 
 function OF:IsUnlocked()
-    return questCompleted(self.INTRO_QUEST)
+    return questCompleted(self.UNLOCK_QUEST)
 end
 
---- Status for one step: "done" | "active" | "todo", plus a progress line.
+--- How far into the unlock questline the character has got: the index of
+--- the furthest step completed or currently taken, plus the chain length
+--- and that step's own entry.
+---
+--- Furthest-reached rather than a count, because the chain has alternate
+--- steps (see INTRO_CHAIN) and counting would strand the display one
+--- short forever for anyone who only saw one of a pair.
+function OF:GetIntroProgress()
+    local furthest, step = 0, nil
+    for i, entry in ipairs(self.INTRO_CHAIN) do
+        if questCompleted(entry.id) or questInLog(entry.id) then
+            furthest, step = i, entry
+        end
+    end
+    return furthest, #self.INTRO_CHAIN, step
+end
+
+--- The unlock step to point the player at: the one they are holding, or
+--- the next one they have not finished. nil once the Folio is open.
+function OF:GetIntroNextStep()
+    if self:IsUnlocked() then return nil end
+    for _, entry in ipairs(self.INTRO_CHAIN) do
+        if questInLog(entry.id) then return entry, true end
+    end
+    for _, entry in ipairs(self.INTRO_CHAIN) do
+        if not questCompleted(entry.id) then return entry, false end
+    end
+    return nil
+end
+
+--- Status for one step: "done" | "account" | "active" | "todo", plus a
+--- progress line.
+---
+--- "account" means another character finished this week. Motes and Runes
+--- are account-wide, so the reward is already banked and there is
+--- nothing here for this character to do — but the quest flag is
+--- per-character, so without this an alt reads the whole chain as "not
+--- started" and looks like five weeks of outstanding work.
 function OF:GetStepStatus(step)
     if questCompleted(step.questID) then
         return "done", nil
@@ -193,6 +297,14 @@ function OF:GetStepStatus(step)
     local objText, finished = questObjectiveText(step.questID)
     if objText then
         return "active", objText, finished
+    end
+
+    -- Checked after the quest log so a character actively working the
+    -- step still shows its live objective text rather than being told
+    -- someone else already did it.
+    local achieveID = self.WEEK_ACHIEVEMENTS and self.WEEK_ACHIEVEMENTS[step.week]
+    if achieveID and achievementEarned(achieveID) then
+        return "account", "Done on another character"
     end
 
     -- Not taken yet — show what you are already carrying, if anything.
@@ -206,7 +318,34 @@ function OF:GetStepStatus(step)
     return "todo", nil
 end
 
+--- Weeks finished anywhere on the account.
+---
+--- Achievements are account-wide, so this is the honest answer to "has
+--- this been done" on any character. GetProgress() answers the narrower
+--- "did THIS character do it", which is what the weekly quest pickup
+--- actually depends on.
+function OF:GetAccountProgress()
+    local done = 0
+    for _, achieveID in ipairs(self.WEEK_ACHIEVEMENTS or {}) do
+        if achievementEarned(achieveID) then done = done + 1 end
+    end
+    return done, #(self.WEEK_ACHIEVEMENTS or {})
+end
+
+--- True once the account has all five Motes, by the meta achievement or
+--- by having every week's achievement. Checking both because the meta
+--- can lag behind its own criteria.
+function OF:IsAccountComplete()
+    if achievementEarned(self.ACHIEVEMENT) then return true end
+    local done, total = self:GetAccountProgress()
+    return total > 0 and done >= total
+end
+
 --- Completed weeks and how many Runes rows that unlocks.
+---
+--- Per-character on purpose: this drives "what can you do this week",
+--- and the weeklies can only be taken on a character that finished the
+--- unlock chain. Use GetAccountProgress for "is this done at all".
 function OF:GetProgress()
     local done = 0
     for _, step in ipairs(self.STEPS) do

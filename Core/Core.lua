@@ -351,6 +351,18 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
 eventFrame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
 eventFrame:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
+-- Actually spending crests on an upgrade fires this and nothing else the
+-- addon was listening for, so the sheet you just upgraded from sat
+-- stale.
+eventFrame:RegisterEvent("ITEM_UPGRADE_MASTER_UPDATE")
+-- Loot landing in your bags. The Best in Slot page counts bags towards
+-- "collected", so a piece dropping has to redraw it. DELAYED rather than
+-- BAG_UPDATE: the latter fires once per bag per change.
+eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+-- The dashboard and Mr. Yeeper both report vault progress, and the vault
+-- filling is not signalled by anything else the addon listens for.
+eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
+eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 local ITEM_UPGRADE_INTERACTION = Enum.PlayerInteractionType.ItemUpgrade
@@ -390,7 +402,13 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             ns:EnsureLauncherMacro()
         end)
 
-        ns.ADDON_VERSION = "3.0.0"
+        -- Read from the TOC rather than hardcoded. It was duplicated
+        -- here and in WhatsNew, which is two strings that have to be
+        -- bumped together and only ever get bumped once -- and Yeeper's
+        -- introduction keys off this value, so a stale copy quietly
+        -- replays or suppresses the intro at the wrong moment.
+        ns.ADDON_VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata
+            and C_AddOns.GetAddOnMetadata("YippYappHelper", "Version")) or "3.0.0"
 
         -- Suppress CharacterFrame when upgrade vendor is open
         -- (our slot buttons handle equipping instead)
@@ -435,33 +453,105 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     elseif event == "UNIT_INVENTORY_CHANGED" and arg1 == "player" then
         -- Always invalidate tooltip cache when gear changes
         ns:InvalidateScanCache()
-        -- Delay refresh so item data is fully updated
-        if ns.MainFrame and ns.MainFrame:IsShown() then
-            C_Timer.After(0.3, function()
-                if ns.MainFrame and ns.MainFrame:IsShown() then
-                    ns:InvalidateScanCache()
-                    if ns.upgradeVendorOpen then
-                        ns:RefreshWatermarks()
-                    end
-                    ns:RefreshCrests()
-                    ns:RefreshAllSlots()
-                end
-            end)
-        end
-    elseif event == "CURRENCY_DISPLAY_UPDATE" then
-        if ns.MainFrame and ns.MainFrame:IsShown() then
-            ns:RefreshCrests()
-            ns:RefreshAllSlots()
-        end
-        -- Also refresh dashboard if the app home page is visible
-        if ns.AppFrame and ns.AppFrame:IsShown() and ns.currentAppPage == "home" then
-            if ns._refreshDashboard then ns._refreshDashboard() end
-        end
+        -- Item data lands a moment after the event, so anything scanned
+        -- right now is stale. Invalidate a second time next to the
+        -- redraw rather than before it.
+        C_Timer.After(0.3, function()
+            ns:InvalidateScanCache()
+            if ns.upgradeVendorOpen and ns.RefreshWatermarks then
+                ns:RefreshWatermarks()
+            end
+            -- Was gated on MainFrame being shown, so equipping a piece
+            -- while on the app's Gear Upgrades page changed nothing.
+            ns:RefreshGearViews()
+        end)
+    elseif event == "CURRENCY_DISPLAY_UPDATE"
+        or event == "ITEM_UPGRADE_MASTER_UPDATE"
+        or event == "BAG_UPDATE_DELAYED"
+        or event == "WEEKLY_REWARDS_UPDATE"
+        or event == "CHALLENGE_MODE_COMPLETED" then
+        ns:RefreshGearViews()
     end
 end)
 
 SLASH_YIPPYAPPHELPER1 = "/yh"
 SLASH_YIPPYAPPHELPER2 = "/yippyapp"
+------------------------------------------------------------
+-- Refreshing what is on screen
+--
+-- Crests, gear and upgrades are shown in several places, and the old
+-- handler only refreshed two of them: the standalone upgrade sheet, and
+-- the app's home page. Anyone sitting on the Gear Upgrades page inside
+-- the app -- which is where you are when you spend crests -- saw nothing
+-- change until they navigated away and back.
+--
+-- Routing every state change through one function means a new page only
+-- has to be added here once, rather than to each event handler.
+------------------------------------------------------------
+local gearRefreshPending = false
+
+function ns:RefreshGearViews()
+    -- Debounced. BAG_UPDATE_DELAYED and CURRENCY_DISPLAY_UPDATE can
+    -- arrive together when loot and crests land from the same source,
+    -- and a full slot rebuild per event is wasteful.
+    if gearRefreshPending then return end
+    gearRefreshPending = true
+
+    C_Timer.After(0.2, function()
+        gearRefreshPending = false
+
+        if ns.MainFrame and ns.MainFrame:IsShown() then
+            if ns.RefreshCrests then ns:RefreshCrests() end
+            if ns.RefreshAllSlots then ns:RefreshAllSlots() end
+        end
+
+        if not (ns.AppFrame and ns.AppFrame:IsShown()) then return end
+        local page = ns.currentAppPage
+
+        if page == "home" then
+            if ns._refreshDashboard then ns._refreshDashboard() end
+        elseif page == "gear" then
+            if ns.RefreshAllSlots then ns:RefreshAllSlots() end
+            if ns.RefreshCrests then ns:RefreshCrests() end
+        end
+        -- The Best in Slot page is not listed here on purpose: it owns
+        -- its own watcher in Features/Gear/BisUI.lua, which already
+        -- covers equipment, spec and bags. Two mechanisms redrawing one
+        -- page is how they drift apart.
+    end)
+end
+
+------------------------------------------------------------
+-- Module toggles
+--
+-- Core/BlizzSettings.lua registers a checkbox per module and reads it
+-- through these two. Neither was ever implemented, so opening the
+-- Blizzard settings panel threw "attempt to call a nil value" on every
+-- module row -- the settings page has never worked.
+--
+-- The two features that honour the flag guard with
+-- `if ns.ModuleEnabled and not ns.ModuleEnabled(...)`, so the missing
+-- function left them permanently on and the failure only showed up in
+-- the settings UI.
+--
+-- Absent means ENABLED. A module nobody has touched should run, and the
+-- checkbox defaults to on to match.
+------------------------------------------------------------
+function ns.ModuleEnabled(module)
+    if not module then return true end
+    local db = YippYappHelperDB and YippYappHelperDB.modules
+    local stored = db and db[module]
+    if stored == nil then return true end
+    return stored and true or false
+end
+
+function ns.SetModuleEnabled(module, enabled)
+    if not module then return end
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.modules = YippYappHelperDB.modules or {}
+    YippYappHelperDB.modules[module] = enabled and true or false
+end
+
 SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     msg = strtrim(msg or "")
     local cmd, arg = strsplit(" ", msg, 2)
@@ -481,6 +571,7 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh brez — Battle Res Timer options")
         print("  /yh whatsnew — what changed this patch")
         print("  /yh fun — fun stat counters (/yh fun reset to clear)")
+        print("  /yh introreset — replay Mr. Yeeper's introduction")
         print("  /yh edit — move YippYapp frames via Edit Mode")
         print("  /yh icon [size] [x] [y] — tune the minimap icon fit")
         print("  /yh debug — dump slot data to chat")
@@ -496,6 +587,16 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     -- /yh advisor — what the bot would say, plus the facts behind it
     if cmd == "advisor" then
         if ns.Advisor then ns.Advisor:Print() end
+        return
+    end
+
+    -- /yh introreset — replay Mr. Yeeper's introduction
+    if cmd == "introreset" then
+        if ns.Advisor and ns.Advisor.ResetIntro then
+            ns.Advisor:ResetIntro()
+            print("|cff00ff00YippYapp|r Yeeper's introduction will replay from the "
+                .. "start, one line per visit to the home screen.")
+        end
         return
     end
 
@@ -689,155 +790,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         else
             print("|cff00ff00YippYapp Helper|r: Battle Res Timer module not loaded.")
         end
-        return
-    end
-
-    -- /yh crests — show which Mistcrest currency ID resolved per track.
-    -- Season 2 ships duplicate currency IDs per tier (see Crests.lua), so
-    -- this is the quick check if a crest count reads zero.
-    if cmd == "crests" then
-        print("|cff00ff00=== Mistcrest resolution ===|r")
-        for _, crest in ipairs(ns.CRESTS) do
-            local parts = {}
-            for _, id in ipairs(crest.candidates) do
-                local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, id)
-                local mark = (id == crest.id) and "|cff00ff00*|r" or " "
-                if ok and info and info.name and info.name ~= "" then
-                    parts[#parts + 1] = string.format("%s%d=%s q:%d earned:%d",
-                        mark, id, info.name, info.quantity or 0, info.totalEarned or 0)
-                else
-                    parts[#parts + 1] = string.format("%s%d=|cff888888unknown|r", mark, id)
-                end
-            end
-            print("  " .. crest.track .. ": " .. table.concat(parts, "  |  "))
-        end
-        print("|cff888888* = the ID the addon is using.|r")
-        return
-    end
-
-    -- /yh ejtest — check whether the journal reports a per-key-level item
-    -- level for keystones.
-    --
-    -- Tracks ONE specific itemID across every level. An earlier version
-    -- read GetLootInfoByIndex(1) at each level, but index 1 is not the
-    -- same item at every difficulty, so it compared unrelated items and
-    -- produced a convincing-looking but meaningless progression.
-    if cmd == "ejtest" then
-        local setPreview = C_EncounterJournal and C_EncounterJournal.SetPreviewMythicPlusLevel
-        if not setPreview then
-            print("|cff00ff00YippYapp|r: SetPreviewMythicPlusLevel does not exist on this client.")
-            return
-        end
-        local cache = ns.GetInstanceCache and ns:GetInstanceCache()
-        local inst, boss
-        for _, d in ipairs((cache and cache.dungeons) or {}) do
-            if d.bosses and d.bosses[1] then
-                inst, boss = d, d.bosses[1]
-                break
-            end
-        end
-        if not boss then
-            print("|cff00ff00YippYapp|r: Open the Loot Browser once first, then retry.")
-            return
-        end
-
-        -- Item level of one known item, by ID, at a given difficulty/level.
-        local function probeItem(diffID, lvl, wantID)
-            EJ_SelectInstance(inst.instanceID)
-            EJ_SelectEncounter(boss.encounterID)
-            EJ_SetDifficulty(diffID)
-            pcall(setPreview, lvl or 0)
-            local i = 1
-            while true do
-                local info = C_EncounterJournal.GetLootInfoByIndex(i)
-                if not info or not info.itemID then break end
-                if not wantID or info.itemID == wantID then
-                    return info.itemID, info.name, info.link and ns.SafeItemLevel(info.link)
-                end
-                i = i + 1
-            end
-            return nil
-        end
-
-        -- Anchor on the first item Mythic 0 offers, then follow that exact
-        -- item through every keystone level.
-        local anchorID, anchorName, m0 = probeItem(23, 0, nil)
-        if not anchorID then
-            print("|cff00ff00YippYapp|r: no loot returned for " .. boss.name)
-            return
-        end
-
-        print("|cff00ff00=== EJ keystone probe ===|r " .. inst.name .. " / " .. boss.name)
-        print(("  tracking |cffffff00%s|r (id %d)"):format(tostring(anchorName), anchorID))
-        local _, _, hIlvl = probeItem(2, 0, anchorID)
-        print(("  Heroic %s   Mythic0 %s"):format(tostring(hIlvl or "-"), tostring(m0 or "-")))
-
-        local expected = {}
-        for _, row in ipairs(ns.DUNGEON_LOOT or {}) do expected[row.key] = row.loot end
-
-        local line, varied, prev = {}, false, nil
-        for lvl = 2, 12 do
-            local _, _, ilvl = probeItem(8, lvl, anchorID)
-            if prev and ilvl and ilvl ~= prev then varied = true end
-            prev = ilvl
-            local mine = expected["M" .. lvl]
-            local mark = (ilvl and mine and ilvl ~= mine) and "*" or ""
-            line[#line + 1] = ("+%d=%s%s"):format(lvl, tostring(ilvl or "-"), mark)
-        end
-        print(("  journal %s"):format(varied and "|cff40ff40VARIES|r" or "|cffff6060flat|r"))
-        print("    " .. table.concat(line, "  "))
-
-        local t = {}
-        for lvl = 2, 12 do t[#t + 1] = ("+%d=%s"):format(lvl, tostring(expected["M" .. lvl] or "-")) end
-        print("  |cff888888my table|r")
-        print("    " .. table.concat(t, "  "))
-
-        pcall(setPreview, 0)
-        print("|cff888888* marks a level where the journal disagrees with the table.|r")
-        print("|cff888888'flat' or all-'-' means the journal has no keystone-scaled|r")
-        print("|cff888888item, and the table is the only usable source.|r")
-        return
-    end
-
-    -- /yh lootdebug — what the Loot Browser thinks the difficulty is, and
-    -- which item version it actually picked. Prints real item levels from
-    -- the links so a mismatch between the badge and the tooltip is visible.
-    if cmd == "lootdebug" then
-        local st = ns.lootBrowserState
-        local view = st and st.selectedView or "?"
-        local choice = ns.GetSelectedLootDifficulty and ns:GetSelectedLootDifficulty(view)
-        local keyLvl = ns.GetSelectedKeystoneLevel and ns:GetSelectedKeystoneLevel(view)
-        local ejDiff = ns.GetSelectedEJDifficulty and ns:GetSelectedEJDifficulty(view)
-        print("|cff00ff00=== Loot Browser state ===|r")
-        print(("  view=%s  mode=%s"):format(view,
-            st and (st.isFavoritesMode and "favorites"
-                or st.isAllSlots and "allslots" or "slot") or "?"))
-        print(("  difficulty=%s  ilvl=%s  keystone=%s  ejDiff=%s"):format(
-            choice and choice.key or "nil", choice and tostring(choice.ilvl) or "nil",
-            tostring(keyLvl), tostring(ejDiff)))
-
-        local specIndex = st and st.selectedSpecIndex
-        if not specIndex then
-            print("  (open the Loot Browser first)")
-            return
-        end
-        local results = ns:ScanLootBrowserSlot(specIndex,
-            Enum.ItemSlotFilterType.NoFilter) or {}
-        local shown = 0
-        for _, entry in ipairs(results) do
-            if shown >= 2 then break end
-            local keys = {}
-            for diffID, items in pairs(entry.items) do
-                local first = items[1]
-                local ilvl = first and ns.SafeItemLevel(first.itemLink)
-                keys[#keys + 1] = ("%s=%s"):format(tostring(diffID), tostring(ilvl or "?"))
-            end
-            table.sort(keys)
-            print(("  %s / %s: %s"):format(entry.sourceName, entry.bossName,
-                table.concat(keys, "  ")))
-            shown = shown + 1
-        end
-        print("|cff888888Each diffID shows the item level of its first item.|r")
         return
     end
 
