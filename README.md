@@ -118,16 +118,45 @@ the page says so itself.
 SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
 
 - **My Spec** — your trinkets ranked, each showing how far behind the
-  best pick it sims.
+  best pick it sims, at the item level it was simmed at. Trinkets no
+  longer share one item level: a crafted trinket caps lower than a raid
+  drop, so each is ranked at its own ceiling, which is what bloodmallet's
+  own chart does.
+- **Scaling bars** — every row carries a bar split at each item level
+  that trinket was simmed at. Length is the gain over an empty slot,
+  each segment is what the next item level added, and hovering a segment
+  gives the level, the gain and where the trinket drops. The rows are
+  drawn to suit the width of the frame rather than leaving a wide window
+  half empty — the same size in every view, so nothing resizes as you
+  search or switch spec.
+- **Item level stepper** — step through the item levels and the list
+  re-ranks at each one, so you can see where two trinkets trade places
+  rather than only which wins at its own ceiling. Only trinkets simmed
+  at exactly that level appear; the top 15 per spec keep this detail.
 - **Loot Council** — pick a trinket and see *every* spec that sims it,
-  best rank first. The "only Frost DKs should roll on this" view.
+  best rank first, at the item level it is ranked at — its own ceiling,
+  the top of the Myth track for wherever it drops. The "only Frost DKs
+  should roll on this" view. Lists
+  this season's dungeon and raid drops only — crafted, PvP and older
+  trinkets are left out, though they still answer a tooltip and
+  **Show older trinkets** brings them back. bloodmallet keeps simming
+  items from previous content; they are told apart by whether they have
+  an upgrade ladder or sit at one fixed item level. Expanding a trinket
+  separates the specs that have been re-simmed from the ones still
+  awaiting it, so a spec nobody has asked yet does not read as a spec
+  that passed.
 - **Tooltip integration** — hover any trinket anywhere (loot window,
   bags, chat links, Encounter Journal) to see which specs want it and
   where it lands for you. Toggle in Settings → General → Trinkets.
 
-Coverage is 29 of 40 specs; bloodmallet publishes no trinket data for the
-six healer specs, nor for Augmentation, Brewmaster, Windwalker or
-Assassination this tier.
+Coverage is 31 of 40 specs; bloodmallet publishes no trinket data at all
+for the seven healer specs, nor for Augmentation or Brewmaster.
+
+bloodmallet re-sims a new season a few specs at a time, so the file holds
+both while that runs. 17 specs have Season 2 numbers; the rest keep their
+Season 1 ranking rather than being dropped, and say so in the list, on
+the loot council rows and in the tooltip. This is per fight style — a
+spec can be Season 2 on single target and Season 1 on 5-target.
 
 ### Mythic+ Helper
 - Season 2 dungeon overview with clickable teleports.
@@ -327,14 +356,25 @@ community gearing sheet.
   M9 previously claimed 318, which was wrong; Myth 1/6 starts at M10.
 - **Crafting item levels** in the progression tables are inferred and
   want verifying against the crafting order UI in-game.
-- **Trinket data** is still Season 1 upstream; it surfaces a warning
-  in-game and needs a rescrape once bloodmallet updates.
+- **Trinket data** is mid-transition upstream: 17 specs have been
+  re-simmed for Season 2, the rest still carry Season 1 rankings and are
+  labelled as such in-game. Re-run the scraper as bloodmallet works
+  through the roster — it merges, so a partial run updates what is
+  published without dropping what is not.
 - **Best in Slot and Consumables** are scraped from class guides, which
   lag tuning passes. Both say so on the page.
 
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest:
+**v3.0.5** — Season 2 trinket sims for 17 specs, single target and
+5-target, with five of them gaining an AoE list. Trinkets are now ranked
+at their own item level rather than a shared one, because bloodmallet
+stopped simming them over a common range; each row carries a hoverable
+scaling bar, and a stepper re-ranks the list at any item level so you can
+see where two trinkets trade places. Specs still waiting on a re-sim keep
+their Season 1 ranking instead of disappearing.
+
 **v3.0.0** — Mr. Yeeper on the dashboard, a new Best in Slot page, every
 movable frame migrated to Blizzard's Edit Mode, and settings rebuilt on
 Blizzard's own Settings API. Also the fix that matters most: the addon

@@ -13,14 +13,20 @@ local _, ns = ...
 --
 -- Deliberately one-shot: it records the version it showed and never
 -- shows that version again. Nothing is more irritating than an update
--- notice that reappears.
+-- notice that reappears. That version is the one this text was written
+-- for, not the one installed -- see VERSION below.
 ------------------------------------------------------------
 
 ns.WhatsNew = ns.WhatsNew or {}
 local WN = ns.WhatsNew
 
-local VERSION = C_AddOns and C_AddOns.GetAddOnMetadata
-    and C_AddOns.GetAddOnMetadata("YippYappHelper", "Version") or "3.0.0"
+-- The release this text describes, which is not the release installed.
+-- Deliberately not read from the .toc: a point release that corrects
+-- data has no news in it, and replaying the last feature release's
+-- notes because the version string moved is precisely the reappearing
+-- update notice this file exists to avoid. Bump it when the items below
+-- change, not when the addon version does.
+local VERSION = "3.0.0"
 
 WN.INTRO = "You are back. I have been busy while you were not looking."
 

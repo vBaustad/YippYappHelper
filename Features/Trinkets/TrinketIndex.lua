@@ -100,18 +100,94 @@ end
 -- target can be mid-list in AoE -- so they cannot share a cache.
 local cache = {}
 
+-- Rankings recomputed at a specific item level, keyed spec|style|ilvl.
+-- Declared up here so Rebuild can drop it: the item-level views are
+-- derived from the same data and would otherwise outlive it.
+local atCache = {}
+
 T.DEFAULT_STYLE = "ST"
+
+-- What a loot council actually hands out. Crafted trinkets, conquest
+-- gear and world boss drops are all obtainable and some of them sim
+-- well, but none of them is going to be linked in raid chat with five
+-- people typing "need" -- so they are not what this page is for.
+local COUNCIL_SOURCES = { Dungeon = true, Raid = true }
 
 local function build(style)
     style = style or T.DEFAULT_STYLE
     local c = cache[style]
-    if c then return c.byItem, c.allItems end
+    if c then
+        return c.byItem, c.allItems, c.thisTierItems, c.councilItems
+    end
 
     local byItem, allItems = {}, {}
     cache[style] = { byItem = byItem, allItems = allItems }
 
     local data = ns.TrinketData
     if type(data) ~= "table" then return byItem, allItems end
+
+    -- Which trinkets are current is decided by the specs bloodmallet has
+    -- re-simmed for this season: if none of them rank an item, it is
+    -- last season's and nobody is passing it round tonight.
+    --
+    -- Recorded on the bucket rather than filtered out here. The browse
+    -- list wants only the current ones, but the tooltip is answering a
+    -- different question -- you are hovering the thing, so you already
+    -- know it exists, and who ranked it is still worth saying.
+    --
+    -- Specs still on last season's data keep contributing rankings to
+    -- the trinkets that survive, tagged with the tier they came from.
+    -- Dropping those as well would take a spec's opinion off the page
+    -- entirely, which is a bigger loss than the tag is a caveat.
+    local current, anyCurrent = {}, false
+    local srcOf, anySource = {}, false
+    local scaling, anyScaling = {}, false
+    local ceilOf = {}
+    local pendingSpecs = {}
+    for specKey, styles in pairs(data) do
+        local block = styles and styles[style]
+        if block and type(block.list) == "table"
+            and T:IsStaleTier(block.tier) then
+            -- Awaiting a re-sim: has last season's ranking, has no
+            -- opinion on anything that dropped since.
+            pendingSpecs[#pendingSpecs + 1] = specKey
+        end
+        if block and type(block.list) == "table"
+            and not T:IsStaleTier(block.tier) then
+            anyCurrent = true
+            for _, row in ipairs(block.list) do
+                if row.id then
+                    current[row.id] = true
+                    -- Being in a current run is not the same as being
+                    -- from current content: bloodmallet goes on simming
+                    -- last tier's trinkets, and a couple from expansions
+                    -- ago. What separates them is the upgrade ladder. A
+                    -- trinket that drops now is simmed from 292 up to
+                    -- 331, 334 or 344; one carried forward is stuck at
+                    -- the single item level it capped out at.
+                    if row.lo then
+                        anyScaling = true
+                        if row.lo < row.ilvl then scaling[row.id] = true end
+                    end
+                    -- The ceiling the item reaches, which is the level
+                    -- every list ranks it at. Taken as the highest any
+                    -- current spec sims it to: they agree, but a spec
+                    -- whose list stops short should not lower it.
+                    if row.ilvl and row.ilvl > (ceilOf[row.id] or 0) then
+                        ceilOf[row.id] = row.ilvl
+                    end
+                end
+            end
+            -- Where each one drops. Taken from the current blocks only:
+            -- last season's were scraped before this was recorded, and
+            -- an item's source is not something they would disagree
+            -- about anyway.
+            for id, src in pairs(block.source or {}) do
+                srcOf[id] = src
+                anySource = true
+            end
+        end
+    end
 
     for specKey, styles in pairs(data) do
         local block = styles and styles[style]
@@ -122,12 +198,22 @@ local function build(style)
                 if id and id ~= 0 then
                     local bucket = byItem[id]
                     if not bucket then
-                        bucket = { name = row.name, id = id, specs = {} }
+                        -- Nothing current anywhere means the whole file
+                        -- is a season behind, and calling every trinket
+                        -- in it stale would empty the browse list rather
+                        -- than tidy it. The page-wide staleness banner
+                        -- is the honest answer in that case.
+                        bucket = { name = row.name, id = id, specs = {},
+                                   source = srcOf[id],
+                                   ilvl = ceilOf[id] or row.ilvl,
+                                   current = current[id] or not anyCurrent,
+                                   thisTier = scaling[id] or not anyScaling }
                         byItem[id] = bucket
                         allItems[#allItems + 1] = bucket
                     end
                     bucket.specs[#bucket.specs + 1] = {
                         key = specKey, rank = rank, rel = row.rel or 0,
+                        tier = block.tier,
                     }
                 end
             end
@@ -140,7 +226,20 @@ local function build(style)
             if a.rank ~= b.rank then return a.rank < b.rank end
             return a.key < b.key
         end)
-        bucket.bestRank = bucket.specs[1] and bucket.specs[1].rank or 99
+        -- Ranked by the best spec that has actually been re-simmed. A
+        -- last-season spec placing it first is not a reason to lead the
+        -- browse list with it, because that placing was made against a
+        -- different set of trinkets.
+        bucket.bestRank = 99
+        for _, entry in ipairs(bucket.specs) do
+            if not T:IsStaleTier(entry.tier) then
+                bucket.bestRank = entry.rank
+                break
+            end
+        end
+        if bucket.bestRank == 99 and bucket.specs[1] then
+            bucket.bestRank = bucket.specs[1].rank
+        end
     end
 
     table.sort(allItems, function(a, b)
@@ -148,11 +247,34 @@ local function build(style)
         return (a.name or "") < (b.name or "")
     end)
 
-    return byItem, allItems
+    -- Both built here rather than filtered on the way out: "show older
+    -- trinkets" is a checkbox, and re-deriving either list on every
+    -- keystroke in the search box would be work for nothing.
+    local councilItems, thisTierItems = {}, {}
+    for _, bucket in ipairs(allItems) do
+        -- anySource false means the file predates sources being
+        -- recorded, and filtering on one would empty the page.
+        if bucket.current
+            and (not anySource or COUNCIL_SOURCES[bucket.source]) then
+            councilItems[#councilItems + 1] = bucket
+            if bucket.thisTier then
+                thisTierItems[#thisTierItems + 1] = bucket
+            end
+        end
+    end
+    table.sort(pendingSpecs, function(a, b)
+        return T:SpecName(a) < T:SpecName(b)
+    end)
+    cache[style].pendingSpecs = pendingSpecs
+    cache[style].councilItems = councilItems
+    cache[style].thisTierItems = thisTierItems
+
+    return byItem, allItems, thisTierItems, councilItems
 end
 
 function T:Rebuild()
     cache = {}
+    atCache = {}
     build(T.DEFAULT_STYLE)
 end
 
@@ -164,6 +286,21 @@ function T:HasStyle(style)
     return #items > 0
 end
 
+--- Specs still on last season's data for this fight style.
+---
+--- A property of the page, not of any one trinket. The point is that
+--- these specs have no current opinion on *anything*, so their absence
+--- from a ranking is not a judgement on the item. Deriving it per
+--- trinket from who ranked it gets that backwards: this season's items
+--- were never in last season's lists, so the group would come out empty
+--- for exactly the trinkets where the caveat matters.
+function T:PendingSpecs(style)
+    style = style or T.DEFAULT_STYLE
+    build(style)
+    local c = cache[style]
+    return c and c.pendingSpecs or {}
+end
+
 --- All specs that sim this trinket, best rank first. nil if unknown.
 function T:GetSpecsFor(itemID, style)
     local byItem = build(style)
@@ -171,18 +308,104 @@ function T:GetSpecsFor(itemID, style)
     return bucket and bucket.specs or nil, bucket
 end
 
---- Every trinket we have data for, best-ranked first.
-function T:GetAllTrinkets(style)
-    local _, items = build(style)
-    return items
+--- Trinkets worth browsing, best-ranked first.
+---
+--- What drops in this season's dungeons and raid, and nothing else.
+--- `includeOld` widens that to trinkets bloodmallet still sims from
+--- previous content -- they are real items and someone may still be
+--- wearing one, but they are not what is dropping tonight.
+---
+--- Crafted gear, PvP rewards and items no current spec ranks are left
+--- out either way. They are still in the index and still answer a
+--- tooltip -- see GetSpecsFor -- but someone scrolling for the drop in
+--- front of them should not have to read past them to find it.
+function T:GetAllTrinkets(style, includeOld)
+    local _, all, thisTier, council = build(style)
+    local items = includeOld and council or thisTier
+    return items or all
 end
 
---- The ranking for one spec in one fight style: list, itemLevel.
+--- The ranking for one spec in one fight style: list, itemLevel, when it
+--- was simmed, and which tier it is from.
 function T:GetForSpec(specKey, style)
     local entry = ns.TrinketData and ns.TrinketData[specKey]
     local block = entry and entry[style or T.DEFAULT_STYLE]
     if not block then return nil end
-    return block.list, block.ilvl, block.timestamp
+    return block.list, block.ilvl, block.timestamp, block.tier
+end
+
+------------------------------------------------------------
+-- Item-level curves.
+--
+-- bloodmallet sims each trinket across the item levels it can actually
+-- drop at, and those ladders do not line up -- a crafted trinket and a
+-- raid drop share almost no steps. The flat "best available" ranking
+-- hides what follows from that: two trinkets can rank one way at 311
+-- and the other way at 331. The curve is kept for the top rows so the
+-- question can be asked at a chosen item level instead.
+------------------------------------------------------------
+
+--- curve[itemID][ilvl] = percent gain over an empty trinket slot, every
+--- item level present in the block, and where each trinket drops.
+--- nil curve for a spec bloodmallet has not re-simmed: the detail was
+--- never scraped and cannot be recovered, only re-run.
+function T:GetCurve(specKey, style)
+    local entry = ns.TrinketData and ns.TrinketData[specKey]
+    local block = entry and entry[style or T.DEFAULT_STYLE]
+    if not block then return nil end
+    return block.curve, block.steps, block.source
+end
+
+--- The ranking as it stands at one item level, best first.
+---
+--- Only trinkets simmed at exactly that level appear. The ladders are
+--- per source, so asking for 331 excludes everything that never drops
+--- at 331, and a short list is the honest answer: filling it out from
+--- each trinket's nearest step would rank a 331 against a 318 and
+--- present the item level gap as trinket quality.
+function T:GetAtItemLevel(specKey, style, ilvl)
+    style = style or T.DEFAULT_STYLE
+    local key = specKey .. "|" .. style .. "|" .. ilvl
+    local hit = atCache[key]
+    if hit ~= nil then
+        if hit == false then return nil end
+        return hit
+    end
+
+    local list = self:GetForSpec(specKey, style)
+    local curve = self:GetCurve(specKey, style)
+    if not list or not curve then return nil end
+
+    local out = {}
+    for _, row in ipairs(list) do
+        local points = curve[row.id]
+        local gain = points and points[ilvl]
+        if gain then
+            out[#out + 1] = { id = row.id, name = row.name,
+                              ilvl = ilvl, gain = gain }
+        end
+    end
+    if #out == 0 then
+        atCache[key] = false
+        return nil
+    end
+
+    table.sort(out, function(a, b)
+        if a.gain ~= b.gain then return a.gain > b.gain end
+        return (a.name or "") < (b.name or "")
+    end)
+
+    -- Percent behind the best at this item level. Both sides are gains
+    -- over the same empty-slot baseline, so the difference is taken
+    -- against that baseline rather than subtracted outright -- a 9%
+    -- trinket is not "1% better" than an 8% one, it is 0.93% better.
+    local top = out[1].gain
+    for _, r in ipairs(out) do
+        r.rel = (r.gain - top) / (100.0 + top) * 100.0
+    end
+
+    atCache[key] = out
+    return out
 end
 
 --- "CLASS_SPEC" key for the player's current specialization.
@@ -198,7 +421,19 @@ function T:GetPlayerSpecKey()
     return nil
 end
 
---- True when the sim data predates the season the addon targets.
+--- True when a tier tag predates the season the addon targets.
+---
+--- Tiers arrive per spec, not all at once, so this answers the question
+--- about one block. A file can hold both at the same time and usually
+--- does for the first few weeks of a season.
+function T:IsStaleTier(tier)
+    local want = ns.TRINKET_TARGET_TIER
+    if not want then return false end
+    return (tier or ns.TRINKET_TIER) ~= want
+end
+
+--- True only when nothing in the file is current — the whole addon is
+--- behind, rather than the handful of specs still waiting on a re-sim.
 function T:IsStale()
     local have, want = ns.TRINKET_TIER, ns.TRINKET_TARGET_TIER
     if not have or not want then return false end
@@ -209,6 +444,13 @@ function T:StaleText()
     return ("|cffffcc00Sim data is %s|r — bloodmallet has not published %s runs yet.")
         :format(ns.TRINKET_TIER or "from an earlier tier",
                 ns.TRINKET_TARGET_TIER or "current-season")
+end
+
+--- The same warning for one spec, while other specs are current.
+function T:StaleSpecText(tier)
+    return ("|cffffcc00This is %s data.|r bloodmallet has not re-simmed this spec for %s yet, so the order below is last tier's.")
+        :format(tier or ns.TRINKET_TIER or "older",
+                ns.TRINKET_TARGET_TIER or "the current tier")
 end
 
 ------------------------------------------------------------
@@ -224,6 +466,12 @@ local MAX_TOOLTIP_SPECS = 5
 local function describeRank(entry)
     local suffix = entry.rel and entry.rel < -0.005
         and ("  |cff888888%.1f%%|r"):format(entry.rel) or ""
+    -- Marked per line, not once at the bottom. Specs come off last
+    -- tier's data one at a time, so a single footer would either
+    -- discredit the current rankings above it or vouch for the old ones.
+    if T:IsStaleTier(entry.tier) then
+        suffix = suffix .. ("  |cff886600(%s)|r"):format(entry.tier or "old")
+    end
     return ("  #%d %s%s"):format(entry.rank, T:ColorSpec(entry.key), suffix)
 end
 
@@ -261,6 +509,8 @@ local function addTrinketLines(tooltip, itemID)
         tooltip:AddLine(("|cff666666+%d more specs — see the Trinkets page|r")
             :format(#specs - shown))
     end
+    -- Only when the entire file is behind. Mixed tiers are already
+    -- called out on the individual lines by describeRank.
     if T:IsStale() then
         tooltip:AddLine("|cff886600" .. (ns.TRINKET_TIER or "old") .. " sim data|r")
     end

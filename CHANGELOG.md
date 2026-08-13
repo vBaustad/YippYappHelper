@@ -1,5 +1,165 @@
 # YippYapp Helper - Changelog
 
+## v3.0.5 - Season 2 trinket sims for 17 specs (2026-08-13)
+
+### Trinkets
+- **Season 2 rankings, single target and 5-target.** bloodmallet has
+  re-simmed 17 specs for the new season so far: all three Death Knight
+  specs, Vengeance, all three Hunters, all three Mages, Protection
+  Paladin, Shadow, Subtlety, Elemental, Enhancement, Affliction and
+  Destruction. The rest are still on Season 1 numbers upstream and say
+  so per spec rather than being dropped.
+- Blood, Vengeance, Fire, Protection Paladin and Shadow gained a
+  5-target list they did not have, so the AoE tab no longer sends them
+  back to single target.
+- **Scaling bars, and an item level stepper.** Each row now carries a
+  bar split at every item level that trinket was simmed at, the way
+  bloodmallet draws it: length is the gain over an empty trinket slot,
+  each segment is what the next item level added, and hovering a segment
+  names the level, the gain and where the trinket drops. A stepper above
+  the list walks the item levels and re-ranks everything at the one
+  picked, so "this beats that at 311, and loses to it at 331" is a
+  question the page can answer instead of only ever showing the best
+  case. It is a stepper rather than a dropdown because the useful move
+  is walking the ladder and watching rows overtake each other -- picking
+  a number from a menu means guessing which number to pick.
+- Ranking at a chosen item level only lists trinkets simmed at exactly
+  that level, which is often a short list. Filling it out from each
+  trinket's nearest step would rank a 331 against a 318 and present the
+  item level gap as trinket quality. Item-level detail is kept for the
+  top 15 per spec and fight style, and specs still on Season 1 have
+  none -- that detail was never scraped and only a re-sim brings it back.
+- **Each trinket is ranked at its own item level.** bloodmallet stopped
+  simming everything over one shared range -- a crafted trinket caps
+  lower than a raid drop, and a few items exist at exactly one item level
+  -- so the scraper's old rule of comparing at the highest level every
+  trinket shares matched nothing and returned an empty list for all 40
+  specs. Each trinket is now taken at its own ceiling, which is what
+  bloodmallet's own chart ranks by, and that item level is printed on
+  each row: two trinkets a hair apart can be a fair fight or a 13-item-
+  level head start, and only the number beside them says which.
+- **Fixed: the ranking disagreed with its own numbers.** Rows could read
+  "#7 -2.7%, #8 -2.1%", ranking a trinket below one it beats. The order
+  came from bloodmallet's ranking, which sorts by each trinket's own top
+  item level, while the percentage was computed at the one item level
+  they all shared -- two different questions. Affected every spec still
+  on Season 1 data; on Balance Druid it had Crucible of Erratic Energies
+  sitting at #22 on a number that belonged at #6.
+- **Loot Council lists this season's dungeon and raid drops only.** It
+  listed everything in the file: last season's trinkets, crafted ones,
+  conquest gear and a world boss drop -- 73 items in single target where
+  37 of them are things a council actually hands out. Crafted and PvP
+  trinkets sim fine and some of them are strong, but none of them is
+  going to be linked in raid chat with five people typing "need".
+  Everything else still answers a tooltip: hovering one, you already
+  know it exists, and which specs ranked it is still worth saying.
+- **Trinkets from older content are hidden, with a checkbox to show
+  them.** bloodmallet goes on simming last tier's trinkets, and a couple
+  from expansions ago -- Emberwing Feather, Algeth'ar Puzzle Box, even a
+  Legion one -- so being in a current run does not mean an item drops
+  now. What separates them is the upgrade ladder: a trinket from this
+  season is simmed from 292 up to 331, 334 or 344, while anything
+  carried forward sits at the single item level it capped out at. Ten
+  of the 37 single-target entries went that way. "Show older trinkets"
+  brings them back, marked, for anyone still wearing one.
+- **Trinket rows show the item that actually drops, not its base
+  entry.** Rows were built from the bare item ID, which resolves to the
+  base item -- Rare quality, +7 Intellect, "Item Level 28" under a row
+  ranking it at 334. They now use the Encounter Journal's link, the same
+  source the Best in Slot page uses, so a trinket renders Epic with real
+  stats and its own upgrade line. The item level is then rewritten to the
+  level the page ranks it at and the rank named in place, "Upgrade Level:
+  Myth 6/6", rather than tacked on at the bottom. Falls back to the bare
+  item if the journal has not indexed yet -- it builds lazily and can
+  miss the first ask.
+- Raid trinkets sim at 344, which is above the top of the Myth track
+  (334), so there is no rank to name and none is invented. Those say
+  "above Myth 6/6" instead, rather than leaving a rewritten item level
+  with nothing to read it against.
+- Loot Council rows show the item level each trinket is ranked at --
+  its own ceiling, the top of the Myth track for wherever it drops, so
+  321, 334 and 344 all appear. Fixed rather than adjustable: that view
+  answers "who should roll on this", and a ranking that reorders under a
+  council mid-discussion is answering a different question badly. The
+  item level stepper stays on My Spec, where the question is "which of
+  these is better, and from what point".
+- **Expanding a trinket separates the specs that have been re-simmed
+  from the ones that have not.** Ranked specs are listed as before;
+  underneath, every spec still awaiting a re-sim is named as "Not simmed
+  for this season yet". Read as one list, a spec missing from the
+  ranking looks like a spec that passed on the item, when the truth is
+  that nobody has asked it yet. That group is the specs themselves, not
+  the ones that ranked this particular trinket: this season's items were
+  never in last season's lists, so the per-trinket version would come
+  out empty for 28 of the 34 trinkets where the caveat is worth making.
+  Browse order and the "best: #N" summary now come from the best
+  re-simmed spec too, rather than from a placing made against last
+  season's set of trinkets.
+- **Fixed: stat variants rendered as identical rows.** Some trinkets are
+  simmed once per stat -- "Drum of Renewed Bonds [Haste]", "[Crit]",
+  "[Mastery]" -- and share a single item ID, so once the client resolved
+  the real item name three separately-ranked rows became three identical
+  ones. The suffix is kept.
+- **Fixed: the attribution line was drawn over a leftover icon.** Rows
+  come from a pool and the icon was only cleared by the callers that
+  remembered to; once the header and the "Simmed ..." line moved left to
+  align with the icon column, whichever trinket had used that frame last
+  left its icon sitting under the text. Cleared centrally instead.
+- **The page keeps its proportions at any panel width.** The panel is
+  700 to 960 units wide depending on the screen, and the row scale was
+  clamped so it could never go below native size -- proportional on a
+  wide screen, slightly oversized on a narrow one. It now scales with
+  the panel throughout, so the bar, the name column and the item level
+  occupy the same share of the page on every setup.
+- **Fixed: a scaling bar grew past the gain it represents.** Sim noise
+  puts some item levels slightly below the one before them -- 23 such
+  steps in the current data. That step was drawn as a sliver, correctly,
+  but the drop was then handed back to the next segment, which drew
+  wider than the item level actually gained. Bars are meant to be
+  proportional to one another, so a trinket with a few noisy steps read
+  as stronger than one with the same final gain and none.
+- **Fixed: Loot Council rows could not be expanded.** The overlay that
+  scopes the item tooltip to the icon and the name was swallowing the
+  click meant for the row underneath it. Enabling mouse motion on a
+  frame still makes it a hit-test target, so the click lands there and
+  is dropped unless the frame is explicitly told to pass it on.
+- The item tooltip is now raised by the icon and the name only, and the
+  region is measured from the name actually drawn rather than from the
+  column it sits in. It used to hang off the whole row -- which included
+  the bar, so crossing a segment replaced the segment's own tooltip with
+  the item's -- and then off the full name column, which on a wide
+  window is several hundred pixels of blank row.
+- **The ranked rows are drawn to suit the frame.** Ten rows left half a
+  wide window empty, which is the half that would have made the bars
+  readable. Those rows now magnify to the width of the frame, up to
+  1.75x, so the bars, item icons and the numbers beside them grow
+  together. The caveat, the spec header and the attribution stay at the
+  size the rest of the addon uses -- they are prose, and magnifying them
+  only makes the paragraph at the top shout. Loot Council is a lookup
+  rather than a chart and is left at normal size throughout.
+- The magnification comes from the frame and never from the content, so
+  searching, switching spec, stepping an item level or pressing Show all
+  leaves it exactly where it was: a list that resizes while you read it
+  is worse than a small one. Resizing the window is the only thing that
+  moves it, and it never shrinks below normal size.
+- Bars follow the panel width rather than sitting at a fixed 130px in a
+  window several times that wide, and are around 30% wider again.
+- The item level and "vs best" column is left-aligned, so the item level
+  is in the same place on every row instead of starting wherever the
+  text before it happened to end. Bars stop clear of it rather than
+  running into the number.
+- Long trinket names are cut with an ellipsis instead of wrapping into a
+  second line the row is not tall enough to show -- which cut them just
+  as short, but with nothing to say they had been cut.
+- **Season is tracked per spec and fight style, not per file.** A new
+  season's sims arrive a few specs at a time over weeks, so re-scraping
+  mid-transition used to delete every spec that had not been re-simmed
+  yet -- trading a stale ranking for no ranking, which is worse. Those
+  keep their Season 1 list, labelled as such in the spec list, on the
+  loot council rows and in the item tooltip. The page-wide warning now
+  fires only when nothing in the file is current. A spec can be Season 2
+  on single target and Season 1 on 5-target, and is marked per tab.
+
 ## v3.0.0 - Mr. Yeeper, Best in Slot, and a season's worth of gear maths (2026-08-12)
 
 ### Mr. Yeeper
