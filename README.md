@@ -145,6 +145,12 @@ SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
   separates the specs that have been re-simmed from the ones still
   awaiting it, so a spec nobody has asked yet does not read as a spec
   that passed.
+- **Shortlist what you're after** — right-click any row to add or remove
+  a trinket; shortlisted ones carry a star. It writes to the same list
+  the Loot Browser's favourites star uses, so the two pages cannot
+  drift. A shortlist rather than a slot assignment: when two trinkets
+  are within a percent of each other, "I want this" is true of both and
+  only one of them is going to drop.
 - **Tooltip integration** — hover any trinket anywhere (loot window,
   bags, chat links, Encounter Journal) to see which specs want it and
   where it lands for you. Toggle in Settings → General → Trinkets.
@@ -367,7 +373,7 @@ community gearing sheet.
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history. Latest:
-**v3.0.5** — Season 2 trinket sims for 17 specs, single target and
+**v3.0.6** — Season 2 trinket sims for 17 specs, single target and
 5-target, with five of them gaining an AoE list. Trinkets are now ranked
 at their own item level rather than a shared one, because bloodmallet
 stopped simming them over a common range; each row carries a hoverable

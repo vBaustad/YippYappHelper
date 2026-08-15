@@ -251,6 +251,42 @@ local function enableHover(frame)
     end
 end
 
+--- Right-click to shortlist a trinket, the same mark the Loot Browser
+--- uses. Marked against the spec being played rather than the Loot
+--- Browser's dropdown -- see ns:GetPlayerSpecID.
+---
+--- A shortlist, not a slot assignment: "I want this" can be true of
+--- several trinkets at once, which is the whole point when two of them
+--- are within a percent of each other and only one is going to drop.
+local function markFavorite(itemID, name)
+    if not (itemID and ns.ToggleLootFavorite) then return end
+    local specID = ns.GetPlayerSpecID and ns:GetPlayerSpecID()
+    if not specID then return end
+
+    ns:ToggleLootFavorite(itemID, specID)
+    local on = ns:IsLootFavorite(itemID, specID)
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage(("|cff00ccffYippYapp|r %s %s your list")
+            :format(name or ("item:" .. tostring(itemID)),
+                    on and "|cff40ff40added to|r" or "|cffff8080removed from|r"))
+    end
+    UI:Refresh()
+end
+
+--- Left-click keeps whatever the row already did; right-click marks.
+--- Registered explicitly because a Button listens for left only by
+--- default, so without this the right-click never arrives.
+local function bindClicks(row, onLeft)
+    row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    row:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then
+            markFavorite(row._itemID, row.itemName)
+        elseif onLeft then
+            onLeft()
+        end
+    end)
+end
+
 ------------------------------------------------------------
 -- Row pool
 ------------------------------------------------------------
@@ -333,6 +369,10 @@ local function AcquireRow(self, parent)
     row.text:SetPoint("LEFT", row.rank, "RIGHT", 4, 0)
     row.value:SetText("")
     row.rank:SetText("")
+    -- Cleared with the rest of the per-item state: the click handler
+    -- reads it when the click happens, and a pooled row that kept the
+    -- last trinket's id would shortlist the wrong item.
+    row._itemID = nil
     -- Cleared here rather than by each caller that has no icon. Rows
     -- come from a pool, so a footer reusing a trinket's frame inherited
     -- its icon, and once the header and the attribution moved left to
@@ -521,8 +561,21 @@ local function applyItem(row, itemID, fallbackName, ilvl)
     -- Kept uncoloured for the bar segments to title their tooltip with;
     -- an escape sequence in a tooltip line renders as literal text.
     row.itemName = label
+    row._itemID = itemID
+
     if quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality] then
         label = ITEM_QUALITY_COLORS[quality].hex .. label .. "|r"
+    end
+
+    -- Prepended after the quality colour, not before: the colour wraps
+    -- the name in its own escape and would swallow a star put inside it.
+    -- A marker rather than a column, so a shortlisted trinket reads at a
+    -- glance without costing the name any width.
+    if ns.IsLootFavorite and ns.GetPlayerSpecID then
+        local specID = ns:GetPlayerSpecID()
+        if specID and ns:IsLootFavorite(itemID, specID) then
+            label = "|cffffd100*|r " .. label
+        end
     end
     row.text:SetText(label)
 
@@ -762,6 +815,9 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
                 r:SetWidth(rowW)
                 placeValue(r, VALUE_W)
                 r.rank:SetText("|cff888888" .. rank .. ".|r")
+                -- My Spec rows have nothing to do on a left-click, so
+                -- this is the right-click alone.
+                bindClicks(r, nil)
                 applyItem(r, row.id, row.name, row.ilvl)
                 -- Always, not only when there are bars: the width is
                 -- what gives the ellipsis something to cut against, and
@@ -949,7 +1005,7 @@ function UI:RenderCouncil(content, width, viewH)
                 :format(isOpen and "|cff888888-|r" or "|cff888888+|r",
                         bucket.ilvl or "?", bucket.bestRank))
         end
-        r:SetScript("OnClick", function() toggle(bucket.id) end)
+        bindClicks(r, function() toggle(bucket.id) end)
         y = y - ROW_H
 
         if isOpen then

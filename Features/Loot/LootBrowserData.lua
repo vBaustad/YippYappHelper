@@ -1219,7 +1219,16 @@ function ns:GetLootCharacterKey()
     return UnitName("player") .. "-" .. GetRealmName()
 end
 
-local function GetFavoritesTable(create)
+--- Favourites for one spec, or nil when there is no spec to key on.
+---
+--- `specID` is explicit so pages other than the Loot Browser can use
+--- this. Reading ns.lootBrowserState.selectedSpecID unconditionally
+--- meant the store answered to a dropdown on a different page: a
+--- favourite marked from the Trinkets page would land under whichever
+--- spec the Loot Browser happened to be showing, or silently go nowhere
+--- if it had never been opened. The Loot Browser still passes nothing
+--- and gets its own selection, which is what it wants.
+local function GetFavoritesTable(create, specID)
     YippYappHelperDB = YippYappHelperDB or {}
     if not YippYappHelperDB.lootFavorites then
         if not create then return nil end
@@ -1230,7 +1239,7 @@ local function GetFavoritesTable(create)
         if not create then return nil end
         YippYappHelperDB.lootFavorites[charKey] = {}
     end
-    local specID = ns.lootBrowserState.selectedSpecID
+    specID = specID or ns.lootBrowserState.selectedSpecID
     if not specID then return nil end
     if not YippYappHelperDB.lootFavorites[charKey][specID] then
         if not create then return nil end
@@ -1239,28 +1248,38 @@ local function GetFavoritesTable(create)
     return YippYappHelperDB.lootFavorites[charKey][specID]
 end
 
-function ns:IsLootFavorite(itemID)
-    local tbl = GetFavoritesTable(false)
+--- The spec a page outside the Loot Browser should mark against: the
+--- one the player is actually playing, not a dropdown they may never
+--- have touched.
+function ns:GetPlayerSpecID()
+    if not GetSpecialization then return nil end
+    local idx = GetSpecialization()
+    if not idx then return nil end
+    return (GetSpecializationInfo(idx))
+end
+
+function ns:IsLootFavorite(itemID, specID)
+    local tbl = GetFavoritesTable(false, specID)
     return tbl and tbl[itemID] or false
 end
 
-function ns:ToggleLootFavorite(itemID)
-    if ns:IsLootFavorite(itemID) then
-        local tbl = GetFavoritesTable(false)
+function ns:ToggleLootFavorite(itemID, specID)
+    if ns:IsLootFavorite(itemID, specID) then
+        local tbl = GetFavoritesTable(false, specID)
         if tbl then tbl[itemID] = nil end
     else
-        local tbl = GetFavoritesTable(true)
+        local tbl = GetFavoritesTable(true, specID)
         if tbl then tbl[itemID] = true end
     end
 end
 
-function ns:GetAllFavoriteItemIDs()
-    local tbl = GetFavoritesTable(false)
+function ns:GetAllFavoriteItemIDs(specID)
+    local tbl = GetFavoritesTable(false, specID)
     return tbl or {}
 end
 
-function ns:GetFavoritesCount()
-    local tbl = GetFavoritesTable(false)
+function ns:GetFavoritesCount(specID)
+    local tbl = GetFavoritesTable(false, specID)
     if not tbl then return 0 end
     local count = 0
     for _ in pairs(tbl) do count = count + 1 end

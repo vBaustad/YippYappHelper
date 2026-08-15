@@ -1,5 +1,38 @@
 # YippYapp Helper - Changelog
 
+## v3.0.6 - Post-tuning re-sim, and trinket shortlisting (2026-08-15)
+
+### Data
+- **Trinkets re-scraped after the 14 August trinket tuning.** Twenty-four
+  trinkets were retuned and the rankings moved a long way with them:
+  Gebbo's Bottomless Bag (secondary effects -29%) falls from 1st to 6th
+  for Shadow and 2nd to 7th for Fire, Hex Lord's Dooming Idol climbs to
+  2nd for Fire off its rework, and Vexhul's Everflowing Gland goes 17th
+  to 4th. Gaze of the Alnseer (-20% primary) drops out of the list
+  entirely for some specs. Thirty-four blocks carry today's sim.
+- Zul'jin's Guillotine Technique now ranks for tanks, following the
+  hotfix that let them roll Need on it -- top pick for Vengeance and
+  Protection Paladin, second for Blood.
+- Class guides re-scraped: a stat priority reorder, corrected boss
+  sources, restructured Preservation Evoker builds and new bonus IDs.
+- Consumables re-scraped: gem, food and health potion changes.
+
+### Trinkets
+- **Right-click a trinket to add it to your list.** Shortlisted trinkets
+  carry a star in both tabs. It is the same list the Loot Browser's
+  favourites star writes to, so the two pages cannot drift -- and a
+  shortlist rather than a slot assignment, because "I want this" is true
+  of several trinkets at once when two of them are within a percent of
+  each other and only one is going to drop.
+
+### Fixed
+- **Favourites were stored against the wrong specialization.** The store
+  read the Loot Browser's own dropdown, so a mark made from anywhere else
+  landed under whichever spec that page happened to be showing, or went
+  nowhere at all if it had never been opened. It now takes the spec
+  explicitly, and pages outside the Loot Browser mark against the spec
+  being played.
+
 ## v3.0.5 - Season 2 trinket sims for 17 specs (2026-08-13)
 
 ### Trinkets
