@@ -32,11 +32,15 @@ local PAD, GAP = Shell.PAD, Shell.GAP
 -- Floor and ceiling. Cards size themselves to the column between
 -- these; below the floor the two text lines collide, above the
 -- ceiling they are mostly padding.
-local CARD_H      = 46
+local CARD_H      = 30
 local CARD_MAX_H  = 76
 local PER_COLUMN  = 8
 local CARD_GAP    = 4
-local SUMMARY_H   = 96
+-- The totals strip, and the least a scrolling list can be and
+-- still read as one.
+local STATS_H     = 54
+local IMPROVE_MIN = 120
+local IMPROVE_TITLE_H = 26
 
 -- Left column, then right. Ordered head-down rather than by slot id so
 -- the two columns read like a character sheet rather than like the
@@ -220,31 +224,18 @@ local function Build(host)
     end
 
     ------------------------------------------------------------
-    -- Middle: summary, then what to do about it
+    -- Below the cards: the totals, then what to do about them
+    --
+    -- There is no middle column any more. Three columns gave the cards
+    -- 185px each, which is what forced every item name to truncate; two
+    -- columns give them nearly double that. The summary and the
+    -- improvements move underneath, where they have the full width --
+    -- and the improvements are sentences, so width is what they wanted
+    -- in the first place.
     ------------------------------------------------------------
-    ui.summary = W:Panel(host, "inset")
-    ui.summary:SetHeight(SUMMARY_H)
+    ui.stats = W:StatStrip(host,
+        { "Equipped", "Upgradeable", "Average item level" })
 
-    ui.summaryRows = {}
-    for i, label in ipairs({ "Equipped", "Upgradeable", "Average item level" }) do
-        local row = CreateFrame("Frame", nil, ui.summary)
-        row:SetHeight(20)
-        row:SetPoint("TOPLEFT", 12, -12 - (i - 1) * 22)
-        row:SetPoint("RIGHT", ui.summary, "RIGHT", -12, 0)
-
-        row.label = W:Label(row, "GameFontNormalSmall")
-        row.label:SetPoint("LEFT")
-        row.label:SetText(label)
-        row.label:SetTextColor(W:Color("muted"))
-
-        row.value = W:Label(row, "GameFontNormal", "RIGHT")
-        row.value:SetPoint("RIGHT")
-        ui.summaryRows[i] = row
-    end
-
-    -- Parented to the page, not to the summary. Inside it, the heading
-    -- sat within the summary's border while the list it labels sat
-    -- outside below -- a caption on the wrong side of a box.
     ui.improveTitle = W:SectionTitle(host, "improvements")
 
     ui.improveScroll = W:ScrollList(host)
@@ -295,22 +286,31 @@ local function Refresh(ctx)
 
     -- Three columns. The middle is widest because it is the only one
     -- holding sentences; the side columns hold a name and two numbers.
-    local sideW = math.floor((avail - GAP * 2) * 0.29)
-    local midW = avail - GAP * 2 - sideW * 2
     local top = ui.top
+    local colW = math.floor((avail - GAP) / 2)
 
-    -- Cards grow to fill the column. At a fixed 46 the eight of them
-    -- ended two thirds of the way down and left the rest of the page
-    -- empty; there is no reason for the height to be a constant when
-    -- the column count is.
-    local colH = height - PAD * 2
+    -- The page is cards on top, totals and improvements beneath. The
+    -- lower block is budgeted first because it has a floor -- a
+    -- scrolling list shorter than a few rows is not a list -- and the
+    -- cards take what is left.
+    -- Everything below the cards, counted in full: the gap above the
+    -- strip, the strip, the gap above the heading, the heading itself,
+    -- and the list's own minimum. Leaving the heading and one gap out
+    -- meant the cards claimed 40px more than they had, and the list was
+    -- squeezed under its floor to pay for it.
+    local lowerH = GAP + STATS_H + GAP + IMPROVE_TITLE_H + IMPROVE_MIN
+    local colH = height - PAD * 2 - lowerH
     local cardH = math.floor((colH - CARD_GAP * (PER_COLUMN - 1)) / PER_COLUMN)
     cardH = math.max(CARD_H, math.min(cardH, CARD_MAX_H))
+
+    -- What the cards actually took, so the block below starts where they
+    -- end rather than at a guess.
+    local cardsUsed = cardH * PER_COLUMN + CARD_GAP * (PER_COLUMN - 1)
 
     for i, slotID in ipairs(LEFT_SLOTS) do
         local card = ui.cards[slotID]
         card:ClearAllPoints()
-        card:SetSize(sideW, cardH)
+        card:SetSize(colW, cardH)
         card:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0,
             -(i - 1) * (cardH + CARD_GAP))
         SizeCardIcon(card, cardH)
@@ -318,25 +318,26 @@ local function Refresh(ctx)
     for i, slotID in ipairs(RIGHT_SLOTS) do
         local card = ui.cards[slotID]
         card:ClearAllPoints()
-        card:SetSize(sideW, cardH)
+        card:SetSize(colW, cardH)
         card:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0,
             -(i - 1) * (cardH + CARD_GAP))
         SizeCardIcon(card, cardH)
     end
 
-    ui.summary:ClearAllPoints()
-    ui.summary:SetWidth(midW)
-    ui.summary:SetPoint("TOPLEFT", top, "BOTTOMLEFT", sideW + GAP, 0)
+    ui.stats:ClearAllPoints()
+    ui.stats:SetWidth(avail)
+    ui.stats:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -(cardsUsed + GAP))
+    ui.stats:Layout()
 
     ui.improveTitle:ClearAllPoints()
-    ui.improveTitle:SetPoint("TOPLEFT", ui.summary, "BOTTOMLEFT", 0, -GAP)
-    ui.improveTitle:SetPoint("RIGHT", ui.summary, "RIGHT", 0, 0)
+    ui.improveTitle:SetPoint("TOPLEFT", ui.stats, "BOTTOMLEFT", 0, -GAP)
+    ui.improveTitle:SetPoint("RIGHT", ui.stats, "RIGHT", 0, 0)
 
-    local listTop = SUMMARY_H + GAP + 26
-    local listH = math.max(height - PAD * 2 - listTop - 8, 60)
+    local listTop = cardsUsed + GAP + STATS_H + GAP + IMPROVE_TITLE_H
+    local listH = math.max(height - PAD * 2 - listTop, 60)
     ui.improveScroll:ClearAllPoints()
-    ui.improveScroll:SetSize(midW - 18, listH)
-    ui.improveScroll:SetPoint("TOPLEFT", top, "BOTTOMLEFT", sideW + GAP, -listTop)
+    ui.improveScroll:SetSize(avail - 18, listH)
+    ui.improveScroll:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -listTop)
 
     ------------------------------------------------------------
     -- Cards
@@ -361,11 +362,11 @@ local function Refresh(ctx)
     local slots = #LEFT_SLOTS + #RIGHT_SLOTS
     if not (ns.GetSlotInfo and ns:GetSlotInfo(17)) then slots = slots - 1 end
 
-    ui.summaryRows[1].value:SetText(("%d of %d"):format(equipped, slots))
-    ui.summaryRows[2].value:SetText(upgradeable > 0
+    ui.stats.cells[1]:SetValue(("%d of %d"):format(equipped, slots))
+    ui.stats.cells[2]:SetValue(upgradeable > 0
         and W:Tint("good", tostring(upgradeable))
         or W:Tint("muted", "0"))
-    ui.summaryRows[3].value:SetText(levelCount > 0
+    ui.stats.cells[3]:SetValue(levelCount > 0
         and tostring(math.floor(levelSum / levelCount + 0.5))
         or W:Tint("faint", "--"))
 
@@ -387,7 +388,7 @@ local function Refresh(ctx)
     for i, r in ipairs(list) do
         local row = AcquireImproveRow(i)
         row:ClearAllPoints()
-        row:SetWidth(midW - 18)
+        row:SetWidth(avail - 18)
         row:SetPoint("TOPLEFT", ui.improveScroll.content, "TOPLEFT", 0, -y)
 
         local rec = r.recommendation or {}
