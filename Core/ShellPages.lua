@@ -92,18 +92,15 @@ local function Adapt(def)
     })
 end
 
-Adapt({
-    id = "gear", label = "Gear Upgrades", order = 10,
-    accent = { 0.0, 1.0, 0.0 },
-    -- The upgrade sheet is ns.MainFrame: it predates the page system and
-    -- kept the name it had when it was the whole addon.
-    frameKey = "MainFrame",
-    appMode = "SetGearAppMode",
-    refresh = "RefreshAllSlots",
-    -- It refreshes in three parts, and all three have to run or the page
-    -- shows stale crests under freshly-read slots.
-    also = { "RefreshCrests", "RefreshSuggestions" },
-})
+-- Gear Upgrades registers itself in Features/Gear/GearPage.lua.
+--
+-- It was adapted here like the rest, reparenting ns.MainFrame into the
+-- content region. That frame is a 440x500 paper doll whose height binds
+-- before its width in a 700x480 region, so it could never fill the
+-- shell however it was scaled. The shell version is a separate page
+-- built from the same data; ns.MainFrame stays as the standalone window
+-- and the upgrade-vendor frame, where its proportions are right.
+
 
 ------------------------------------------------------------
 -- Best in Slot draws straight into the host rather than owning a frame,

@@ -57,6 +57,12 @@ Features\Gear\ClassGuideData.lua
 
 Core\UI.lua
 
+# The shell's Gear Upgrades page. Registers itself rather than being
+# adapted, so it loads after everything it reads: Core\Shell.lua for the
+# registry, Core\Core.lua for the slots, and Features\Gear\Recommend.lua
+# for the recommendations.
+Features\Gear\GearPage.lua
+
 # ─── Features ─────────────────────────────────────────────
 Features\Raid\SpecMeta.lua
 Features\Raid\RaidInspect.lua
