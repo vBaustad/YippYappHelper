@@ -36,9 +36,7 @@ local CARD_H      = 30
 local CARD_MAX_H  = 76
 local PER_COLUMN  = 8
 local CARD_GAP    = 4
--- The totals strip, and the least a scrolling list can be and
--- still read as one.
-local STATS_H     = 54
+-- The least a scrolling list can be and still read as one.
 local IMPROVE_MIN = 120
 local IMPROVE_TITLE_H = 26
 
@@ -224,17 +222,13 @@ local function Build(host)
     end
 
     ------------------------------------------------------------
-    -- Below the cards: the totals, then what to do about them
+    -- Below the cards: what to do about them
     --
-    -- There is no middle column any more. Three columns gave the cards
-    -- 185px each, which is what forced every item name to truncate; two
-    -- columns give them nearly double that. The summary and the
-    -- improvements move underneath, where they have the full width --
-    -- and the improvements are sentences, so width is what they wanted
-    -- in the first place.
+    -- No totals strip. Equipped, upgradeable and average item level are
+    -- three numbers you can read off the cards themselves, and the
+    -- improvements list is the part that says something the cards do
+    -- not. The height it was using goes to the cards and the list.
     ------------------------------------------------------------
-    ui.stats = W:StatStrip(host,
-        { "Equipped", "Upgradeable", "Average item level" })
 
     ui.improveTitle = W:SectionTitle(host, "improvements")
 
@@ -293,12 +287,11 @@ local function Refresh(ctx)
     -- lower block is budgeted first because it has a floor -- a
     -- scrolling list shorter than a few rows is not a list -- and the
     -- cards take what is left.
-    -- Everything below the cards, counted in full: the gap above the
-    -- strip, the strip, the gap above the heading, the heading itself,
-    -- and the list's own minimum. Leaving the heading and one gap out
-    -- meant the cards claimed 40px more than they had, and the list was
-    -- squeezed under its floor to pay for it.
-    local lowerH = GAP + STATS_H + GAP + IMPROVE_TITLE_H + IMPROVE_MIN
+    -- Everything below the cards, counted in full: the gap, the heading
+    -- and the list's own minimum. An earlier version left the heading
+    -- and a gap out, so the cards claimed 40px they did not have and the
+    -- list was squeezed under its floor to pay for it.
+    local lowerH = GAP + IMPROVE_TITLE_H + IMPROVE_MIN
     local colH = height - PAD * 2 - lowerH
     local cardH = math.floor((colH - CARD_GAP * (PER_COLUMN - 1)) / PER_COLUMN)
     cardH = math.max(CARD_H, math.min(cardH, CARD_MAX_H))
@@ -324,16 +317,11 @@ local function Refresh(ctx)
         SizeCardIcon(card, cardH)
     end
 
-    ui.stats:ClearAllPoints()
-    ui.stats:SetWidth(avail)
-    ui.stats:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -(cardsUsed + GAP))
-    ui.stats:Layout()
-
     ui.improveTitle:ClearAllPoints()
-    ui.improveTitle:SetPoint("TOPLEFT", ui.stats, "BOTTOMLEFT", 0, -GAP)
-    ui.improveTitle:SetPoint("RIGHT", ui.stats, "RIGHT", 0, 0)
+    ui.improveTitle:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -(cardsUsed + GAP))
+    ui.improveTitle:SetPoint("RIGHT", top, "RIGHT", 0, 0)
 
-    local listTop = cardsUsed + GAP + STATS_H + GAP + IMPROVE_TITLE_H
+    local listTop = cardsUsed + GAP + IMPROVE_TITLE_H
     local listH = math.max(height - PAD * 2 - listTop, 60)
     ui.improveScroll:ClearAllPoints()
     ui.improveScroll:SetSize(avail - 18, listH)
@@ -342,33 +330,9 @@ local function Refresh(ctx)
     ------------------------------------------------------------
     -- Cards
     ------------------------------------------------------------
-    local equipped, upgradeable, levelSum, levelCount = 0, 0, 0, 0
     for _, card in pairs(ui.cards) do
         RefreshCard(card)
-        local info = ns.GetSlotInfo and ns:GetSlotInfo(card.slotID) or nil
-        if info then
-            equipped = equipped + 1
-            levelSum = levelSum + (tonumber(info.ilvl) or 0)
-            levelCount = levelCount + 1
-            if ns.CanUpgradeItem and select(1, ns:CanUpgradeItem(card.slotID)) then
-                upgradeable = upgradeable + 1
-            end
-        end
     end
-
-    -- Off hand is counted out of the denominator rather than reported as
-    -- missing: most specs never fill it, and "15/16" every single time
-    -- is a number that only ever means "fine".
-    local slots = #LEFT_SLOTS + #RIGHT_SLOTS
-    if not (ns.GetSlotInfo and ns:GetSlotInfo(17)) then slots = slots - 1 end
-
-    ui.stats.cells[1]:SetValue(("%d of %d"):format(equipped, slots))
-    ui.stats.cells[2]:SetValue(upgradeable > 0
-        and W:Tint("good", tostring(upgradeable))
-        or W:Tint("muted", "0"))
-    ui.stats.cells[3]:SetValue(levelCount > 0
-        and tostring(math.floor(levelSum / levelCount + 0.5))
-        or W:Tint("faint", "--"))
 
     ------------------------------------------------------------
     -- Improvements
