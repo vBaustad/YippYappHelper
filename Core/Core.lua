@@ -560,7 +560,9 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     -- /yh help
     if cmd == "help" then
         print("|cff00ff00=== YippYapp Helper ===|r")
-        print("  /yh — open dashboard")
+        print("  /yh — open the app")
+        print("  /yh shell <page> — open a specific page")
+        print("  /yh classic — the old window")
         print("  /yh raid — scan raid/party for tier pieces")
         print("  /yh mplus — open Mythic+ helper")
         print("  /yh loot — open loot browser")
@@ -578,9 +580,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh shell — the new three-region window. Kept behind its own
-    -- command while the pages move across, so the old front door
-    -- keeps working for anyone who opens the addon mid-migration.
     -- /yh skin [id] — list or choose. Restoring here rather than at
     -- load because saved variables are not available until then.
     if cmd == "skin" then
@@ -602,12 +601,23 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
+    -- /yh shell [page] — bare /yh opens this too. Kept as a named
+    -- command because it is the only way to open a specific page from a
+    -- macro, and because /yh classic below needs something to contrast
+    -- with.
     if cmd == "shell" then
         if ns.Shell and ns.Shell.Toggle then
             ns.Shell:Toggle(arg ~= "" and arg or nil)
         else
             print("|cff00ff00YippYapp|r shell not loaded — restart WoW, not /reload.")
         end
+        return
+    end
+
+    -- /yh classic — the pre-shell window, still the frame that opens at
+    -- an upgrade vendor.
+    if cmd == "classic" then
+        if ns.ToggleApp then ns:ToggleApp() end
         return
     end
 
@@ -859,8 +869,17 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- Default: toggle app
-    if ns.ToggleApp then
+    -- Default: the shell.
+    --
+    -- It was /yh shell while the pages moved across, with bare /yh
+    -- opening the old app frame. All nine pages are on the shell now, so
+    -- the front door is the shell and the old frame is the fallback --
+    -- which it still needs to be, because a .toc change needs a full
+    -- client restart and someone who only reloaded will not have
+    -- Core/Shell.lua loaded at all.
+    if ns.Shell and ns.Shell.Toggle then
+        ns.Shell:Toggle()
+    elseif ns.ToggleApp then
         ns:ToggleApp()
     elseif ns.ToggleDashboard then
         ns:ToggleDashboard()
