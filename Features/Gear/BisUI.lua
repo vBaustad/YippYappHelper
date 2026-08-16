@@ -38,7 +38,7 @@ local ICON_MAX = 46
 -- the stat priority block below.
 local BIS_CHROME_H = 190
 local GAP = 4
-local DOLL_W = 300
+local DOLL_W = 380
 local ACCENT = { 0.45, 1.0, 0.55 }
 local ACCENT_HEX = "ff73ff8c"
 
@@ -911,18 +911,17 @@ function UI:Render(content, width, height)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
             if icon then row.icon:SetTexture(icon) end
-            row.name:SetWidth(listW - 26 - 118)
+            row.name:SetWidth(listW - 26 - 46)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff5a5a62item " .. entry.itemID .. "|r"))
             if not name then unresolved = unresolved + 1 end
 
             local src = entry.source or ""
-            local ilvl, rank = maxRankIlvl(entry)
-            if ilvl and rank then
-                src = ("|cffb0b0bc%d|r |cff7a7a86%s|r  %s"):format(ilvl, rank, src)
-            elseif ilvl then
-                src = ("|cffb0b0bc%d|r  %s"):format(ilvl, src)
-            end
+            -- Source only. The item level and "Myth 6/6" were the same
+            -- two values on almost every row -- this is a best-in-slot
+            -- list, so of course they are all at max rank -- and they
+            -- cost roughly 118px of the row. Where a piece drops is the
+            -- part that differs, and the width goes to the doll.
             -- The Catalyst turns one item into another, so "which piece
             -- do I feed it" is a question only this column answers.
             if entry.catalystFrom then
@@ -971,7 +970,7 @@ function UI:Render(content, width, height)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
             if icon then row.icon:SetTexture(icon) end
-            row.name:SetWidth(listW - 26 - 118)
+            row.name:SetWidth(listW - 26 - 46)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff777777item " .. entry.itemID .. "|r"))
             local sIlvl, sRank = maxRankIlvl(entry)
@@ -993,7 +992,14 @@ function UI:Render(content, width, height)
     listPanel:SetPoint("TOPLEFT", listX - 8, topY + 8)
     listPanel:SetSize(listW + 16, math.max((topY + 8) - ly + 4, 40))
 
-    y = math.min(dollBottom, ly - 10)
+    -- Below BOTH columns, with room to breathe.
+    --
+    -- dollBottom is the last icon row, not the bottom of the doll: the
+    -- "0 equipped, 0 in bags, 16 missing" summary sits under it and the
+    -- panel's own edge under that. Taking the min against it put the
+    -- Stat Priority heading straight through the summary line.
+    local dollPanelBottom = topY + 8 - dollH - 12
+    y = math.min(dollPanelBottom, ly - 10) - GAP * 3
 
     ------------------------------------------------------------
     -- Stat priority
