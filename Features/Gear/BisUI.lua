@@ -39,6 +39,8 @@ local ICON_MAX = 46
 local BIS_CHROME_H = 190
 local GAP = 4
 local DOLL_W = 380
+-- Two text lines plus the padding the card's surface needs.
+local STAT_CARD_H = 52
 local ACCENT = { 0.45, 1.0, 0.55 }
 local ACCENT_HEX = "ff73ff8c"
 
@@ -973,13 +975,16 @@ function UI:Render(content, width, height)
             row.name:SetWidth(listW - 26 - 46)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff777777item " .. entry.itemID .. "|r"))
+            -- Source only, as in the main list above. These rows had
+            -- their own copy of the item level and rank formatting, so
+            -- trimming the one branch left "Also listed" still carrying
+            -- "334 Myth 6/6" while everything above it had stopped.
+            --
+            -- sIlvl and sRank stay: the tooltip below still shows the
+            -- item level a piece maxes at, which is worth knowing on
+            -- hover even when it is noise in the row.
             local sIlvl, sRank = maxRankIlvl(entry)
             local sSrc = entry.source or ""
-            if sIlvl and sRank then
-                sSrc = ("|cffb0b0bc%d|r |cff7a7a86%s|r  %s"):format(sIlvl, sRank, sSrc)
-            elseif sIlvl then
-                sSrc = ("|cffb0b0bc%d|r  %s"):format(sIlvl, sSrc)
-            end
             row.source:SetText("|cff6d6d77" .. sSrc .. "|r")
             hookTooltip(row, entry.itemID, link, sIlvl, sRank)
             hookMenu(row, entry.itemID, entry.name)
@@ -1028,6 +1033,15 @@ function UI:Render(content, width, height)
             if entry.context and entry.context ~= "" then
                 blabel = blabel .. "  |cff666666(" .. entry.context .. ")|r"
             end
+            -- Each build sits on its own card, so two hero talents read
+            -- as two things rather than as one paragraph with a gap in
+            -- it. The surface comes from the skin like every other card
+            -- on the page; the text keeps its own anchors and simply
+            -- sits on top.
+            local card = AcquirePanel(self, content)
+            card:SetPoint("TOPLEFT", x - 8, y + 8)
+            card:SetSize(colW + 16, STAT_CARD_H)
+
             local b = AcquireFS(self, content, "GameFontNormalSmall")
             b:SetPoint("TOPLEFT", x, y)
             b:SetWidth(colW)
