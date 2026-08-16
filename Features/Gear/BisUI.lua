@@ -40,7 +40,7 @@ local BIS_CHROME_H = 190
 local GAP = 4
 local DOLL_W = 380
 -- Two text lines plus the padding the card's surface needs.
-local STAT_CARD_H = 52
+local STAT_CARD_H = 62
 local ACCENT = { 0.45, 1.0, 0.55 }
 local ACCENT_HEX = "ff73ff8c"
 
@@ -1039,8 +1039,8 @@ function UI:Render(content, width, height)
             -- on the page; the text keeps its own anchors and simply
             -- sits on top.
             local card = AcquirePanel(self, content)
-            card:SetPoint("TOPLEFT", x - 8, y + 8)
-            card:SetSize(colW + 16, STAT_CARD_H)
+            card:SetPoint("TOPLEFT", x - 12, y + 12)
+            card:SetSize(colW + 24, STAT_CARD_H)
 
             local b = AcquireFS(self, content, "GameFontNormalSmall")
             b:SetPoint("TOPLEFT", x, y)
@@ -1049,7 +1049,7 @@ function UI:Render(content, width, height)
             b:SetText(blabel)
 
             local sp = AcquireFS(self, content, "GameFontNormalSmall")
-            sp:SetPoint("TOPLEFT", x, y - 14)
+            sp:SetPoint("TOPLEFT", x, y - 18)
             sp:SetWidth(colW)
             sp:SetWordWrap(true)
             sp:SetText("|cffffffff" .. table.concat(entry.stats or {},
