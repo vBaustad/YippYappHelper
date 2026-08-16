@@ -98,6 +98,11 @@ function W:Panel(parent, role)
     return CreateFrame("Frame", nil, parent)
 end
 
+-- Assigned in the rounded-surfaces section below. Apply has to be able
+-- to strip the corner art off a pooled frame before repainting it
+-- square, and it sits above the thing that does the rounding.
+local unround
+
 --- Restyle a frame the caller already built.
 ---
 --- This is how the feature pages join the skin system. They create their
@@ -109,6 +114,9 @@ end
 --- Returns the frame, so it drops into an existing expression.
 function W:Apply(frame, role)
     if not frame then return frame end
+    -- A pooled frame that was a rounded card last render is a square
+    -- panel this one, and its corners do not go away on their own.
+    if unround then unround(frame) end
     local s = skin()
     if s and s.Apply then return s:Apply(frame, role or "panel") end
     return frame
@@ -245,6 +253,326 @@ function W:InnerShadow(region, inset, thickness, alpha)
 end
 
 ------------------------------------------------------------
+-- Rounded surfaces
+--
+-- A corner is art, not geometry. There is no radius to set on a frame,
+-- so a rounded card is a rectangle whose own fill stops short of its
+-- corners with a quarter-disc dropped into each gap.
+--
+-- The tiles are ours -- Tools/make_round_corners.py -- rather than one
+-- of Blizzard's mask atlases, because those names drift between builds.
+-- Baganator ships a runtime check choosing between "common-mask-circle"
+-- and "CircleMaskScalable" depending on which one the client has, and an
+-- atlas that resolves to nothing leaves a square corner nobody notices
+-- until a patch day.
+--
+-- Both tiles are white with the shape in their alpha, so the colour is
+-- whatever the skin hands over for that role. The rule holds: the skin
+-- still decides what a surface looks like, and this only decides the
+-- shape it is cut to.
+------------------------------------------------------------
+local ROUND_FILL = "Interface\\AddOns\\YippYappHelper\\Media\\RoundFill"
+local ROUND_EDGE = "Interface\\AddOns\\YippYappHelper\\Media\\RoundEdge"
+
+-- One tile drawn four ways. The file is a rounded rectangle's top-left
+-- corner; the other three are the same art with its texture coordinates
+-- flipped, which is why there is one file and not four.
+local CORNER_UV = {
+    TOPLEFT     = { 0, 1, 0, 1 },
+    TOPRIGHT    = { 1, 0, 0, 1 },
+    BOTTOMLEFT  = { 0, 1, 1, 0 },
+    BOTTOMRIGHT = { 1, 0, 1, 0 },
+}
+local CORNERS = { "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }
+
+local WHITE8 = "Interface\\Buttons\\WHITE8x8"
+
+--- Paint a piece a flat colour.
+---
+--- Every piece is white art, so the vertex colour is the whole of its
+--- colour -- alpha included, which is what lets one tile serve a surface
+--- drawn at 0.8 and one drawn opaque.
+local function solidPaint(r, g, b, a)
+    return function(tex) tex:SetVertexColor(r, g, b, a) end
+end
+
+--- Paint a piece its slice of a fade running left to right.
+---
+--- Strongest at the left and falling away, which is where a card wants
+--- it: the art sits on the left and the wash is what carries its colour
+--- out under the text rather than stopping at the icon's edge.
+---
+--- Eased rather than linear. A straight ramp keeps too much colour in
+--- the middle of the card and reads as a card that is simply tinted,
+--- which is the thing the fade exists to avoid.
+local function washPaint(r, g, b, peak)
+    local function at(t) return peak * (1 - t) ^ 1.6 end
+    return function(tex, t0, t1)
+        if tex.SetGradient and CreateColor then
+            local ok = pcall(tex.SetGradient, tex, "HORIZONTAL",
+                CreateColor(r, g, b, at(t0)), CreateColor(r, g, b, at(t1)))
+            if ok then return end
+        end
+        -- No gradient on this client: a flat wash at the fade's average
+        -- is duller than the real thing but still says which card is
+        -- which, which is the job.
+        tex:SetVertexColor(r, g, b, (at(t0) + at(t1)) * 0.5)
+    end
+end
+
+--- The four corner tiles of one rounded rectangle.
+local function cornerArt(region, store, path, layer, sub, radius, paint, t0, t1)
+    for _, k in ipairs(CORNERS) do
+        local tex = store[k]
+        if not tex then
+            tex = region:CreateTexture(nil, layer, nil, sub)
+            tex:SetTexture(path)
+            tex:SetTexCoord(unpack(CORNER_UV[k]))
+            store[k] = tex
+        end
+        tex:ClearAllPoints()
+        tex:SetPoint(k, region, k, 0, 0)
+        tex:SetSize(radius, radius)
+        -- Left-hand corners take the left end of the span, right-hand
+        -- ones the right end.
+        if k == "TOPLEFT" or k == "BOTTOMLEFT" then
+            paint(tex, t0, t1)
+        else
+            paint(tex, 1 - t1, 1 - t0)
+        end
+        tex:Show()
+    end
+end
+
+--- The body of a rounded rectangle: everything but its corners, painted
+--- by `paint`.
+---
+--- Three rects, not a cross of two. These surfaces are semi-transparent
+--- and where a full-width band crosses a full-height one the overlap
+--- paints itself twice, which reads as a brighter cross through the
+--- middle of the card.
+---
+--- `paint` is handed each piece and where that piece sits across the
+--- shape -- 0 at the left edge, 1 at the right. A flat colour ignores
+--- the span; a fade needs it, because seven separate textures only read
+--- as one continuous gradient if each picks the ramp up exactly where
+--- the piece before it left off.
+local function roundedLayer(region, key, layer, sub, radius, width, paint)
+    local s = region[key]
+    if not s then
+        s = { corners = {} }
+        for _, k in ipairs({ "mid", "left", "right" }) do
+            s[k] = region:CreateTexture(nil, layer, nil, sub)
+            -- White art plus a vertex colour, never SetColorTexture: a
+            -- gradient replaces the vertex colour, and a piece that had
+            -- its colour baked into the texture would ignore it.
+            s[k]:SetTexture(WHITE8)
+        end
+        region[key] = s
+    end
+
+    -- Full height, between the two columns of corners.
+    s.mid:ClearAllPoints()
+    s.mid:SetPoint("TOPLEFT", region, "TOPLEFT", radius, 0)
+    s.mid:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -radius, 0)
+
+    -- The strips either side of it, stopping short of the corner tiles.
+    s.left:ClearAllPoints()
+    s.left:SetPoint("TOPLEFT", region, "TOPLEFT", 0, -radius)
+    s.left:SetPoint("BOTTOMLEFT", region, "BOTTOMLEFT", 0, radius)
+    s.left:SetWidth(radius)
+
+    s.right:ClearAllPoints()
+    s.right:SetPoint("TOPRIGHT", region, "TOPRIGHT", 0, -radius)
+    s.right:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 0, radius)
+    s.right:SetWidth(radius)
+
+    -- Where each piece sits across the shape. The corner columns are
+    -- `radius` wide at both ends, so the middle runs between them.
+    local w = math.max(width or region:GetWidth() or 0, 1)
+    local t = math.min(radius / w, 0.5)
+
+    paint(s.left, 0, t)
+    paint(s.mid, t, 1 - t)
+    paint(s.right, 1 - t, 1)
+    for _, k in ipairs({ "mid", "left", "right" }) do s[k]:Show() end
+    cornerArt(region, s.corners, ROUND_FILL, layer, sub, radius, paint, 0, t)
+end
+
+--- The hairline around one, with its corners turned.
+---
+--- A ring rather than a second filled disc under the fill: these
+--- surfaces are semi-transparent, so a disc behind one shows its border
+--- colour through the whole card instead of only at the edge.
+local function roundedEdge(region, radius, r, g, b, a)
+    local s = region._yyhRoundEdge
+    if not s then
+        s = { corners = {} }
+        for _, k in ipairs({ "top", "bottom", "left", "right" }) do
+            s[k] = region:CreateTexture(nil, "BORDER", nil, 6)
+        end
+        region._yyhRoundEdge = s
+    end
+
+    s.top:ClearAllPoints()
+    s.top:SetPoint("TOPLEFT", region, "TOPLEFT", radius, 0)
+    s.top:SetPoint("TOPRIGHT", region, "TOPRIGHT", -radius, 0)
+    s.top:SetHeight(1)
+
+    s.bottom:ClearAllPoints()
+    s.bottom:SetPoint("BOTTOMLEFT", region, "BOTTOMLEFT", radius, 0)
+    s.bottom:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", -radius, 0)
+    s.bottom:SetHeight(1)
+
+    s.left:ClearAllPoints()
+    s.left:SetPoint("TOPLEFT", region, "TOPLEFT", 0, -radius)
+    s.left:SetPoint("BOTTOMLEFT", region, "BOTTOMLEFT", 0, radius)
+    s.left:SetWidth(1)
+
+    s.right:ClearAllPoints()
+    s.right:SetPoint("TOPRIGHT", region, "TOPRIGHT", 0, -radius)
+    s.right:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 0, radius)
+    s.right:SetWidth(1)
+
+    local paint = solidPaint(r, g, b, a)
+    for _, k in ipairs({ "top", "bottom", "left", "right" }) do
+        s[k]:SetColorTexture(r, g, b, a)
+        s[k]:Show()
+    end
+    cornerArt(region, s.corners, ROUND_EDGE, "BORDER", 6, radius, paint, 0, 1)
+end
+
+local function hideRoundKey(region, key)
+    local s = region[key]
+    if not s then return end
+    for k, tex in pairs(s) do
+        if k == "corners" then
+            for _, c in pairs(tex) do c:Hide() end
+        else
+            tex:Hide()
+        end
+    end
+end
+
+-- Forward-declared above Apply. See the note there.
+function unround(frame)
+    if not frame then return end
+    hideRoundKey(frame, "_yyhRoundFill")
+    hideRoundKey(frame, "_yyhRoundWash")
+    hideRoundKey(frame, "_yyhRoundEdge")
+end
+
+--- The skin's flat colours for a role: fill first, then edge.
+---
+--- nil when the skin paints that role with tiled art instead. A corner
+--- tile has one colour to be, so rounding the Blizzlike window would
+--- mean throwing its marble away -- and the grain is the entire reason
+--- that surface reads as material. Better to leave it square.
+function W:Surface(role)
+    local s = skin()
+    if s and s.Surface then
+        local fill, edge = s:Surface(role or "inset")
+        if fill then return fill, edge end
+    end
+    return nil
+end
+
+--- A surface with rounded corners.
+---
+--- Same contract as Apply: hand it a frame you already built, get the
+--- frame back. Idempotent for the same reason, too -- pages refresh far
+--- more often than they rebuild, and a second call has to repaint rather
+--- than lay a second set of corners over the first.
+---
+--- Falls back to a square Apply when the skin has no flat colour for the
+--- role, so a caller never has to ask which skin is running.
+---
+--- `opts.fill` and `opts.edge` override the skin's colours for one
+--- frame, and `opts.wash` = { r, g, b, peak } lays a fade across it,
+--- strongest at the left. All three are for STATE -- the card of the
+--- build you are specced into, a row that failed -- and not for taste: a
+--- caller that wants a different colour because it prefers one is the
+--- thing the whole skin layer exists to stop. Callers are expected to
+--- derive the override from W:Surface so it still moves with the skin.
+---
+--- Call this AFTER sizing the frame. The wash divides the shape by its
+--- width to know where each piece sits in the fade, so a frame still at
+--- its default size gets a gradient scaled to the wrong card.
+function W:Rounded(frame, role, radius, opts)
+    if not (frame and frame.CreateTexture) then return frame end
+    role = role or "inset"
+    local fill, edge = self:Surface(role)
+    if not fill then return self:Apply(frame, role) end
+    if opts then
+        fill = opts.fill or fill
+        edge = opts.edge or edge
+    end
+
+    radius = radius or 8
+    -- The square painting goes first, or its backdrop draws a right
+    -- angle straight across every corner we are about to round.
+    if frame.SetBackdrop then frame:SetBackdrop(nil) end
+    if frame._yyhFill then frame._yyhFill:Hide() end
+    if frame._yyhEdge then
+        for _, tex in pairs(frame._yyhEdge) do tex:Hide() end
+    end
+    -- The inner shadow too. It is four straight gradients, so inside a
+    -- rounded card it reads as a square shadow floating in one.
+    if frame._yyhShadow then
+        for _, tex in pairs(frame._yyhShadow) do tex:Hide() end
+    end
+
+    local width = frame:GetWidth()
+    roundedLayer(frame, "_yyhRoundFill", "BACKGROUND", -8, radius, width,
+        solidPaint(fill[1], fill[2], fill[3], fill[4] or 1))
+
+    -- Over the fill and under the edge, on the same shape, so the fade
+    -- reaches the corners instead of stopping in a square short of them.
+    local w = opts and opts.wash
+    if w then
+        roundedLayer(frame, "_yyhRoundWash", "BACKGROUND", -7, radius, width,
+            washPaint(w[1], w[2], w[3], w[4] or 0.25))
+    else
+        hideRoundKey(frame, "_yyhRoundWash")
+    end
+
+    if edge then
+        roundedEdge(frame, radius, edge[1], edge[2], edge[3], edge[4] or 1)
+    else
+        hideRoundKey(frame, "_yyhRoundEdge")
+    end
+    frame._yyhSkinned = role
+    return frame
+end
+
+--- Strip a surface back to nothing.
+---
+--- SetBackdrop(nil) is what the pages were all using, and it is half the
+--- job. A skinned panel is a backdrop PLUS an inner shadow, and that
+--- shadow is four gradient textures living on the frame -- nothing to do
+--- with the backdrop, and completely untouched by clearing it.
+---
+--- So every page that went into the shell cleared its backdrop and kept
+--- its shading: a dark vignette drawn inside a region that was supposed
+--- to be flush with the shell around it. That is the indented background
+--- that appeared on page after page, and why it survived each page being
+--- "fixed" individually -- the leftover was never the backdrop.
+function W:Unskin(frame)
+    if not frame then return frame end
+    if frame.SetBackdrop then frame:SetBackdrop(nil) end
+    if frame._yyhFill then frame._yyhFill:Hide() end
+    if frame._yyhEdge then
+        for _, tex in pairs(frame._yyhEdge) do tex:Hide() end
+    end
+    if frame._yyhShadow then
+        for _, tex in pairs(frame._yyhShadow) do tex:Hide() end
+    end
+    if unround then unround(frame) end
+    frame._yyhSkinned = nil
+    return frame
+end
+
+------------------------------------------------------------
 -- Text
 ------------------------------------------------------------
 function W:Label(parent, template, justify)
@@ -301,6 +629,106 @@ function W:SectionTitle(parent, text)
     function holder:SetText(t) holder.text:SetText(t) end
     return holder
 end
+
+-- The heading's own height, above the card it introduces.
+local SECTION_TITLE_H = 24
+
+--- A titled section: the heading, and the card its contents sit in,
+--- with ONE line between them doing both jobs.
+---
+--- The pages that needed this were drawing two. Teleports put an
+--- ornamental rule beside each expansion heading and then started a
+--- bordered panel a few pixels underneath it, so every section carried
+--- two horizontal lines a hair apart saying the same thing -- and the
+--- rule said strictly less, because a panel edge also tells you where
+--- the section ENDS. Here the divider sits ON the card's top edge, so
+--- the ornament and the boundary are the same line.
+---
+--- The caller sizes it through Layout rather than by anchoring the
+--- pieces, because the card is rounded and rounding has to be painted
+--- after the width is known.
+function W:SectionCard(parent, radius)
+    local s = CreateFrame("Frame", nil, parent)
+
+    s.title = self:Label(s, "GameFontNormalLarge")
+    s.title:SetPoint("TOPLEFT", 0, 0)
+    s.title:SetTextColor(self:Color("muted"))
+
+    -- Right-aligned, for the count or progress a section usually wants
+    -- to state. Optional: left empty it simply takes no room.
+    s.value = self:Label(s, "GameFontNormalSmall", "RIGHT")
+    s.value:SetPoint("TOPRIGHT", 0, -4)
+    s.value:SetTextColor(self:Color("faint"))
+
+    s.body = CreateFrame("Frame", nil, s, "BackdropTemplate")
+    s.body:SetPoint("TOPLEFT", s, "TOPLEFT", 0, -SECTION_TITLE_H)
+    s.body:SetPoint("TOPRIGHT", s, "TOPRIGHT", 0, -SECTION_TITLE_H)
+
+    -- Both pinned to the PARENT's frame level.
+    --
+    -- A child frame defaults to parent + 1, and frame level beats draw
+    -- layer -- so the card sat a level above the content frame and its
+    -- fill painted straight over every row anchored to that frame. The
+    -- rows were still drawn; they were underneath a brown rectangle.
+    --
+    -- Pages that parent their rows INTO the body would not have noticed.
+    -- The ones that anchor rows to a shared content frame and let the
+    -- card slide behind them -- Consumables, Teleports, the Loot Browser
+    -- -- are why this has to be said out loud rather than left to the
+    -- default.
+    -- BELOW the host, not level with it.
+    --
+    -- Level-with-it works only while every piece of content sits on the
+    -- host itself or on a child above it, and that is an assumption
+    -- about each caller rather than a property of this widget. A card
+    -- that is one level under its host is behind ALL of it, whatever the
+    -- caller does -- which is what a background is supposed to be.
+    s._level = math.max((parent:GetFrameLevel() or 1) - 1, 0)
+    s:SetFrameLevel(s._level)
+    s.body:SetFrameLevel(s._level)
+
+    -- Centred on the card's top edge, not above it. A 14px ornament
+    -- anchored by its middle to the boundary is what makes the two read
+    -- as one thing rather than as a rule with a box under it.
+    s.rule = s:CreateTexture(nil, "OVERLAY")
+    s.rule:SetHeight(14)
+    s.rule:SetPoint("LEFT", s.body, "TOPLEFT", 0, 0)
+    s.rule:SetPoint("RIGHT", s.body, "TOPRIGHT", 0, 0)
+    local ruleOk = pcall(s.rule.SetAtlas, s.rule, "ui-journeys-renown-divider")
+    if not (ruleOk and s.rule:GetAtlas()) then
+        s.rule:SetHeight(1)
+        local r, g, b = self:Color("muted")
+        s.rule:SetColorTexture(r, g, b, 0.35)
+    end
+
+    --- Size the section and paint its card. `bodyH` is the room the
+    --- caller needs inside; the section's own height comes back so the
+    --- page can advance its cursor by it.
+    function s:Layout(width, bodyH)
+        -- Re-pinned every layout: these are pooled and reparented
+        -- between renders, and a card that kept the level of a frame it
+        -- no longer belongs to is back to covering its own contents.
+        local host = s:GetParent()
+        local lvl = math.max(((host and host:GetFrameLevel()) or 1) - 1, 0)
+        s:SetFrameLevel(lvl)
+        s.body:SetFrameLevel(lvl)
+
+        s:SetWidth(width)
+        s.body:SetHeight(math.max(bodyH, 1))
+        s:SetHeight(SECTION_TITLE_H + math.max(bodyH, 1))
+        -- After the width is set, never before: the rounded painter
+        -- divides by the card's width to place its corners.
+        W:Rounded(s.body, "inset", radius or 8)
+        return s:GetHeight()
+    end
+
+    function s:SetText(t) s.title:SetText(t or "") end
+    function s:SetValue(t) s.value:SetText(t or "") end
+    return s
+end
+
+--- The heading height a page has to budget above a section's card.
+function W:SectionTitleHeight() return SECTION_TITLE_H end
 
 ------------------------------------------------------------
 -- Rows and tiles

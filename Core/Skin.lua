@@ -159,6 +159,15 @@ local DEFAULT_FILL = {
     header = { 0.06, 0.06, 0.06, 0.90 },
 }
 
+-- Grey, and one place to say so. Apply and Surface both need the edge
+-- colour, and two literals is how the square border and the rounded one
+-- end up different shades of grey without anyone meaning them to be.
+local DEFAULT_EDGE     = { 0.35, 0.35, 0.35, 1 }
+-- Rows are separated by tone rather than by lines, so theirs is barely
+-- there. Kept as a border rather than dropped so a row still has an
+-- edge to round.
+local DEFAULT_ROW_EDGE = { 0.35, 0.35, 0.35, 0.25 }
+
 -- Depth, but less of it than the Blizzlike skin takes. This skin's job
 -- is to sit quietly inside somebody else's UI, and a heavily shaded
 -- panel stops matching the flat ones around it. The colours stay
@@ -178,8 +187,19 @@ local DEFAULT_SHADOW = {
 --- each one to instead create its frames through the skin would mean
 --- restructuring every file. Restyling in place is a one-line change at
 --- each site and gets the same result.
+--- The flat colours behind a role: fill, then edge.
+---
+--- Exists so ns.Widgets can paint this same surface in a different
+--- shape -- a rounded card -- without copying the values out of here.
+--- The skin keeps saying what a surface is coloured; the widget only
+--- decides what shape it is cut to.
+function Default:Surface(role)
+    return DEFAULT_FILL[role] or DEFAULT_FILL.panel,
+           role == "row" and DEFAULT_ROW_EDGE or DEFAULT_EDGE
+end
+
 function Default:Apply(f, role)
-    local fill = DEFAULT_FILL[role] or DEFAULT_FILL.panel
+    local fill, edge = self:Surface(role)
     if f.SetBackdrop then
         f:SetBackdrop({
             bgFile   = "Interface\\Buttons\\WHITE8x8",
@@ -187,7 +207,7 @@ function Default:Apply(f, role)
             edgeSize = 1,
         })
         f:SetBackdropColor(fill[1], fill[2], fill[3], fill[4])
-        f:SetBackdropBorderColor(0.35, 0.35, 0.35, role == "row" and 0.25 or 1)
+        f:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4])
     elseif f.CreateTexture then
         -- No BackdropTemplate on this frame. A plain texture is not a
         -- border, but it is a surface, and a page that renders flat is
@@ -195,6 +215,9 @@ function Default:Apply(f, role)
         local bg = f._yyhFill or f:CreateTexture(nil, "BACKGROUND", nil, -8)
         bg:SetAllPoints(f)
         bg:SetColorTexture(fill[1], fill[2], fill[3], fill[4])
+        -- Shown explicitly: W:Unskin hides this to take a page flush
+        -- into the shell, and re-skinning has to bring it back.
+        bg:Show()
         f._yyhFill = bg
     end
 

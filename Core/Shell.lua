@@ -342,6 +342,25 @@ function Shell:Mount(id, parent)
         if def.Build then
             def.Build(m.content, self:BuildContext(def, m.content, m.subTab))
         end
+
+        -- Tell the page which sub-tab it is on, once, before its first
+        -- draw.
+        --
+        -- Without this the strip and the content disagreed on arrival:
+        -- the shell restores the remembered sub-tab and marks it, but a
+        -- page keeps its own idea of the current view in a local, and
+        -- that local still held whatever it was initialised to. So
+        -- Trinkets could show "Loot Council" underlined with My Spec's
+        -- rows beneath it. Clicking the OTHER tab and back was the only
+        -- cure, because SetSubTab returns early when the id already
+        -- matches -- clicking the tab that was already lit did nothing.
+        --
+        -- After Build, not before: OnSubTab reaches into the page's own
+        -- frames, and the pages that build lazily have none until Build
+        -- has run.
+        if def.OnSubTab and m.subTab then
+            def.OnSubTab(m.subTab, self:BuildContext(def, m.content, m.subTab))
+        end
     end
 
     self:RefreshPage(id)

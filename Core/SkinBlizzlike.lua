@@ -150,6 +150,21 @@ local SHADOW = {
 local WHITE = "Interface\\Buttons\\WHITE8x8"
 
 
+--- The flat colours behind a role: fill, then edge.
+---
+--- nil for the two textured roles, and deliberately. The window and the
+--- panel are tiled rock and marble; a corner tile has exactly one colour
+--- to be, so rounding those would mean replacing the grain with an
+--- average of it -- and the grain is the whole reason they read as
+--- material rather than as paint. ns.Widgets:Rounded takes the nil and
+--- leaves them square.
+function Blizzlike:Surface(role)
+    role = ns.Skin.ROLES[role] and role or "panel"
+    local s = SURFACE[role]
+    if not (s and s.flat) then return nil end
+    return s.flat, EDGE[role]
+end
+
 function Blizzlike:Apply(f, role)
     role = ns.Skin.ROLES[role] and role or "panel"
     local surface = SURFACE[role]
@@ -190,6 +205,9 @@ function Blizzlike:Apply(f, role)
             bg:SetHorizTile(true)
             bg:SetVertTile(true)
         end
+        -- Shown explicitly: W:Unskin hides this, and re-skinning has to
+        -- bring it back.
+        bg:Show()
         if NineSliceUtil and NineSliceUtil.ApplyLayoutByName then
             pcall(NineSliceUtil.ApplyLayoutByName, f, layout)
         end
@@ -231,6 +249,7 @@ function Blizzlike:Apply(f, role)
         else
             bg:SetColorTexture(0.09, 0.075, 0.06, surface.alpha or 1)
         end
+        bg:Show()
         if edge and ns.Widgets then
             ns.Widgets:Hairline(f, edge[1], edge[2], edge[3], edge[4])
         end
