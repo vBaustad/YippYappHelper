@@ -14,7 +14,11 @@ ns.TrinketUI = ns.TrinketUI or {}
 local UI = ns.TrinketUI
 local T = ns.Trinkets
 
-local PAD = 12
+-- Padding comes from the shell, not from here. Eight pages had picked
+-- their own -- 12 in four of them, 14 in three -- so every page sat to a
+-- different rhythm from the chrome around it and from each other. One
+-- source means a spacing change lands everywhere at once.
+local PAD = (ns.Shell and ns.Shell.PAD) or 12
 local ROW_H = 22
 local TABS = {
     { id = "spec",    label = "My Spec" },
@@ -251,36 +255,27 @@ local function enableHover(frame)
     end
 end
 
---- Right-click to shortlist a trinket, the same mark the Loot Browser
---- uses. Marked against the spec being played rather than the Loot
---- Browser's dropdown -- see ns:GetPlayerSpecID.
+--- Left-click keeps whatever the row already did; right-click raises the
+--- shared item menu.
 ---
---- A shortlist, not a slot assignment: "I want this" can be true of
---- several trinkets at once, which is the whole point when two of them
---- are within a percent of each other and only one is going to drop.
-local function markFavorite(itemID, name)
-    if not (itemID and ns.ToggleLootFavorite) then return end
-    local specID = ns.GetPlayerSpecID and ns:GetPlayerSpecID()
-    if not specID then return end
-
-    ns:ToggleLootFavorite(itemID, specID)
-    local on = ns:IsLootFavorite(itemID, specID)
-    if DEFAULT_CHAT_FRAME then
-        DEFAULT_CHAT_FRAME:AddMessage(("|cff00ccffYippYapp|r %s %s your list")
-            :format(name or ("item:" .. tostring(itemID)),
-                    on and "|cff40ff40added to|r" or "|cffff8080removed from|r"))
-    end
-    UI:Refresh()
-end
-
---- Left-click keeps whatever the row already did; right-click marks.
---- Registered explicitly because a Button listens for left only by
---- default, so without this the right-click never arrives.
+--- A menu rather than the plain favourite toggle this used to be: there
+--- are two things worth doing to a trinket and they are not the same
+--- one. Favouriting says "I am hunting this" and several can be true at
+--- once; pinning says "this goes in that slot" and only one can. The
+--- menu offers both without either standing in for the other.
+---
+--- RegisterForClicks is explicit because a Button listens for left only
+--- by default, so without it the right-click never arrives.
 local function bindClicks(row, onLeft)
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     row:SetScript("OnClick", function(_, button)
         if button == "RightButton" then
-            markFavorite(row._itemID, row.itemName)
+            if ns.ShowItemMenu and row._itemID then
+                ns:ShowItemMenu(row, row._itemID, {
+                    title = row.itemName,
+                    onChange = function() UI:Refresh() end,
+                })
+            end
         elseif onLeft then
             onLeft()
         end
@@ -645,7 +640,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         local fs = AcquireRow(self, content)
         fs:SetPoint("TOPLEFT", PAD, y)
         fs:SetWidth(width - PAD * 2)
-        fs.text:SetText("|cff888888Could not determine your specialization.|r")
+        fs.text:SetText(ns.Widgets:Tint("muted", "Could not determine your specialization."))
         return y - ROW_H
     end
 
@@ -670,11 +665,9 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         -- "no sims for you" there reads as a data failure.
         local otherStyle = (state.style == "ST") and "AOE" or "ST"
         if T:GetForSpec(specKey, otherStyle) then
-            fs.text:SetText(("|cff888888bloodmallet has no %s sims for %s -- try the other tab.|r")
-                :format(state.style == "ST" and "single-target" or "AoE", T:SpecName(specKey)))
+            fs.text:SetText(("|cff%sbloodmallet has no %s sims for %s -- try the other tab.|r"):format(ns.Widgets:Hex("muted"), state.style == "ST" and "single-target" or "AoE", T:SpecName(specKey)))
         else
-            fs.text:SetText(("|cff888888bloodmallet has no trinket sims for %s this tier.|r")
-                :format(T:SpecName(specKey)))
+            fs.text:SetText(("|cff%sbloodmallet has no trinket sims for %s this tier.|r"):format(ns.Widgets:Hex("muted"), T:SpecName(specKey)))
         end
         return y - ROW_H
     end
@@ -708,7 +701,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     if not curve or next(curve) == nil then
         local why = "There are no scaling bars or item level stepper for it either -- that detail arrives with the re-sim."
         warning = warning and (warning .. " " .. why)
-            or ("|cff888888No item-level detail for this spec, so no scaling bars or item level stepper. bloodmallet publishes it with the next run.|r")
+            or (ns.Widgets:Tint("muted", "No item-level detail for this spec, so no scaling bars or item level stepper. bloodmallet publishes it with the next run."))
     end
 
     if warning then
@@ -753,7 +746,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     -- that are magnified while this header is not, so its width has to
     -- be taken up into page units to land in the same place.
     placeValue(hdr, VALUE_W * rowScale)
-    hdr.value:SetText("|cff666666ilvl / vs best|r")
+    hdr.value:SetText(ns.Widgets:Tint("faint", "ilvl / vs best"))
     y = y - ROW_H - 4
 
     -- Bars are drawn against the strongest total in the list, so they
@@ -814,7 +807,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
                 r:SetPoint("TOPLEFT", PAD / rowScale, y / rowScale)
                 r:SetWidth(rowW)
                 placeValue(r, VALUE_W)
-                r.rank:SetText("|cff888888" .. rank .. ".|r")
+                r.rank:SetText("|cff" .. ns.Widgets:Hex("muted") .. rank .. ".|r")
                 -- My Spec rows have nothing to do on a left-click, so
                 -- this is the right-click alone.
                 bindClicks(r, nil)
@@ -835,7 +828,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
                 -- every row is at the same level, so the header says it
                 -- once instead of repeating it 25 times.
                 local at = (not atLevel) and row.ilvl
-                    and ("|cff666666%d|r  "):format(row.ilvl) or ""
+                    and ("|cff%s%d|r  "):format(ns.Widgets:Hex("faint"), row.ilvl) or ""
                 if rank == 1 then
                     r.value:SetText(at .. "|cff40ff40best|r")
                 else
@@ -853,7 +846,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         local fs = AcquireRow(self, content)
         fs:SetPoint("TOPLEFT", PAD, y)
         fs:SetWidth(width - PAD * 2)
-        fs.text:SetText("|cff888888No trinket matches that name.|r")
+        fs.text:SetText(ns.Widgets:Tint("muted", "No trinket matches that name."))
         y = y - ROW_H
     elseif hidden > 0 then
         local more = AcquireRow(self, content)
@@ -861,10 +854,9 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         more:SetWidth(width - PAD * 2)
         more.icon:SetTexture(nil)
         if needle ~= "" then
-            more.text:SetText(("|cff888888%d more match — refine the search.|r")
-                :format(hidden))
+            more.text:SetText(("|cff%s%d more match — refine the search.|r"):format(ns.Widgets:Hex("muted"), hidden))
         else
-            more.text:SetText(("|cff888888+%d more|r  |cffaaaaaaShow all|r"):format(hidden))
+            more.text:SetText(("|cff%s+%d more|r  |cffaaaaaaShow all|r"):format(ns.Widgets:Hex("muted"), hidden))
             more:SetScript("OnClick", function()
                 state.showAll = true
                 UI:Refresh()
@@ -876,7 +868,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         less:SetPoint("TOPLEFT", PAD, y)
         less:SetWidth(width - PAD * 2)
         less.icon:SetTexture(nil)
-        less.text:SetText(("|cffaaaaaaShow top %d only|r"):format(TOP_N))
+        less.text:SetText(("|cff%sShow top %d only|r"):format(ns.Widgets:Hex("muted"), TOP_N))
         less:SetScript("OnClick", function()
             state.showAll = false
             UI:Refresh()
@@ -928,7 +920,7 @@ function UI:RenderCouncil(content, width, viewH)
         local fs = AcquireRow(self, content)
         fs:SetPoint("TOPLEFT", PAD, y)
         fs:SetWidth(width - PAD * 2)
-        fs.text:SetText("|cff888888No trinket data loaded.|r")
+        fs.text:SetText(ns.Widgets:Tint("muted", "No trinket data loaded."))
         return y - ROW_H
     end
 
@@ -936,9 +928,9 @@ function UI:RenderCouncil(content, width, viewH)
     intro:SetPoint("TOPLEFT", PAD, y)
     intro:SetWidth(width - PAD * 2)
     intro.icon:SetTexture(nil)
-    intro.text:SetText("|cffaaaaaaClick a trinket to expand it, click again to collapse.|r")
+    intro.text:SetText(ns.Widgets:Tint("muted", "Click a trinket to expand it, click again to collapse."))
     placeValue(intro, COUNCIL_VALUE_W)
-    intro.value:SetText("|cff666666ilvl / best rank|r")
+    intro.value:SetText(ns.Widgets:Tint("faint", "ilvl / best rank"))
     y = y - ROW_H - 2
 
     -- Read state.selected when the click happens, not when the row is
@@ -1002,7 +994,7 @@ function UI:RenderCouncil(content, width, viewH)
         -- season's set of trinkets.
         if bucket.bestRank and bucket.bestRank < 99 then
             r.value:SetText(("%s |cff666666%s|r  |cff888888best: #%d|r")
-                :format(isOpen and "|cff888888-|r" or "|cff888888+|r",
+                :format(isOpen and ns.Widgets:Tint("muted", "-") or ns.Widgets:Tint("muted", "+"),
                         bucket.ilvl or "?", bucket.bestRank))
         end
         bindClicks(r, function() toggle(bucket.id) end)
@@ -1075,7 +1067,7 @@ function UI:RenderCouncil(content, width, viewH)
         local fs = AcquireRow(self, content)
         fs:SetPoint("TOPLEFT", PAD, y)
         fs:SetWidth(width - PAD * 2)
-        fs.text:SetText("|cff888888No trinket matches that name.|r")
+        fs.text:SetText(ns.Widgets:Tint("muted", "No trinket matches that name."))
         y = y - ROW_H
     elseif hidden > 0 then
         local more = AcquireRow(self, content)
@@ -1083,10 +1075,9 @@ function UI:RenderCouncil(content, width, viewH)
         more:SetWidth(width - PAD * 2)
         more.icon:SetTexture(nil)
         if needle ~= "" then
-            more.text:SetText(("|cff888888%d more match — refine the search.|r")
-                :format(hidden))
+            more.text:SetText(("|cff%s%d more match — refine the search.|r"):format(ns.Widgets:Hex("muted"), hidden))
         else
-            more.text:SetText(("|cff888888+%d more|r  |cffaaaaaaShow all|r"):format(hidden))
+            more.text:SetText(("|cff%s+%d more|r  |cffaaaaaaShow all|r"):format(ns.Widgets:Hex("muted"), hidden))
             more:SetScript("OnClick", function()
                 state.showAll = true
                 UI:Refresh()
@@ -1127,7 +1118,7 @@ function UI:RefreshStepper()
     if state.ilvl then
         self._ilvlLabel:SetText(("|cffffffffItem level %d|r"):format(state.ilvl))
     else
-        self._ilvlLabel:SetText("|cff888888Best available|r")
+        self._ilvlLabel:SetText(ns.Widgets:Tint("muted", "Best available"))
     end
 
     local i = 0
@@ -1205,45 +1196,21 @@ function UI:Refresh()
     self:Draw(rowScale)
 end
 
-function UI:BuildInto(parent)
-    if parent._yyhTrinketsBuilt then
-        self:Refresh()
-        return
-    end
-    parent._yyhTrinketsBuilt = true
+------------------------------------------------------------
+-- Shell page
+--
+-- The tab bar this file used to build is gone: My Spec and Loot
+-- Council are declared as sub-tabs and the shell draws them, in
+-- the one place every page puts them. That is also what frees the
+-- row the fight style used to share with them -- it is a modifier
+-- on the view, not a third view, so it belongs in the filter strip
+-- with the search box and the item level stepper.
+------------------------------------------------------------
 
-    local host = parent.inner or parent
-
-    -- Tabs
-    local tabBar = CreateFrame("Frame", nil, host)
-    tabBar:SetPoint("TOPLEFT", host, "TOPLEFT", 8, -8)
-    tabBar:SetPoint("TOPRIGHT", host, "TOPRIGHT", -8, -8)
-    tabBar:SetHeight(26)
-
-    local buttons = {}
-    local function select(id)
-        state.tab = id
-        state.selected = nil
-        -- The ladder belongs to one spec and one fight style. Carrying a
-        -- level across a switch means landing on one the new list was
-        -- never simmed at, and an empty page is a worse answer than the
-        -- default one.
-        state.ilvl = nil
-        for tid, btn in pairs(buttons) do
-            if tid == id then ns.SetTabActive(btn) else ns.SetTabInactive(btn) end
-        end
-        self:Refresh()
-    end
-
-    local x = 0
-    for _, def in ipairs(TABS) do
-        local btn = ns.CreateUnderlineTab(tabBar, def.label, ACCENT)
-        btn:SetSize(110, 24)
-        btn:SetPoint("TOPLEFT", tabBar, "TOPLEFT", x, 0)
-        btn:SetScript("OnClick", function() select(def.id) end)
-        buttons[def.id] = btn
-        x = x + 116
-    end
+--- Controls that modify the list rather than choose it.
+function UI:BuildFilters(bar, ctx)
+    local host = bar
+    self._filterBar = bar
 
     -- Fight style, right-aligned so it reads as a modifier on the view
     -- rather than a third view. Styles with no data anywhere are skipped
@@ -1263,10 +1230,10 @@ function UI:BuildInto(parent)
     for i = #STYLES, 1, -1 do
         local def = STYLES[i]
         if T:HasStyle(def.id) then
-            local btn = ns.CreateUnderlineTab(tabBar, def.label, ACCENT)
+            local btn = ns.CreateUnderlineTab(bar, def.label, ACCENT)
             local w = (def.id == "ST") and 100 or 60
             btn:SetSize(w, 24)
-            btn:SetPoint("TOPRIGHT", tabBar, "TOPRIGHT", -sx, 0)
+            btn:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -sx, 0)
             btn:SetScript("OnClick", function() selectStyle(def.id) end)
             styleButtons[def.id] = btn
             sx = sx + w + 6
@@ -1277,17 +1244,6 @@ function UI:BuildInto(parent)
         state.style = next(styleButtons) or "ST"
     end
     if styleButtons[state.style] then selectStyle(state.style) end
-
-    -- Staleness banner
-    local banner
-    if T:IsStale() then
-        banner = host:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        banner:SetPoint("TOPLEFT", tabBar, "BOTTOMLEFT", 4, -4)
-        banner:SetPoint("RIGHT", host, "RIGHT", -12, 0)
-        banner:SetJustifyH("LEFT")
-        banner:SetWordWrap(true)
-        banner:SetText(T:StaleText())
-    end
 
     ------------------------------------------------------------
     -- Item level stepper
@@ -1390,7 +1346,7 @@ function UI:BuildInto(parent)
     -- Search
     ------------------------------------------------------------
     local searchBox = CreateFrame("EditBox", nil, host, "SearchBoxTemplate")
-    searchBox:SetPoint("TOPLEFT", tabBar, "BOTTOMLEFT", 4, banner and -22 or -4)
+    searchBox:SetPoint("LEFT", bar, "LEFT", 4, 0)
     searchBox:SetSize(220, 20)
     searchBox:SetAutoFocus(false)
     searchBox:SetMaxLetters(40)
@@ -1536,8 +1492,32 @@ function UI:BuildInto(parent)
 
     self._searchBox = searchBox
 
+    self._searchBox = searchBox
+end
+
+--- The scrolling list itself.
+function UI:BuildContent(parent, ctx)
+    local host = parent
+
+    -- The rows sit on a surface rather than straight on the window.
+    -- Created before the scroll frame so it stays behind it: siblings at
+    -- the same frame level draw in creation order.
+    local surface = ns.Widgets and ns.Widgets:Panel(host, "inset")
+    if surface then
+        surface:SetPoint("TOPLEFT", host, "TOPLEFT", 0, 2)
+        surface:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", 0, 0)
+        self._surface = surface
+    end
+
     local scroll = CreateFrame("ScrollFrame", nil, host, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", -4, -6)
+    -- Fills the region the shell gave us, and anchors to nothing else.
+    -- This used to hang off the search box, which is how the page ended
+    -- up owning its own controls: move the box and the list moved with
+    -- it. The shell positions the strips now, so the list only has to
+    -- know where its own region starts.
+    -- Inset from the surface behind it, so the first row does not sit on
+    -- the panel's border art.
+    scroll:SetPoint("TOPLEFT", host, "TOPLEFT", 10, -6)
     scroll:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -26, 8)
     scroll:SetScript("OnMouseWheel", function(sf, delta)
         local newVal = sf:GetVerticalScroll() - delta * 30
@@ -1567,14 +1547,59 @@ function UI:BuildInto(parent)
         if not ok then error(err, 0) end
     end)
 
-    select("spec")
-
-    -- select() has already drawn once, but at build time the scroll
-    -- frame has not been laid out yet and measures zero, so that pass
-    -- could not know how much room it had. One more after the frame
-    -- settles, or the page stays unscaled until something else happens
-    -- to refresh it.
+    -- At build time the scroll frame has not been laid out yet and
+    -- measures zero, so the shell's first Refresh cannot know how much
+    -- room it has. One more after the frame settles, or the page stays
+    -- unscaled until something else happens to refresh it.
     if C_Timer and C_Timer.After then
         C_Timer.After(0, function() self:Refresh() end)
     end
+end
+
+------------------------------------------------------------
+-- Registration
+--
+-- Everything the shell needs to draw this page's furniture. The tab
+-- labels live here rather than in a tab bar this file builds, which is
+-- the whole point of the migration: the page says what its views are,
+-- the shell decides where they go and what they look like.
+------------------------------------------------------------
+if ns.Shell then
+    ns.Shell:RegisterPage({
+        id     = "trinkets",
+        label  = "Trinkets",
+        accent = ACCENT,
+        order  = 30,
+        -- The audit floor. Bars are a share of the row, so a narrower
+        -- content region does not crop them, it just makes the shape of
+        -- the curve unreadable -- which is the only reason to draw them.
+        minWidth = 700,
+
+        subTabs = function()
+            local out = {}
+            for _, def in ipairs(TABS) do
+                out[#out + 1] = { id = def.id, label = def.label, width = 110 }
+            end
+            return out
+        end,
+
+        filters = function(bar, ctx) UI:BuildFilters(bar, ctx) end,
+        Build   = function(host, ctx) UI:BuildContent(host, ctx) end,
+
+        -- The item level ladder belongs to one spec and one fight style.
+        -- Carrying a level across a view change means landing on one the
+        -- new list was never simmed at, and an empty page is a worse
+        -- answer than the default one.
+        OnSubTab = function(id)
+            state.tab = id
+            state.selected = nil
+            state.ilvl = nil
+        end,
+
+        -- ctx.content is the region the shell gave us; _content is the
+        -- scroll child inside it that BuildContent created. Assigning
+        -- one to the other would hand Draw the viewport in place of the
+        -- thing that scrolls, and the list would never move.
+        Refresh = function() UI:Refresh() end,
+    })
 end

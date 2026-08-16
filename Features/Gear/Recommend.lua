@@ -28,14 +28,27 @@ ns.BASE_CREST_COST = 20
 -- Discounted cost (high-watermark achievement)
 ns.DISCOUNTED_CREST_COST = 10
 
--- Account-wide achievement IDs for 50% crest cost discount (Midnight S1)
--- When unlocked, upgrades of that crest type cost 10 instead of 20 on alts
+-- Account-wide achievement IDs for the 50% crest discount ("outgrowing").
+-- When unlocked, upgrades of that crest type cost 10 instead of 20.
+--
+-- Season 2 (Mistcrests). These replace the Season 1 "of the Dawn" set --
+-- 61809 / 42767-42770 -- which were still in place after the season
+-- rolled. That is not a harmless staleness: the ids belong to
+-- achievements a returning player is likely to HAVE, so the discount
+-- read as earned on tracks where it is not, and every cost calculation
+-- downstream halved. It is why 80 Champion crests were reported as
+-- eight upgrades rather than four.
+--
+-- The numbering is not contiguous -- Hero skips 62413 and Myth skips
+-- 62415 -- so these cannot be derived from the first id and have to be
+-- recorded. Verify against wowhead.com/achievement=<id> when the season
+-- rolls again.
 ns.DISCOUNT_ACHIEVEMENTS = {
-    Adventurer = 61809, -- Adventurer of the Dawn
-    Veteran    = 42767, -- Veteran of the Dawn
-    Champion   = 42768, -- Champion of the Dawn
-    Hero       = 42769, -- Hero of the Dawn
-    Myth       = 42770, -- Myth of the Dawn
+    Adventurer = 62410, -- Adventurer of the Mist
+    Veteran    = 62411, -- Veteran of the Mist
+    Champion   = 62412, -- Champion of the Mist
+    Hero       = 62414, -- Hero of the Mist
+    Myth       = 62416, -- Myth of the Mist
 }
 
 -- Cache achievement status (checked once per session)

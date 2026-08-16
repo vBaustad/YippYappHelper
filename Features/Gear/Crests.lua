@@ -125,6 +125,12 @@ function ns:GetCrestInfo()
                 totalEarned = info.totalEarned or 0,
                 seasonCap = info.useTotalEarnedForMaxQty and info.maxQuantity or 0,
                 icon = info.iconFileID,
+                -- The currency's real rarity and id, both of which the
+                -- API already returns and this was discarding. `color`
+                -- above is our own track legend -- Hero orange, Myth red
+                -- -- and is not what the game calls these currencies.
+                quality = info.quality,
+                currencyID = crest.id,
             })
         end
     end

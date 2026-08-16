@@ -26,14 +26,7 @@ app:SetScript("OnDragStart", app.StartMoving)
 app:SetScript("OnDragStop", app.StopMovingOrSizing)
 app:SetClampedToScreen(true)
 app:SetFrameStrata("HIGH")
-app:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    edgeSize = 1,
-    insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-})
-app:SetBackdropColor(0.03, 0.03, 0.03, 0.92)
-app:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+ns.Widgets:Apply(app, "panel")
 ns.SmoothFrame(app)
 app:Hide()
 ns.AppFrame = app
@@ -88,15 +81,7 @@ headerOverlay:SetFrameLevel(app:GetFrameLevel() + 100)
 local closeBtn = CreateFrame("Button", nil, headerOverlay, "BackdropTemplate")
 closeBtn:SetSize(20, 20)
 closeBtn:SetPoint("RIGHT", app, "TOPRIGHT", -8, -(HEADER_H + HEADER_GAP) / 2)
-closeBtn:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    edgeSize = 1,
-    insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-})
-closeBtn:SetBackdropColor(0.10, 0.10, 0.10, 0.9)
-closeBtn:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
-
+ns.Widgets:Apply(closeBtn, "row")
 local closeLabel = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 closeLabel:SetPoint("CENTER", 0, 0)
 closeLabel:SetText("×")
@@ -118,14 +103,7 @@ closeBtn:SetScript("OnClick", function() app:Hide() end)
 local settingsBtn = CreateFrame("Button", nil, headerOverlay, "BackdropTemplate")
 settingsBtn:SetSize(70, 20)
 settingsBtn:SetPoint("RIGHT", closeBtn, "LEFT", -4, 0)
-settingsBtn:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    edgeSize = 1,
-    insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-})
-settingsBtn:SetBackdropColor(0.10, 0.10, 0.10, 0.9)
-settingsBtn:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+ns.Widgets:Apply(settingsBtn, "row")
 local settingsLabel = settingsBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 settingsLabel:SetPoint("CENTER", 0, 0)
 settingsLabel:SetText("Settings")
@@ -202,15 +180,7 @@ ns.ApplyTextShadow(homeSub)
 local backBtn = CreateFrame("Button", nil, headerOverlay, "BackdropTemplate")
 backBtn:SetSize(60, 22)
 backBtn:SetPoint("LEFT", app, "TOPLEFT", PAD, -(HEADER_H + HEADER_GAP) / 2)
-backBtn:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 8,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-backBtn:SetBackdropColor(0.12, 0.12, 0.12, 1)
-backBtn:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.6)
-
+ns.Widgets:Apply(backBtn, "row")
 local backFs = backBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 backFs:SetPoint("CENTER")
 backFs:SetText("|cffaaaaaa< Back|r")
@@ -245,14 +215,7 @@ local function MakePage(id)
     local inner = CreateFrame("Frame", nil, c, "BackdropTemplate")
     inner:SetPoint("TOPLEFT", 0, -10)
     inner:SetPoint("BOTTOMRIGHT", 0, 0)
-    inner:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-        insets = { left = 0, right = 0, top = 0, bottom = 0 },
-    })
-    inner:SetBackdropColor(0.04, 0.04, 0.04, 0.95)
-    inner:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+    ns.Widgets:Apply(inner, "panel")
     inner:SetFrameLevel(c:GetFrameLevel())
     c.inner = inner
     pages[id] = c
@@ -266,14 +229,7 @@ homePage:SetPoint("BOTTOMRIGHT", 0, 0)
 local homeInner = CreateFrame("Frame", nil, homePage, "BackdropTemplate")
 homeInner:SetPoint("TOPLEFT", 0, -HEADER_GAP)
 homeInner:SetPoint("BOTTOMRIGHT", 0, 0)
-homeInner:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    edgeSize = 1,
-    insets = { left = 0, right = 0, top = 0, bottom = 0 },
-})
-homeInner:SetBackdropColor(0.04, 0.04, 0.04, 0.95)
-homeInner:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+ns.Widgets:Apply(homeInner, "panel")
 homeInner:SetFrameLevel(homePage:GetFrameLevel())
 
 ------------------------------------------------------------
@@ -479,8 +435,11 @@ local function EnterPage(id)
         if ns.RefreshMythicPlus then ns:RefreshMythicPlus() end
 
     elseif id == "trinkets" then
-        if ns.TrinketUI and ns.TrinketUI.BuildInto then
-            ns.TrinketUI:BuildInto(pages.trinkets)
+        -- Mounted rather than built: the shell owns the sub-tab strip
+        -- and the filter strip, and hands the page only its content
+        -- region. Mount is idempotent, so this is also the refresh.
+        if ns.Shell then
+            ns.Shell:Mount("trinkets", pages.trinkets.inner or pages.trinkets)
         end
 
     elseif id == "bis" then
@@ -545,14 +504,7 @@ end)
 local charBar = CreateFrame("Frame", nil, homePage, "BackdropTemplate")
 charBar:SetSize(CW, 50)
 charBar:SetPoint("TOPLEFT", homePage, "TOPLEFT", PAD, -PAD)
-charBar:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 10,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-charBar:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-charBar:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+ns.Widgets:Apply(charBar, "inset")
 ns.SmoothFrame(charBar)
 
 local charSpecFs = charBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -617,15 +569,7 @@ local RefreshDashboard
 local profileBtn = CreateFrame("Button", nil, charBar, "BackdropTemplate")
 profileBtn:SetSize(140, 34)
 profileBtn:SetPoint("RIGHT", -8, 0)
-profileBtn:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 8,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-profileBtn:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
-profileBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
-
+ns.Widgets:Apply(profileBtn, "row")
 -- The button showed only the value ("Normal"), which reads as a status
 -- rather than a control -- and nothing on screen said what it governed.
 -- Name it, and put the consequence in the tooltip.
@@ -660,14 +604,7 @@ local profileDropdown = CreateFrame("Frame", "YippYappProfileDropdown", UIParent
 profileDropdown:SetSize(220, 10)
 profileDropdown:SetFrameStrata("DIALOG")
 profileDropdown:SetClampedToScreen(true)
-profileDropdown:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 12,
-    insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-})
-profileDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-profileDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+ns.Widgets:Apply(profileDropdown, "row")
 ns.SmoothFrame(profileDropdown)
 profileDropdown:EnableMouse(true)
 profileDropdown:Hide()
@@ -795,14 +732,7 @@ for i, ct in ipairs(CREST_TRACKS) do
     local bar = CreateFrame("Frame", nil, homePage, "BackdropTemplate")
     bar:SetSize(CREST_W, CREST_BAR_H)
     bar:SetPoint("TOPLEFT", homePage, "TOPLEFT", x, CREST_ROW_Y)
-    bar:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    bar:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-    bar:SetBackdropBorderColor(ct.r * 0.4, ct.g * 0.4, ct.b * 0.4, 0.6)
+    ns.Widgets:Apply(bar, "inset")
     ns.SmoothFrame(bar)
 
     -- Track name (top-left, colored)
@@ -842,14 +772,7 @@ local function MakeSummaryPanel(parent, x, y, w, h, titleText, accentRGB)
     local p = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     p:SetSize(w, h)
     p:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    p:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    p:SetBackdropColor(0.07, 0.07, 0.07, 0.92)
-    p:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.6)
+    ns.Widgets:Apply(p, "inset")
     ns.SmoothFrame(p)
 
     -- Title bar: slightly darker strip behind the title for weight
@@ -1390,14 +1313,7 @@ end
 for i, def in ipairs(NAV_DEFS) do
     local btn = CreateFrame("Button", nil, homePage, "BackdropTemplate")
     btn:SetSize(NAV_W, NAV_H)
-    btn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    btn:SetBackdropColor(0.10, 0.10, 0.10, 1)
-    btn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(btn, "row")
     ns.SmoothFrame(btn)
     ns.AddGlowHighlight(btn, 0.08)
 

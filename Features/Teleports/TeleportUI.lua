@@ -3,11 +3,17 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Teleport UI: clickable dungeon & raid teleport tiles
 ------------------------------------------------------------
-local PAD = 12
+-- Padding comes from the shell, not from here. Eight pages had picked
+-- their own -- 12 in four of them, 14 in three -- so every page sat to a
+-- different rhythm from the chrome around it and from each other. One
+-- source means a spacing change lands everywhere at once.
+local PAD = (ns.Shell and ns.Shell.PAD) or 12
 local TILE_SIZE = 48
 local TILE_GAP = 5
 local HEADER_H = 20
-local SECTION_GAP = 8
+local SECTION_GAP = 12
+-- Breathing room between a group's panel edge and its tiles.
+local PANEL_PAD = 10
 
 ------------------------------------------------------------
 -- Teleport data.
@@ -272,14 +278,7 @@ frame:SetScript("OnDragStart", frame.StartMoving)
 frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 frame:SetClampedToScreen(true)
 frame:SetFrameStrata("HIGH")
-frame:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+ns.Widgets:Apply(frame, "panel")
 ns.SmoothFrame(frame)
 frame:Hide()
 ns.TeleportFrame = frame
@@ -396,6 +395,54 @@ local function AcquireTex(parent)
     return tex
 end
 
+-- Group panels.
+--
+-- Each expansion sits on its own surface rather than under a rule. A
+-- divider says "a new list starts here"; a panel says "this is one
+-- thing", which is what an expansion's teleports are, and it is most of
+-- why Vaultloom's lists read as sections instead of one long column.
+--
+-- Pooled like everything else here, and skinned on acquire rather than
+-- on create: the skin can change between refreshes.
+local panelPool = {}
+local panelPoolIdx = 0
+
+local function AcquirePanel(parent)
+    panelPoolIdx = panelPoolIdx + 1
+    local p = panelPool[panelPoolIdx]
+    if not p then
+        p = CreateFrame("Frame", nil, parent)
+        panelPool[panelPoolIdx] = p
+    else
+        p:SetParent(parent)
+    end
+    if ns.Widgets then ns.Widgets:Apply(p, "inset") end
+    p:ClearAllPoints()
+    p:Show()
+    return p
+end
+
+--- A pooled section heading, so the expansion groups carry the same
+--- title-and-divider the dashboard and every other page use. They were
+--- raw fontstrings: the right words, but none of the shared styling, so
+--- nine expansion headings read as nine loose labels rather than as the
+--- page's structure.
+local titlePool, titlePoolIdx = {}, 0
+local function AcquireTitle(parent, text)
+    titlePoolIdx = titlePoolIdx + 1
+    local t = titlePool[titlePoolIdx]
+    if not t then
+        t = ns.Widgets:SectionTitle(parent, text)
+        titlePool[titlePoolIdx] = t
+    else
+        t:SetParent(parent)
+        t:SetText(text)
+    end
+    t:ClearAllPoints()
+    t:Show()
+    return t
+end
+
 local function ResetPools()
     for i = 1, btnPoolIdx do btnPool[i]:Hide() end
     btnPoolIdx = 0
@@ -403,6 +450,10 @@ local function ResetPools()
     fsPoolIdx = 0
     for i = 1, texPoolIdx do texPool[i]:Hide() end
     texPoolIdx = 0
+    for i = 1, panelPoolIdx do panelPool[i]:Hide() end
+    panelPoolIdx = 0
+    for i = 1, titlePoolIdx do titlePool[i]:Hide() end
+    titlePoolIdx = 0
 end
 
 ------------------------------------------------------------
@@ -419,7 +470,11 @@ function ns:RefreshTeleports()
     if cw < 10 then cw = (ns:GetAppFrameSize()) - PAD * 2 end
     local y = 0
 
-    local tilesPerRow = math.floor((cw + TILE_GAP) / (TILE_SIZE + TILE_GAP))
+    -- Fitted to the panel's interior, not the scroll width: the tiles now
+    -- sit inside a padded surface, and sizing them to the full width put
+    -- the last column of every row under the panel's right edge.
+    local tileArea = cw - PANEL_PAD * 2
+    local tilesPerRow = math.floor((tileArea + TILE_GAP) / (TILE_SIZE + TILE_GAP))
     if tilesPerRow < 1 then tilesPerRow = 1 end
 
     -- Count how many teleports the player has
@@ -439,39 +494,54 @@ function ns:RefreshTeleports()
     -- Summary line
     local summaryFs = AcquireFS(content, "GameFontNormalSmall")
     summaryFs:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-    summaryFs:SetText("|cff888888" .. knownCount .. " / " .. totalCount .. " teleports unlocked|r")
+    summaryFs:SetText("|cff" .. ns.Widgets:Hex("muted") .. knownCount .. " / " .. totalCount .. " teleports unlocked|r")
     y = y - 18
 
     for _, group in ipairs(DISPLAY_GROUPS) do
-        -- Check if any entry in group is known
-        local anyKnown = false
+        -- Per-group tally. The page already counted the whole collection
+        -- for the summary; saying "6 / 9" per expansion is what turns a
+        -- wall of tiles into something you can act on, because it names
+        -- which expansion still owes you ports.
+        local groupKnown = 0
         for _, entry in ipairs(group.entries) do
-            if EntryKnown(entry) then anyKnown = true; break end
+            if EntryKnown(entry) then groupKnown = groupKnown + 1 end
         end
+        local anyKnown = groupKnown > 0
 
-        -- Header divider
-        local div = AcquireTex(content)
-        div:SetHeight(1)
-        div:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-        div:SetPoint("TOPRIGHT", content, "TOPLEFT", cw, y)
-        div:SetColorTexture(0.2, 0.2, 0.2, 0.5)
-        y = y - 4
+        -- Header, above its panel rather than inside it, so the panel
+        -- edge does not cut between a title and what it titles.
+        -- Colours from the skin rather than literal greys, so an
+        -- expansion heading here matches a section heading anywhere else
+        -- and follows a skin change with everything around it.
+        local hdr = AcquireTitle(content, ("|cff%s%s|r"):format(
+            ns.Widgets:Hex(anyKnown and "text" or "faint"), group.header))
+        hdr:SetPoint("TOPLEFT", content, "TOPLEFT", 2, y)
+        hdr:SetPoint("RIGHT", content, "RIGHT", -2, 0)
 
-        -- Header
-        local hdr = AcquireFS(content, "GameFontNormal")
-        hdr:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-        if anyKnown then
-            hdr:SetText("|cffdddddd" .. group.header .. "|r")
-        else
-            hdr:SetText("|cff555555" .. group.header .. "|r")
-        end
+        local tally = AcquireFS(content, "GameFontNormalSmall")
+        tally:SetPoint("TOPRIGHT", content, "TOPLEFT", cw - 2, y)
+        tally:SetJustifyH("RIGHT")
+        local complete = groupKnown == #group.entries
+        tally:SetText(("|cff%s%d / %d|r"):format(
+            ns.Widgets:Hex(complete and "good" or anyKnown and "muted" or "faint"),
+            groupKnown, #group.entries))
         y = y - HEADER_H
+
+        -- The panel behind this group's tiles. Sized after the tiles are
+        -- placed, since the row count depends on the window width.
+        local rowsNeeded = math.ceil(#group.entries / tilesPerRow)
+        local panelH = rowsNeeded * (TILE_SIZE + 12 + TILE_GAP) - TILE_GAP + PANEL_PAD * 2
+        local panel = AcquirePanel(content)
+        panel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+        panel:SetSize(cw, panelH)
+
+        y = y - PANEL_PAD
 
         -- Tiles
         for i, entry in ipairs(group.entries) do
             local col = (i - 1) % tilesPerRow
             local row = math.floor((i - 1) / tilesPerRow)
-            local tx = col * (TILE_SIZE + TILE_GAP)
+            local tx = PANEL_PAD + col * (TILE_SIZE + TILE_GAP)
             local ty = y - row * (TILE_SIZE + 12 + TILE_GAP)
 
             -- spellID, not entry.id: a returning dungeon has more than
@@ -482,6 +552,12 @@ function ns:RefreshTeleports()
             local tile = AcquireBtn(content)
             tile:SetSize(TILE_SIZE, TILE_SIZE + 12)
             tile:SetPoint("TOPLEFT", content, "TOPLEFT", tx, ty)
+            -- Left on its own backdrop deliberately. The fill is
+            -- transparent and the BORDER is the state -- known teleports
+            -- are outlined, unknown ones are not -- so this is a signal
+            -- drawn with backdrop calls, not a surface. Routing it
+            -- through the skin would both make it opaque and leave the
+            -- SetBackdropBorderColor below with no backdrop to colour.
             tile:SetBackdrop({
                 bgFile   = "Interface\\Buttons\\WHITE8x8",
                 edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -515,7 +591,7 @@ function ns:RefreshTeleports()
                 local first = short:match("^(%S+)")
                 if first and #first >= 3 then short = first end
             end
-            tile._label:SetText(known and ("|cffcccccc" .. short .. "|r") or ("|cff444444" .. short .. "|r"))
+            tile._label:SetText(known and ("|cff" .. ns.Widgets:Hex("text") .. short .. "|r") or ("|cff444444" .. short .. "|r"))
 
             -- Secure click to cast
             if known then
@@ -553,8 +629,11 @@ function ns:RefreshTeleports()
             end)
         end
 
-        local numRows = math.ceil(#group.entries / tilesPerRow)
-        y = y - numRows * (TILE_SIZE + 12 + TILE_GAP) + TILE_GAP - SECTION_GAP
+        -- Past the tiles, then past the panel's bottom padding. y was
+        -- already moved down by the top padding before the tiles were
+        -- placed, so only the bottom one is left to account for here.
+        y = y - rowsNeeded * (TILE_SIZE + 12 + TILE_GAP) + TILE_GAP
+            - PANEL_PAD - SECTION_GAP
     end
 
     content:SetWidth(cw)
@@ -575,14 +654,7 @@ function ns:SetTeleportAppMode(enabled, contentWidth, contentHeight)
         frame:SetSize(contentWidth or dw, contentHeight or (dh - 34))
         scrollFrame:SetPoint("TOPLEFT", PAD, -18)
     else
-        frame:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-        frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+        ns.Widgets:Apply(frame, "panel")
         closeBtn:Show()
         titleFs:Show()
         frame:SetMovable(true)

@@ -62,13 +62,7 @@ local function EnsureBuffIconFrame(idx, parent, size)
     if f then return f end
     f = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     f:SetSize(size, size)
-    f:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-        insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-    })
-    f:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
+    ns.Widgets:Apply(f, "inset")
     f.tex = f:CreateTexture(nil, "ARTWORK")
     f.tex:SetPoint("TOPLEFT", 1, -1)
     f.tex:SetPoint("BOTTOMRIGHT", -1, 1)
@@ -111,14 +105,7 @@ raidFrame:SetScript("OnDragStart", raidFrame.StartMoving)
 raidFrame:SetScript("OnDragStop", raidFrame.StopMovingOrSizing)
 raidFrame:SetClampedToScreen(true)
 raidFrame:SetFrameStrata("HIGH")
-raidFrame:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-raidFrame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-raidFrame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+ns.Widgets:Apply(raidFrame, "panel")
 ns.SmoothFrame(raidFrame)
 raidFrame:Hide()
 ns.RaidFrame = raidFrame
@@ -147,19 +134,23 @@ function ns:SetRaidAppMode(enabled, contentWidth, contentHeight)
         raidFrame:EnableMouse(false)
         raidFrame:SetBackdrop(nil)
         close:Hide()
+        -- A tab bar with one tab in it tells you nothing, and
+        -- the shell already names the page above it. Hidden in
+        -- app mode; kept for the standalone window, where it is
+        -- the only thing labelling the view.
+        overviewTab:Hide()
+        -- The container reserved 44px for the title and that one tab.
+        -- With both hidden the shell names the page above, so that space
+        -- is a gap rather than a margin.
+        overviewContainer:ClearAllPoints()
+        overviewContainer:SetPoint("TOPLEFT", 0, -4)
+        overviewContainer:SetPoint("BOTTOMRIGHT", 0, 0)
         local dw, dh = ns:GetAppFrameSize()
         raidFrame:SetSize(contentWidth or dw, contentHeight or (dh - 34))
     else
         raidFrame:SetMovable(true)
         raidFrame:EnableMouse(true)
-        raidFrame:SetBackdrop({
-            bgFile = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        raidFrame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-        raidFrame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+        ns.Widgets:Apply(raidFrame, "panel")
         close:Show()
         raidFrame:SetSize(RAID_WIDTH, RAID_HEIGHT)
     end
@@ -226,14 +217,7 @@ end
 rescanBtn = CreateFrame("Button", nil, raidFrame, "BackdropTemplate")
 rescanBtn:SetSize(60, 18)
 rescanBtn:SetPoint("TOPRIGHT", -36, -44)
-rescanBtn:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 10,
-    insets = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-rescanBtn:SetBackdropColor(0.15, 0.15, 0.15, 1)
-rescanBtn:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+ns.Widgets:Apply(rescanBtn, "row")
 rescanBtn:SetFrameLevel(raidFrame:GetFrameLevel() + 10)
 rescanBtn:Hide()
 
@@ -266,15 +250,25 @@ divider:SetColorTexture(0.5, 0.5, 0.5, 0.6)
 
 local headerName = tierContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerName:SetPoint("TOPLEFT", 14, -26)
-headerName:SetText("|cffaaaaaaPlayer|r")
+headerName:SetText(ns.Widgets:Tint("muted", "Player"))
 
 local headerTier = tierContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerTier:SetPoint("TOPLEFT", 138, -26)
-headerTier:SetText("|cffaaaaaaTier|r")
+headerTier:SetText(ns.Widgets:Tint("muted", "Tier"))
 
 local headerPieces = tierContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerPieces:SetPoint("TOPLEFT", 212, -26)
-headerPieces:SetText("|cffaaaaaaPieces|r")
+headerPieces:SetText(ns.Widgets:Tint("muted", "Pieces"))
+
+-- A surface under the tier list, created before the scroll frame so it
+-- stays behind it -- siblings at the same frame level draw in creation
+-- order. Anchored below the column headers so they stay on the page
+-- rather than on the panel.
+local tierSurface = ns.Widgets and ns.Widgets:Panel(tierContainer, "inset")
+if tierSurface then
+    tierSurface:SetPoint("TOPLEFT", 6, -36)
+    tierSurface:SetPoint("BOTTOMRIGHT", -8, 6)
+end
 
 local scrollFrame = CreateFrame("ScrollFrame", nil, tierContainer, "UIPanelScrollFrameTemplate")
 scrollFrame:SetPoint("TOPLEFT", 12, -40)
@@ -341,23 +335,25 @@ end
 ------------------------------------------------------------
 -- Shared section layout helpers (consistent across all tabs)
 ------------------------------------------------------------
-local SECTION_PAD = 14
+-- Padding comes from the shell, not from here. Every page had picked
+-- its own -- 12 in four, 14 in three -- so each sat to a different
+-- rhythm from the chrome around it and from the others. One source
+-- means a spacing change lands everywhere at once.
+local SECTION_PAD = (ns.Shell and ns.Shell.PAD) or 14
 local SECTION_LINE_H = 20
-local SECTION_HEADER_COLOR = "ffaaaaaa"
 
-local function MakeSectionHeader(parent, y, text)
-    local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    fs:SetPoint("TOPLEFT", SECTION_PAD, y)
-    fs:SetText("|c" .. SECTION_HEADER_COLOR .. text .. "|r")
-    return fs, y - SECTION_LINE_H
-end
-
+-- This is the page's only rule. It was briefly emptied on the assumption
+-- it followed a section header that carried its own -- but that header
+-- factory turned out never to have been called, so emptying this left
+-- the page with no divider at all. Colour comes from the skin now, which
+-- is the part that was actually worth changing.
 local function MakeDivider(parent, y)
     local div = parent:CreateTexture(nil, "ARTWORK")
     div:SetHeight(1)
     div:SetPoint("TOPLEFT", SECTION_PAD - 2, y + 2)
     div:SetPoint("RIGHT", parent, "RIGHT", -SECTION_PAD, 0)
-    div:SetColorTexture(0.3, 0.3, 0.3, 0.5)
+    local r, g, b = ns.Widgets:Color("muted")
+    div:SetColorTexture(r, g, b, 0.30)
     return y - 8
 end
 
@@ -479,7 +475,7 @@ function ns:RefreshRaidOverview()
     if #roster == 0 then
         local fs = OvAcquire(overviewContainer, "GameFontNormal")
         fs:SetPoint("TOPLEFT", SECTION_PAD, -8)
-        fs:SetText("|cff888888Not in a group|r")
+        fs:SetText(ns.Widgets:Tint("muted", "Not in a group"))
         return
     end
 
@@ -744,7 +740,7 @@ function ns:RefreshRaidGroups(roster, startY)
 
                 local hdr = GrpAcquire(groupsContainer, "GameFontNormal")
                 hdr:SetPoint("TOPLEFT", groupsContainer, "TOPLEFT", x, cellY)
-                hdr:SetText("|c" .. SECTION_HEADER_COLOR .. "Group " .. g .. "|r")
+                hdr:SetText("|cff" .. ns.Widgets:Hex("muted") .. "Group " .. g .. "|r")
 
                 for j, p in ipairs(groups[g]) do
                     local mfs = GrpAcquire(groupsContainer, "GameFontNormal")
@@ -844,7 +840,7 @@ function ns:RefreshRaidPerformance()
     if not dpsSession or not dpsSession.combatSources or #dpsSession.combatSources == 0 then
         local fs = PerfAcquire("GameFontNormal")
         fs:SetPoint("TOPLEFT", SECTION_PAD, y)
-        fs:SetText("|cff888888No combat data available|r")
+        fs:SetText(ns.Widgets:Tint("muted", "No combat data available"))
         local fs2 = PerfAcquire("GameFontNormalSmall")
         fs2:SetPoint("TOPLEFT", SECTION_PAD, y - SECTION_LINE_H)
         fs2:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
@@ -863,7 +859,7 @@ function ns:RefreshRaidPerformance()
 
     local duration = dpsSession.durationSeconds
     local durStr = duration and string.format(" |cff555555(%dm %ds)|r", math.floor(duration / 60), duration % 60) or ""
-    hdr:SetText("|c" .. SECTION_HEADER_COLOR .. "DPS|r" .. durStr)
+    hdr:SetText("|cff" .. ns.Widgets:Hex("muted") .. "DPS|r" .. durStr)
     y = y - SECTION_LINE_H
 
     -- Sort by DPS descending
@@ -929,7 +925,7 @@ function ns:RefreshRaidPerformance()
     splitFs:SetPoint("TOPLEFT", SECTION_PAD, y)
     ns.ApplyTextShadow(splitFs)
     local splitColor = imbalanced and "|cffff4444" or "|cff00ff00"
-    splitFs:SetText("|c" .. SECTION_HEADER_COLOR .. "Avg DPS per player|r")
+    splitFs:SetText("|cff" .. ns.Widgets:Hex("muted") .. "Avg DPS per player|r")
     y = y - SECTION_LINE_H
 
     local splitDetail = PerfAcquire("GameFontNormal")
@@ -948,7 +944,7 @@ function ns:RefreshRaidPerformance()
     if avoidSession and avoidSession.combatSources and #avoidSession.combatSources > 0 then
         local ahdr = PerfAcquire("GameFontNormal")
         ahdr:SetPoint("TOPLEFT", rightX, ry)
-        ahdr:SetText("|c" .. SECTION_HEADER_COLOR .. "Avoidable Damage Taken|r")
+        ahdr:SetText("|cff" .. ns.Widgets:Hex("muted") .. "Avoidable Damage Taken|r")
         ns.ApplyTextShadow(ahdr)
         ry = ry - SECTION_LINE_H
 
@@ -980,7 +976,7 @@ function ns:RefreshRaidPerformance()
     if deathSession and deathSession.combatSources and #deathSession.combatSources > 0 then
         local dhdr = PerfAcquire("GameFontNormal")
         dhdr:SetPoint("TOPLEFT", rightX, ry)
-        dhdr:SetText("|c" .. SECTION_HEADER_COLOR .. "Deaths|r")
+        dhdr:SetText("|cff" .. ns.Widgets:Hex("muted") .. "Deaths|r")
         ns.ApplyTextShadow(dhdr)
         ry = ry - SECTION_LINE_H
 
@@ -1012,7 +1008,7 @@ function ns:RefreshRaidPerformance()
     if intSession and intSession.combatSources and #intSession.combatSources > 0 then
         local ihdr = PerfAcquire("GameFontNormal")
         ihdr:SetPoint("TOPLEFT", rightX, ry)
-        ihdr:SetText("|c" .. SECTION_HEADER_COLOR .. "Interrupts|r")
+        ihdr:SetText("|cff" .. ns.Widgets:Hex("muted") .. "Interrupts|r")
         ns.ApplyTextShadow(ihdr)
         ry = ry - SECTION_LINE_H
 

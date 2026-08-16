@@ -162,6 +162,9 @@ ns.SuggestEntries = {}
 ------------------------------------------------------------
 -- App mode: strip chrome, scale up equip panel, rearrange crests
 ------------------------------------------------------------
+-- Space between the paper doll and the suggestions beneath it.
+local GEAR_STACK_GAP = 10
+
 local APP_SCALE = math.max(1.0, 1.2 * ns:GetUIScale())  -- scale with screen, min 1.0
 
 -- Create larger crest display frames for app mode (2-column layout)
@@ -200,66 +203,119 @@ ns.AppCrestFrames = appCrestFrames
 
 ns._gearAppMode = false
 
-function ns:SetGearAppMode(enabled, contentWidth)
+function ns:SetGearAppMode(enabled, contentWidth, contentHeight)
     ns._gearAppMode = enabled
     if enabled then
         container:SetMovable(false)
         container:EnableMouse(false)
-        equipPanel:SetBackdrop(nil)
-        infoPanel:SetBackdrop(nil)
+        -- Both panels used to be stripped to nothing in app mode, which
+        -- made sense when the app frame was a plain dark box behind them.
+        -- On the shell they read as two ungrouped piles of widgets, so
+        -- they take a surface from the skin instead.
+        if ns.Widgets then
+            ns.Widgets:Apply(equipPanel, "inset")
+            ns.Widgets:Apply(infoPanel, "inset")
+        else
+            equipPanel:SetBackdrop(nil)
+            infoPanel:SetBackdrop(nil)
+        end
         close:Hide()
         equipTitle:Hide()
         equipDivider:Hide()
 
-        -- Scale up the equip panel — all icons, labels, glows scale uniformly
-        equipPanel:SetScale(APP_SCALE)
-        local scaledEquipW = math.floor(EQUIP_PANEL_WIDTH * APP_SCALE)
-        local scaledEquipH = math.floor(FRAME_HEIGHT * APP_SCALE)
         local totalW = contentWidth or ns:GetAppFrameSize()
 
-        -- Center the VISIBLE slot content within the app frame
-        -- Slots run from y=-78 (Head) to BOTTOM+60 (Weapons) in a 500px panel
-        -- In logical coords: top content at 78, bottom content at 500-60=440
-        -- Content block = 440-78 = 362 logical, 362*1.2 = 434 visual
-        -- App content area = 546px. Center: (546 - 434) / 2 = 56px from content top
-        -- Content starts at 78*1.2 = 94px visual from panel top
-        -- So panel top should be at: 56 - 94 = -38 from container top (shift up 38)
+        local totalH = contentHeight or select(2, ns:GetAppFrameSize()) or 580
+
+        -- Stacked, not side by side.
+        --
+        -- Beside each other, neither half got what it needed: the doll is
+        -- a 440-wide two-column slot list whose content stops well short
+        -- of its panel, and the suggestions had a 280px column to write
+        -- sentences in. Both were mostly air, in different directions.
+        --
+        -- Stacking gives the doll the height it wants and hands the
+        -- suggestions the full width, which is the dimension a list of
+        -- "slot -- what to do about it" actually uses.
+        -- The suggestions take what their content needs, not a share of
+        -- the page. At 30% they were claiming 198px to show three and a
+        -- half cards, and every pixel of that came off the doll -- which
+        -- is height-bound, so it was the expensive place to be generous.
+        local SUGGEST_H = math.min(math.max(150, math.floor(totalH * 0.26)), 220)
+        local dollH = totalH - SUGGEST_H - GEAR_STACK_GAP
+
+        -- The doll scales to whichever runs out first, its height or the
+        -- page's width. Fixed at 1.2 it was sized for a 960px window and
+        -- overflowed everything narrower.
+        -- Cap raised past APP_SCALE's 1.2. That constant was a
+        -- magnification limit for a fixed-size window; here the region
+        -- decides, and clamping to 1.2 would only bite on a screen wide
+        -- AND tall enough to want more.
+        --
+        -- In practice height binds and width does not come close: the
+        -- doll is 440x500, so a 700-wide region would allow 1.59x on
+        -- width while the height budget allows about 0.96x. Making it
+        -- meaningfully wider means changing the doll's own two-column
+        -- layout, not this arithmetic.
+        local scale = math.min(1.45,
+            dollH / FRAME_HEIGHT,
+            totalW / EQUIP_PANEL_WIDTH)
+        equipPanel:SetScale(scale)
+        local scaledEquipW = math.floor(EQUIP_PANEL_WIDTH * scale)
+
+        -- Centred: the doll is narrower than the page even scaled up, and
+        -- left-aligning it would leave a hole down the right.
+        --
+        -- Offsets are in the panel's own units because SetScale changes
+        -- what a point means to its children -- dividing by scale is what
+        -- keeps it centred rather than drifting as the scale changes.
         equipPanel:ClearAllPoints()
-        -- Center equip panel vertically in the app content area
-        local appH = ns:GetAppFrameSize() and select(2, ns:GetAppFrameSize()) or 580
-        local scaledH = math.floor(FRAME_HEIGHT * APP_SCALE)
-        local yShift = math.max(0, math.floor((scaledH - appH + 34) / 2) + 34)
-        equipPanel:SetPoint("TOPLEFT", container, "TOPLEFT", 0, yShift)
+        equipPanel:SetPoint("TOPLEFT", container, "TOPLEFT",
+            math.floor((totalW - scaledEquipW) / 2) / scale, 0)
 
-        local newInfoW = totalW - scaledEquipW
-
-        -- Position info panel after the scaled equip panel, full height
-        infoPanel:SetSize(newInfoW, FRAME_HEIGHT)
         infoPanel:ClearAllPoints()
-        infoPanel:SetPoint("TOPLEFT", container, "TOPLEFT", scaledEquipW, 0)
-        container:SetSize(totalW, FRAME_HEIGHT)
-        suggestContent:SetWidth(newInfoW - 42)
+        infoPanel:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -(dollH + GEAR_STACK_GAP))
+        infoPanel:SetSize(totalW, SUGGEST_H)
+        container:SetSize(totalW, totalH)
+        suggestContent:SetWidth(totalW - 42)
 
         -- Hide default small crest rows (prevent RefreshCrests from showing them)
         for _, row in ipairs(ns.CrestFrames) do row:Hide() end
         crestHeader:Hide()
         crestDivider:Hide()
 
-        -- Show large 2-column crests
-        local colW = math.floor((newInfoW - 28 - 10) / 2)
+        -- Show large 2-column crests.
+        --
+        -- Width from totalW: the info panel used to be a narrow column
+        -- beside the doll and is now a full-width band beneath it, so
+        -- newInfoW no longer exists. Left as it was this line did
+        -- arithmetic on nil, which is an error rather than a bad layout.
+        local colW = math.floor((totalW - 28 - 10) / 2)
         local rowH = 36
+
+        -- The shell keeps a currency rail on every page, so inside it
+        -- this grid is the same five numbers a second time, six inches
+        -- apart. Suppressed there and the space given to suggestions,
+        -- which had been pushed into the bottom third of the panel to
+        -- make room for the duplicate.
+        local railOwnsCrests = ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen()
+
         for i, af in ipairs(appCrestFrames) do
-            local col = (i - 1) % 2
-            local r = math.floor((i - 1) / 2)
-            af:SetSize(colW, rowH)
-            af:ClearAllPoints()
-            af:SetPoint("TOPLEFT", infoPanel, "TOPLEFT", 14 + col * (colW + 10), -14 - r * (rowH + 6))
-            af:Show()
+            if railOwnsCrests then
+                af:Hide()
+            else
+                local col = (i - 1) % 2
+                local r = math.floor((i - 1) / 2)
+                af:SetSize(colW, rowH)
+                af:ClearAllPoints()
+                af:SetPoint("TOPLEFT", infoPanel, "TOPLEFT", 14 + col * (colW + 10), -14 - r * (rowH + 6))
+                af:Show()
+            end
         end
 
         -- Move suggestions header below the crest grid
         local crestRows = math.ceil(#ns.CRESTS / 2)
-        local crestBlockH = crestRows * (rowH + 6) + 10
+        local crestBlockH = railOwnsCrests and 0 or (crestRows * (rowH + 6) + 10)
         suggestHeader:ClearAllPoints()
         suggestHeader:SetPoint("TOPLEFT", infoPanel, "TOPLEFT", 14, -14 - crestBlockH)
         suggestDivider:ClearAllPoints()

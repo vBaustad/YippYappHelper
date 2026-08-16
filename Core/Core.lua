@@ -578,6 +578,39 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
+    -- /yh shell — the new three-region window. Kept behind its own
+    -- command while the pages move across, so the old front door
+    -- keeps working for anyone who opens the addon mid-migration.
+    -- /yh skin [id] — list or choose. Restoring here rather than at
+    -- load because saved variables are not available until then.
+    if cmd == "skin" then
+        if not ns.Skin then return end
+        if arg and arg ~= "" then
+            if ns.Skin:SetActive(strlower(arg)) then
+                print("|cff00ff00YippYapp|r skin: " .. strlower(arg))
+            else
+                print("|cff00ff00YippYapp|r no such skin: " .. arg)
+            end
+            return
+        end
+        print("|cff00ff00=== YippYapp skins ===|r")
+        for _, info in ipairs(ns.Skin:GetProviders()) do
+            local mark = (info.id == ns.Skin:ActiveID()) and "|cff00ff00*|r " or "  "
+            print(mark .. info.id .. (info.beta and " |cff33aaff(beta)|r" or "")
+                .. " |cff888888" .. info.description .. "|r")
+        end
+        return
+    end
+
+    if cmd == "shell" then
+        if ns.Shell and ns.Shell.Toggle then
+            ns.Shell:Toggle(arg ~= "" and arg or nil)
+        else
+            print("|cff00ff00YippYapp|r shell not loaded — restart WoW, not /reload.")
+        end
+        return
+    end
+
     -- /yh whatsnew — reopen the update notice
     if cmd == "whatsnew" then
         if ns.WhatsNew then ns.WhatsNew:Show() end

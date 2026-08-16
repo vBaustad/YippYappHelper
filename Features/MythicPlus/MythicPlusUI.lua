@@ -3,7 +3,11 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Mythic Plus UI: keystones, ratings, and dungeon scores
 ------------------------------------------------------------
-local PAD = 12
+-- Padding comes from the shell, not from here. Eight pages had picked
+-- their own -- 12 in four of them, 14 in three -- so every page sat to a
+-- different rhythm from the chrome around it and from each other. One
+-- source means a spacing change lands everywhere at once.
+local PAD = (ns.Shell and ns.Shell.PAD) or 12
 local ROW_H = 18
 local SECTION_GAP = 10
 
@@ -21,14 +25,7 @@ frame:SetScript("OnDragStart", frame.StartMoving)
 frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 frame:SetClampedToScreen(true)
 frame:SetFrameStrata("HIGH")
-frame:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+ns.Widgets:Apply(frame, "panel")
 ns.SmoothFrame(frame)
 frame:Hide()
 ns.MythicPlusFrame = frame
@@ -91,6 +88,27 @@ for i, def in ipairs(tabDefs) do
     tabButtons[def.id] = tab
 end
 
+--- Switch view from outside.
+---
+--- The shell owns the sub-tab strip -- that is the contract's whole
+--- point, and five pages were each drawing their own row of tabs a few
+--- pixels from where the shell puts them. This is the entry point it
+--- drives; the internal row survives for the standalone window.
+function ns:SetMythicPlusTab(id)
+    if not tabButtons[id] or activeTab == id then return end
+    activeTab = id
+    ns:RefreshMythicPlus()
+end
+
+--- The tabs the shell should offer for this page.
+function ns:GetMythicPlusTabs()
+    local out = {}
+    for i, def in ipairs(tabDefs) do
+        out[i] = { id = def.id, label = def.label, width = 96 }
+    end
+    return out
+end
+
 -- Temporary slash command to toggle the fake-group test mode.
 -- TODO: remove once real data flows cover all the layout edge cases.
 SLASH_YYHMPLUSTEST1 = "/yyhmplustest"
@@ -139,7 +157,7 @@ local function RefreshVaultHeader()
     end
     vaultLabelFs:ClearAllPoints()
     vaultLabelFs:SetPoint("RIGHT", vaultContainer, "RIGHT", -(numSlots * (VAULT_BTN_W + VAULT_BTN_GAP) + 2), 0)
-    vaultLabelFs:SetText("|cff888888Vault|r")
+    vaultLabelFs:SetText(ns.Widgets:Tint("muted", "Vault"))
     vaultLabelFs:Show()
 
     for si, activityInfo in ipairs(activities) do
@@ -186,7 +204,7 @@ local function RefreshVaultHeader()
                 slotBtn._fs:SetText("|cff00ff00" .. lvl .. "|r")
             end
         else
-            slotBtn._fs:SetText("|cff999999" .. activityInfo.progress .. "/" .. activityInfo.threshold .. "|r")
+            slotBtn._fs:SetText("|cff" .. ns.Widgets:Hex("muted") .. activityInfo.progress .. "/" .. activityInfo.threshold .. "|r")
         end
 
         local isFilled = filled
@@ -238,6 +256,14 @@ end
 ------------------------------------------------------------
 -- Content area (below tabs)
 ------------------------------------------------------------
+-- A surface under the content area, created first so it sits behind it:
+-- siblings at the same frame level draw in creation order.
+local contentSurface = ns.Widgets and ns.Widgets:Panel(frame, "inset")
+if contentSurface then
+    contentSurface:SetPoint("TOPLEFT", PAD - 8, TAB_Y - TAB_H + 2)
+    contentSurface:SetPoint("BOTTOMRIGHT", -PAD + 8, PAD - 6)
+end
+
 local content = CreateFrame("Frame", nil, frame)
 content:SetPoint("TOPLEFT", PAD, TAB_Y - TAB_H - 4)
 content:SetPoint("BOTTOMRIGHT", -PAD, PAD)
@@ -405,7 +431,7 @@ local function GetGroupMembers()
 end
 
 local function ColorRating(score)
-    if not score or score == 0 then return "|cff555555-|r" end
+    if not score or score == 0 then return ns.Widgets:Tint("faint", "-") end
     local r, g, b = ns:GetRatingColor(score)
     return string.format("|cff%02x%02x%02x%d|r", r * 255, g * 255, b * 255, score)
 end
@@ -445,15 +471,7 @@ local function RefreshGuildTab()
     if not refreshBtn then
         refreshBtn = CreateFrame("Button", nil, frame, "BackdropTemplate")
         refreshBtn:SetSize(78, 20)
-        refreshBtn:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 8,
-            insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-        })
-        refreshBtn:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-        refreshBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.7)
-
+        ns.Widgets:Apply(refreshBtn, "row")
         local fs = refreshBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         fs:SetPoint("CENTER")
         fs:SetText("Refresh")
@@ -504,7 +522,7 @@ local function RefreshGuildTab()
         if IsInGuild() then
             line2:SetText("|cff888888Guildies need YippYapp installed to share keys.\nHit Refresh to ping the guild — replies arrive over the next few seconds.|r")
         else
-            line2:SetText("|cff888888You're not in a guild.|r")
+            line2:SetText(ns.Widgets:Tint("muted", "You're not in a guild."))
         end
         return
     end
@@ -575,7 +593,7 @@ local function RefreshGuildTab()
         ksDung:SetPoint("BOTTOMLEFT", ksIcon, "BOTTOMRIGHT", 42, 1)
         ksDung:SetWidth(KS_CARD_W - KS_ICON_SIZE - 56)
         ksDung:SetFont(STANDARD_TEXT_FONT, 9, "")
-        ksDung:SetText("|cff999999" .. ks.dungeonName .. "|r")
+        ksDung:SetText("|cff" .. ns.Widgets:Hex("muted") .. ks.dungeonName .. "|r")
     end
 end
 
@@ -740,7 +758,7 @@ function ns:RefreshMythicPlus()
         if keyMapIDs[map.mapID] then
             nameFs:SetText("|cff00cc00" .. short .. "|r")
         else
-            nameFs:SetText("|cff888888" .. short .. "|r")
+            nameFs:SetText("|cff" .. ns.Widgets:Hex("muted") .. short .. "|r")
         end
     end
     y = y - 14
@@ -757,6 +775,9 @@ function ns:RefreshMythicPlus()
         local tile = AcquireSecureBtn(content)
         tile:SetSize(ICON_SIZE, ICON_SIZE)
         tile:SetPoint("TOPLEFT", content, "TOPLEFT", ix, y)
+        -- Left on its own backdrop deliberately: transparent fill, and
+        -- the border is the signal (this dungeon matches your keystone).
+        -- See the matching tile in Features/Teleports/TeleportUI.lua.
         tile:SetBackdrop({
             bgFile   = "Interface\\Buttons\\WHITE8x8",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -805,7 +826,7 @@ function ns:RefreshMythicPlus()
             scoreFs:SetText(tostring(score))
             scoreFs:SetTextColor(r, g, b)
         else
-            scoreFs:SetText("|cff555555—|r")
+            scoreFs:SetText(ns.Widgets:Tint("faint", "—"))
         end
 
         -- Tooltip + teleport
@@ -1052,14 +1073,14 @@ function ns:RefreshMythicPlus()
             ksDung:SetPoint("BOTTOMLEFT", ksIcon, "BOTTOMRIGHT", 58, 1)
             ksDung:SetWidth(ksCardW - KS_ICON_SIZE - 74)
             ksDung:SetFont(STANDARD_TEXT_FONT, 9, "")
-            ksDung:SetText("|cff999999" .. ks.dungeonName .. "|r")
+            ksDung:SetText("|cff" .. ns.Widgets:Hex("muted") .. ks.dungeonName .. "|r")
 
             ksY = ksY - (KS_CARD_H + KS_CARD_GAP)
         end
     else
         local noKs = AcquireFS(content)
         noKs:SetPoint("TOPLEFT", content, "TOPLEFT", 4, ksY)
-        noKs:SetText("|cff555555No keystones in group|r")
+        noKs:SetText(ns.Widgets:Tint("faint", "No keystones in group"))
         ksY = ksY - ROW_H
     end
 
@@ -1209,7 +1230,7 @@ function ns:RefreshMythicPlus()
                     nameFs:SetPoint("LEFT", dIcon, "RIGHT", 5, 0)
                     nameFs:SetFont(STANDARD_TEXT_FONT, 11, "")
                     nameFs:SetWidth(goalW - FOCUS_ICON - 70)
-                    nameFs:SetText("|cffcccccc" .. short .. "|r")
+                    nameFs:SetText("|cff" .. ns.Widgets:Hex("text") .. short .. "|r")
 
                     -- Target key level on right
                     local lvlFs = AcquireFS(content)
@@ -1243,6 +1264,8 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
     if enabled then
         frame:SetBackdrop(nil)
         closeBtn:Hide()
+        -- The shell's strip replaces this one.
+        for _, tab in pairs(tabButtons) do tab:Hide() end
         titleFs:Hide()
         frame:SetMovable(false)
         frame:EnableMouse(false)
@@ -1258,17 +1281,13 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
         vaultContainer:ClearAllPoints()
         vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, appTabY)
         content:ClearAllPoints()
-        content:SetPoint("TOPLEFT", PAD, appTabY - TAB_H - 4)
+        -- No TAB_H: the page's own tab row is hidden in app mode
+        -- because the shell draws one, so reserving its height
+        -- just pushes the content down past empty space.
+        content:SetPoint("TOPLEFT", PAD, appTabY - 4)
         content:SetPoint("BOTTOMRIGHT", -PAD, PAD)
     else
-        frame:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-        frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+        ns.Widgets:Apply(frame, "panel")
         closeBtn:Show()
         titleFs:Show()
         frame:SetMovable(true)

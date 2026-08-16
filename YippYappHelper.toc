@@ -26,6 +26,26 @@ Core\YippYappHelper.lua
 Core\Data.lua
 Core\Core.lua
 
+# Shared right-click menu for items. Loaded with Core so every
+# page can raise the same one; the actions it offers come from
+# whichever feature files happen to be present.
+Core\ItemMenu.lua
+
+# Reads the player's own currency list so the rail lists what the
+# game lists. Only touches ns.CRESTS at call time, so it does not
+# need Features\Gear\Crests.lua loaded ahead of it.
+Core\Currency.lua
+
+# The shell contract: page registry, region sizes, and the rule
+# that pages never draw their own chrome. Skin providers supply
+# the chrome instead, so two looks share one layout.
+Core\Widgets.lua
+Core\Shell.lua
+Core\Skin.lua
+Core\SkinBlizzlike.lua
+Core\ShellFrame.lua
+Core\ShellHome.lua
+
 # Crests is referenced by Core\UI.lua at load-time, so load it first.
 Features\Gear\Crests.lua
 Features\Gear\Recommend.lua
@@ -58,6 +78,10 @@ Features\Consumables\ConsumablesUI.lua
 Features\Trinkets\TrinketData.lua
 Features\Trinkets\TrinketIndex.lua
 Features\Trinkets\TrinketUI.lua
+
+# Registers the remaining pages against the shell contract.
+# Last, because it adapts frames the feature files create.
+Core\ShellPages.lua
 
 # Reads Features\Gear\ClassGuideData.lua, loaded above.
 Features\Gear\BisUI.lua

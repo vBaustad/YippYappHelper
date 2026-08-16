@@ -1149,7 +1149,7 @@ local function renderDungeon(mapID)
         w.iconRow:SetPoint("TOPRIGHT", w, "TOPRIGHT", -14, -30)
 
         if #list == 0 then
-            w.fallback:SetText("|cff999999No recommendations for this spec yet|r")
+            w.fallback:SetText(ns.Widgets:Tint("muted", "No recommendations for this spec yet"))
             w:SetHeight(72)
             return
         end
@@ -1199,7 +1199,7 @@ local function renderDungeon(mapID)
     w.iconRow:SetPoint("TOPRIGHT", w, "TOPRIGHT", -14, descBottom - 26)
 
     if #entries == 0 then
-        w.fallback:SetText(("|cff999999No recommendations seeded for %s yet — add entries to UA.DUNGEONS[%d].byClass.%s|r"):format(class or "your class", mapID, class or ""))
+        w.fallback:SetText(("|cff%sNo recommendations seeded for %s yet — add entries to UA.DUNGEONS[%d].byClass.%s|r"):format(ns.Widgets:Hex("muted"), class or "your class", mapID, class or ""))
         w:SetHeight(math.max(180, 120 + (w.desc:GetStringHeight() or 40)))
         return
     end

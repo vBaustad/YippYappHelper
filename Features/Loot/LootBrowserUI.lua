@@ -3,7 +3,11 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Constants
 ------------------------------------------------------------
-local PAD           = 14
+-- Padding comes from the shell, not from here. Every page had picked
+-- its own -- 12 in four, 14 in three -- so each sat to a different
+-- rhythm from the chrome around it and from the others. One source
+-- means a spacing change lands everywhere at once.
+local PAD           = (ns.Shell and ns.Shell.PAD) or 14
 local ICON_SIZE     = 34
 local ICON_GAP      = 10
 local ROW_H         = 54
@@ -369,16 +373,13 @@ local function AcquireIcon(parent)
                         GameTooltip:AddLine(("|cffffcc00Drops at %d%s — same as equipped.|r%s")
                             :format(u.expected, at, rank))
                     else
-                        GameTooltip:AddLine(("|cff888888Drops at %d%s — %d below your %d.|r%s")
-                            :format(u.expected, at, -u.delta, u.equipped, rank))
+                        GameTooltip:AddLine(("|cff%sDrops at %d%s — %d below your %d.|r%s"):format(ns.Widgets:Hex("muted"), u.expected, at, -u.delta, u.equipped, rank))
                     end
                     if u.journalIlvl then
-                        GameTooltip:AddLine(("|cff888888Encounter Journal says %d for this key level.|r")
-                            :format(u.journalIlvl))
+                        GameTooltip:AddLine(("|cff%sEncounter Journal says %d for this key level.|r"):format(ns.Widgets:Hex("muted"), u.journalIlvl))
                     end
                     if u.vault and u.vault ~= u.expected then
-                        GameTooltip:AddLine(("|cff888888From the Great Vault: %d%s.|r")
-                            :format(u.vault,
+                        GameTooltip:AddLine(("|cff%sFrom the Great Vault: %d%s.|r"):format(ns.Widgets:Hex("muted"), u.vault,
                                 u.vaultRank and (" (" .. u.vaultRank .. ")") or ""))
                     end
                     if u.mythNine then
@@ -489,14 +490,7 @@ end
 local function MakeChip(parent, text, width, onClick)
     local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
     btn:SetSize(width, 24)
-    btn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    btn:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-    btn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(btn, "row")
     ns.SmoothFrame(btn)
     ns.AddGlowHighlight(btn, 0.06)
 
@@ -537,14 +531,7 @@ local function UpdateLayout(f)
         end
         f._filterDivider:Show()
     else
-        f._filterCard:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-        })
-        f._filterCard:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-        f._filterCard:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        ns.Widgets:Apply(f._filterCard, "inset")
         if f._filterDivider then f._filterDivider:Hide() end
     end
 
@@ -577,14 +564,7 @@ function ns:CreateLootBrowserFrame()
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 16,
-        insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
-    f:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+    ns.Widgets:Apply(f, "panel")
     ns.SmoothFrame(f)
     f:Hide()
     ns.LootBrowserFrame = f
@@ -606,14 +586,7 @@ function ns:CreateLootBrowserFrame()
     filterCard:SetHeight(FILTER_H)
     filterCard:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, -HEADER_H)
     filterCard:SetPoint("TOPRIGHT", f, "TOPRIGHT", -PAD, -HEADER_H)
-    filterCard:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    filterCard:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-    filterCard:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(filterCard, "inset")
     ns.SmoothFrame(filterCard)
     f._filterCard = filterCard
 
@@ -625,14 +598,7 @@ function ns:CreateLootBrowserFrame()
     local classBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
     classBtn:SetSize(130, 24)
     classBtn:SetPoint("LEFT", 10, 0)
-    classBtn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    classBtn:SetBackdropColor(0.06, 0.06, 0.06, 0.9)
-    classBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(classBtn, "row")
     ns.SmoothFrame(classBtn)
     ns.AddGlowHighlight(classBtn, 0.06)
 
@@ -651,14 +617,7 @@ function ns:CreateLootBrowserFrame()
     classDropdown:SetSize(160, 10)
     classDropdown:SetFrameStrata("DIALOG")
     classDropdown:SetClampedToScreen(true)
-    classDropdown:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 12,
-        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    classDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-    classDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+    ns.Widgets:Apply(classDropdown, "row")
     ns.SmoothFrame(classDropdown)
     classDropdown:EnableMouse(true)
     classDropdown:Hide()
@@ -726,14 +685,7 @@ function ns:CreateLootBrowserFrame()
     local specBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
     specBtn:SetSize(140, 24)
     specBtn:SetPoint("LEFT", classDiv, "RIGHT", 10, 0)
-    specBtn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    specBtn:SetBackdropColor(0.06, 0.06, 0.06, 0.9)
-    specBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(specBtn, "row")
     ns.SmoothFrame(specBtn)
     ns.AddGlowHighlight(specBtn, 0.06)
 
@@ -759,14 +711,7 @@ function ns:CreateLootBrowserFrame()
     specDropdown:SetSize(160, 10)
     specDropdown:SetFrameStrata("DIALOG")
     specDropdown:SetClampedToScreen(true)
-    specDropdown:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 12,
-        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    specDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-    specDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+    ns.Widgets:Apply(specDropdown, "row")
     ns.SmoothFrame(specDropdown)
     specDropdown:EnableMouse(true)
     specDropdown:Hide()
@@ -841,7 +786,7 @@ function ns:CreateLootBrowserFrame()
                             row._nameFs:SetText("|cff00ccff" .. specName .. "|r")
                             row._check:SetText("|cff00ccff>|r")
                         else
-                            row._nameFs:SetText("|cffaaaaaa" .. specName .. "|r")
+                            row._nameFs:SetText("|cff" .. ns.Widgets:Hex("muted") .. specName .. "|r")
                             row._check:SetText("")
                         end
                         row:Show()
@@ -876,14 +821,7 @@ function ns:CreateLootBrowserFrame()
     local slotBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
     slotBtn:SetSize(120, 24)
     slotBtn:SetPoint("LEFT", div1, "RIGHT", 10, 0)
-    slotBtn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    slotBtn:SetBackdropColor(0.06, 0.06, 0.06, 0.9)
-    slotBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(slotBtn, "row")
     ns.SmoothFrame(slotBtn)
     ns.AddGlowHighlight(slotBtn, 0.06)
 
@@ -904,14 +842,7 @@ function ns:CreateLootBrowserFrame()
     slotDropdown:SetSize(160, 10)
     slotDropdown:SetFrameStrata("DIALOG")
     slotDropdown:SetClampedToScreen(true)
-    slotDropdown:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 12,
-        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    slotDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-    slotDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+    ns.Widgets:Apply(slotDropdown, "row")
     ns.SmoothFrame(slotDropdown)
     slotDropdown:EnableMouse(true)
     slotDropdown:Hide()
@@ -1011,7 +942,7 @@ function ns:CreateLootBrowserFrame()
                     row._nameFs:SetText("|cff00ccff" .. entry.name .. "|r")
                     row._check:SetText("|cff00ccff>|r")
                 else
-                    row._nameFs:SetText("|cffaaaaaa" .. entry.name .. "|r")
+                    row._nameFs:SetText("|cff" .. ns.Widgets:Hex("muted") .. entry.name .. "|r")
                     row._check:SetText("")
                 end
             end
@@ -1172,14 +1103,7 @@ function ns:CreateLootBrowserFrame()
     diffDropdown:SetSize(150, 40)
     diffDropdown:SetPoint("TOPRIGHT", diffBtn, "BOTTOMRIGHT", 0, -2)
     diffDropdown:SetFrameStrata("DIALOG")
-    diffDropdown:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 12,
-        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    diffDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-    diffDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+    ns.Widgets:Apply(diffDropdown, "row")
     ns.SmoothFrame(diffDropdown)
     diffDropdown:EnableMouse(true)
     diffDropdown:Hide()
@@ -1201,14 +1125,26 @@ function ns:CreateLootBrowserFrame()
     -- ================================================================
     -- CONTENT AREA (no scroll — content fits within frame)
     -- ================================================================
+    -- A surface under the results, created before the content frame so it
+    -- stays behind it: siblings at the same frame level draw in creation
+    -- order. Anchored to the content rather than to the page, so the
+    -- app-mode layout pass that re-anchors the content carries it along
+    -- instead of leaving the two to drift apart.
+    local contentSurface = ns.Widgets and ns.Widgets:Panel(f, "inset")
+    f._contentSurface = contentSurface
+
     local content = CreateFrame("Frame", nil, f)
     content:SetPoint("TOPLEFT", viewTabBar, "BOTTOMLEFT", 0, -4)
     content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PAD, 8)
     f._content = content
+    if contentSurface then
+        contentSurface:SetPoint("TOPLEFT", content, "TOPLEFT", -8, 6)
+        contentSurface:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 8, -4)
+    end
 
     local loadingText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     loadingText:SetPoint("CENTER")
-    loadingText:SetText("|cff555555Scanning loot...|r")
+    loadingText:SetText(ns.Widgets:Tint("faint", "Scanning loot..."))
     loadingText:Hide()
     f._loadingText = loadingText
 
@@ -1383,7 +1319,7 @@ function ns:LootBrowser_BuildDifficultyDropdown()
         row._name:SetTextColor(isCurrent and 0.4 or 0.85,
                                isCurrent and 0.85 or 0.85,
                                isCurrent and 1.0 or 0.85)
-        row._ilvl:SetText("|cff888888" .. tostring(choice.ilvl or "?") .. "|r")
+        row._ilvl:SetText("|cff" .. ns.Widgets:Hex("muted") .. tostring(choice.ilvl or "?") .. "|r")
 
         row._key = choice.key
         row:SetScript("OnClick", function(self)
@@ -1533,7 +1469,7 @@ function ns:LootBrowser_RefreshDisplay()
 
     local cache = ns:GetInstanceCache()
     if not cache then
-        f._noItemsText:SetText("|cff555555Could not load instance data. Try /reload.|r")
+        f._noItemsText:SetText(ns.Widgets:Tint("faint", "Could not load instance data. Try /reload."))
         f._noItemsText:Show()
         return
     end
@@ -1890,7 +1826,7 @@ function ns:LootBrowser_RefreshDisplay()
         -- Say so explicitly rather than leaving a header with nothing
         -- under it, which reads as a loading failure.
         if hideEmpty and rendered == 0 then
-            RenderRow("|cff555555No drops for this filter|r", nil, sourceType,
+            RenderRow(ns.Widgets:Tint("faint", "No drops for this filter"), nil, sourceType,
                 nil, {}, true, true, nil, { sourceName = inst.name })
         end
     end
@@ -1905,7 +1841,7 @@ function ns:LootBrowser_RefreshDisplay()
             local data = shapedLookup[inst.name]
             local count = data and #(data.items or {}) or 0
             RenderSectionHeader(inst.name,
-                count > 0 and ("|cff888888%d item%s|r"):format(
+                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"), 
                     count, count ~= 1 and "s" or "") or nil,
                 { 0.06, 0.12, 0.18, 0.6 })
             RenderBossRows(inst, "dungeon", data, true)
@@ -1917,7 +1853,7 @@ function ns:LootBrowser_RefreshDisplay()
             local data = shapedLookup[raidInst.name]
             local count = data and #(data.items or {}) or 0
             RenderSectionHeader(raidInst.name,
-                count > 0 and ("|cff888888%d item%s|r"):format(
+                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"), 
                     count, count ~= 1 and "s" or "") or nil)
             RenderBossRows(raidInst, "raid", data)
         end
@@ -1939,17 +1875,15 @@ function ns:SetLootBrowserAppMode(enabled, contentWidth, contentHeight)
         f:SetSize(contentWidth or dw, contentHeight or (dh - 34))
         f._titleFs:Hide()
         f._closeBtn:Hide()
+        -- Only the two view tabs, NOT the bar: the difficulty chip lives
+        -- on it too, and hiding the bar would take the item level
+        -- selector with it.
+        if f._dungeonTab then f._dungeonTab:Hide() end
+        if f._raidTab then f._raidTab:Hide() end
     else
         f:SetMovable(true)
         f:EnableMouse(true)
-        f:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
-        f:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+        ns.Widgets:Apply(f, "panel")
         local dw, dh = ns:GetAppFrameSize()
         f:SetSize(dw, dh)
         f._titleFs:Show()
@@ -1960,3 +1894,16 @@ function ns:SetLootBrowserAppMode(enabled, contentWidth, contentHeight)
     UpdateLayout(f)
 end
 
+
+
+--- The views this page offers the shell's sub-tab strip.
+---
+--- Dungeons and Raids were a tab row drawn a few pixels below where the
+--- shell puts one. The switcher itself already existed as
+--- ns:LootBrowser_SwitchView, so this only had to name the views.
+function ns:GetLootBrowserTabs()
+    return {
+        { id = "dungeon", label = "Dungeons", width = 100 },
+        { id = "raid",    label = "Raids",    width = 100 },
+    }
+end

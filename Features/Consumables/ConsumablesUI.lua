@@ -6,7 +6,11 @@ local _, ns = ...
 ------------------------------------------------------------
 local PANEL_WIDTH  = 460
 local PANEL_HEIGHT = 540
-local PAD = 14
+-- Padding comes from the shell, not from here. Eight pages had picked
+-- their own -- 12 in four of them, 14 in three -- so every page sat to a
+-- different rhythm from the chrome around it and from each other. One
+-- source means a spacing change lands everywhere at once.
+local PAD = (ns.Shell and ns.Shell.PAD) or 14
 local ROW_H = 24
 local ICON_SIZE = 20
 local FILTER_H = 34
@@ -103,14 +107,7 @@ frame:SetScript("OnDragStart", frame.StartMoving)
 frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 frame:SetClampedToScreen(true)
 frame:SetFrameStrata("HIGH")
-frame:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+ns.Widgets:Apply(frame, "panel")
 ns.SmoothFrame(frame)
 frame:Hide()
 ns.ConsumablesFrame = frame
@@ -149,6 +146,17 @@ function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
     if enabled then
         frame:SetBackdrop(nil)
         closeBtn:Hide()
+        -- The shell draws the strip in app mode.
+        for _, btn in pairs(tabButtons) do btn:Hide() end
+        -- ...so the 28px this content reserved for that row is now dead
+        -- space at the top of the page. Reclaim it. Hiding a control
+        -- without re-anchoring what sat below it is how a migration
+        -- leaves a page looking emptier than it was.
+        for _, scroll in pairs(scrolls) do
+            scroll:ClearAllPoints()
+            scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -2)
+            scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -26, 8)
+        end
         titleFs:Hide()
         specFs:Hide()
         frame:SetMovable(false)
@@ -171,14 +179,7 @@ function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
         end
         filterBar._divider:Show()
     else
-        frame:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        frame:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
-        frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+        ns.Widgets:Apply(frame, "panel")
         closeBtn:Show()
         titleFs:Show()
         specFs:Show()
@@ -189,14 +190,7 @@ function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
         filterBar:ClearAllPoints()
         filterBar:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -HEADER_H)
         filterBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, -HEADER_H)
-        filterBar:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-        })
-        filterBar:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-        filterBar:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        ns.Widgets:Apply(filterBar, "row")
         if filterBar._divider then filterBar._divider:Hide() end
     end
 end
@@ -208,14 +202,7 @@ filterBar = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 filterBar:SetHeight(FILTER_H)
 filterBar:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -34)
 filterBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, -34)
-filterBar:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 10,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-filterBar:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-filterBar:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+ns.Widgets:Apply(filterBar, "row")
 ns.SmoothFrame(filterBar)
 
 -- Class label
@@ -229,14 +216,7 @@ ns.ApplyTextShadow(classLabel)
 local classBtn = CreateFrame("Button", nil, filterBar, "BackdropTemplate")
 classBtn:SetSize(140, 24)
 classBtn:SetPoint("LEFT", classLabel, "RIGHT", 6, 0)
-classBtn:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 8,
-    insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-classBtn:SetBackdropColor(0.06, 0.06, 0.06, 0.9)
-classBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+ns.Widgets:Apply(classBtn, "row")
 ns.SmoothFrame(classBtn)
 ns.AddGlowHighlight(classBtn, 0.06)
 
@@ -257,14 +237,7 @@ local classDropdown = CreateFrame("Frame", "YippYappConsumClassDropdown", UIPare
 classDropdown:SetSize(160, 10)
 classDropdown:SetFrameStrata("DIALOG")
 classDropdown:SetClampedToScreen(true)
-classDropdown:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 12,
-    insets   = { left = 3, right = 3, top = 3, bottom = 3 },
-})
-classDropdown:SetBackdropColor(0.06, 0.06, 0.06, 0.97)
-classDropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.8)
+ns.Widgets:Apply(classDropdown, "row")
 ns.SmoothFrame(classDropdown)
 classDropdown:EnableMouse(true)
 classDropdown:Hide()
@@ -365,14 +338,7 @@ local specButtons = {}
 for i = 1, 4 do
     local btn = CreateFrame("Button", nil, filterBar, "BackdropTemplate")
     btn:SetHeight(24)
-    btn:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    btn:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-    btn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+    ns.Widgets:Apply(btn, "row")
     ns.SmoothFrame(btn)
     ns.AddGlowHighlight(btn, 0.06)
 
@@ -490,6 +456,16 @@ for i, def in ipairs(TAB_DEFS) do
     -- ours to control. These were plain frames pinned to the panel edge,
     -- so a long guide simply drew past the bottom and over whatever was
     -- behind it.
+    -- A surface under the guide, created before the scroll frame so it
+    -- stays behind it -- siblings at the same frame level draw in
+    -- creation order.
+    local surface = ns.Widgets and ns.Widgets:Panel(frame, "inset")
+    if surface then
+        surface:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD - 8, -20)
+        surface:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 2)
+        ns.ConsumablesSurface = surface
+    end
+
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -28)
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -26, 8)
@@ -498,6 +474,16 @@ for i, def in ipairs(TAB_DEFS) do
         sf:SetVerticalScroll(math.max(0, math.min(v, sf:GetVerticalScrollRange())))
     end)
     scroll:Hide()
+
+    -- The surface follows the scroll frame rather than being shown and
+    -- hidden alongside it at every call site. This one is toggled per
+    -- tab from several places, and a surface that has to be remembered
+    -- separately is a surface left floating behind an empty page.
+    if surface then
+        surface:Hide()
+        scroll:HookScript("OnShow", function() surface:Show() end)
+        scroll:HookScript("OnHide", function() surface:Hide() end)
+    end
 
     local container = CreateFrame("Frame", nil, scroll)
     container:SetSize(math.max(frame:GetWidth() - 40, 400), 400)
@@ -527,6 +513,26 @@ for id, btn in pairs(tabButtons) do
 end
 
 UpdateTabs()
+
+--- The views this page offers, and how to switch them.
+---
+--- The shell owns the sub-tab strip; this page was drawing its own row a
+--- few pixels from where the shell puts one, which is two tab rows on a
+--- single screen. Its own row still serves the standalone window and is
+--- hidden in app mode.
+function ns:GetConsumablesTabs()
+    local out = {}
+    for i, def in ipairs(TAB_DEFS) do
+        out[i] = { id = def.id, label = def.label, width = 110 }
+    end
+    return out
+end
+
+function ns:SetConsumablesTab(id)
+    if not tabButtons[id] or currentTab == id then return end
+    currentTab = id
+    UpdateTabs()
+end
 
 ------------------------------------------------------------
 -- Object pools (all parented to scrollContent)

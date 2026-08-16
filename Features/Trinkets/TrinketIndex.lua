@@ -506,8 +506,7 @@ local function addTrinketLines(tooltip, itemID)
     end
 
     if #specs > shown then
-        tooltip:AddLine(("|cff666666+%d more specs — see the Trinkets page|r")
-            :format(#specs - shown))
+        tooltip:AddLine(("|cff%s+%d more specs — see the Trinkets page|r"):format(ns.Widgets:Hex("faint"), #specs - shown))
     end
     -- Only when the entire file is behind. Mixed tiers are already
     -- called out on the individual lines by describeRank.

@@ -6,14 +6,24 @@ local _, ns = ...
 
 -- Layout constants
 local FRAME_W, FRAME_H = ns:GetAppFrameSize()
-local PAD         = 14
+-- Padding comes from the shell, not from here. Every page had picked
+-- its own -- 12 in four, 14 in three -- so each sat to a different
+-- rhythm from the chrome around it and from the others. One source
+-- means a spacing change lands everywhere at once.
+local PAD         = (ns.Shell and ns.Shell.PAD) or 14
 local CARD_GAP    = 10
 local SECTION_GAP = 14
 local uiScale     = ns:GetUIScale()
 local CARD_H      = math.floor(100 * uiScale)
 local TITLE_H     = 22
 local CONTENT_TOP = -34
-local CW          = FRAME_W - PAD * 2                        -- 932
+-- Clamped to the shell content region, not the standalone frame width.
+-- GetAppFrameSize is screen-derived and returns around 960, so the four
+-- cards below were laid out to about 930px and rendered into the
+-- shell's 700 -- roughly 230px of overflow off the right edge. This is
+-- the page overflowing its region, not the cards being too wide.
+local SHELL_CW    = ns.Shell and ns.Shell.CONTENT_MIN or FRAME_W
+local CW          = math.min(FRAME_W, SHELL_CW) - PAD * 2
 local COLS        = 4
 local CARD_W      = math.floor((CW - (COLS - 1) * CARD_GAP) / COLS) -- ~225
 
@@ -39,14 +49,7 @@ f:SetScript("OnDragStart", f.StartMoving)
 f:SetScript("OnDragStop", f.StopMovingOrSizing)
 f:SetClampedToScreen(true)
 f:SetFrameStrata("HIGH")
-f:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    edgeSize = 16,
-    insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-})
-f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
-f:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+ns.Widgets:Apply(f, "panel")
 ns.SmoothFrame(f)
 f:Hide()
 ns.ProgressionFrame = f
@@ -55,7 +58,7 @@ ns.ProgressionFrame = f
 -- Season moves to the subtitle slot, matching the app frame's header.
 -- Capture the subtitle too: app mode hides the standalone chrome, and a
 -- subtitle left behind sits under the app's own page title.
-local headerIcon, header, headerSub = ns.MakeWindowHeader(f, "|cffaaaaaaProgression|r",
+local headerIcon, header, headerSub = ns.MakeWindowHeader(f, ns.Widgets:Tint("muted", "Progression"),
     ns.SEASON_NAME or "Midnight Season 2", PAD)
 
 -- ESC to close (skipped when inside the app shell)
@@ -90,14 +93,7 @@ function ns:SetProgressionAppMode(enabled)
         closeBtn:Show()
         f:SetMovable(true)
         f:EnableMouse(true)
-        f:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 16,
-            insets   = { left = 4, right = 4, top = 4, bottom = 4 },
-        })
-        f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
-        f:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+        ns.Widgets:Apply(f, "panel")
         ns.SmoothFrame(f)
     end
 end
@@ -115,26 +111,25 @@ local function MakeCard(col, yPos, crestType)
     local card = CreateFrame("Frame", nil, f, "BackdropTemplate")
     card:SetSize(CARD_W, CARD_H)
     card:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + x, CONTENT_TOP - yPos)
-    card:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    card:SetBackdropColor(0.10, 0.10, 0.10, 0.9)
+    ns.Widgets:Apply(card, "row")
     ns.SmoothFrame(card)
 
+    -- The crest colour rides on the stripe alone now. It used to tint the
+    -- card's backdrop border as well, which no longer works once the skin
+    -- owns the surface -- a skin that draws its border from a nine-slice
+    -- has no backdrop for SetBackdropBorderColor to reach. The stripe was
+    -- always the clearer of the two signals anyway, so it stays and the
+    -- border tint goes.
     local c = crestType and CC[crestType]
+    local stripe = card:CreateTexture(nil, "OVERLAY")
+    stripe:SetSize(3, CARD_H - 10)
+    stripe:SetPoint("LEFT", 4, 0)
     if c then
-        card:SetBackdropBorderColor(c.r * 0.6, c.g * 0.6, c.b * 0.6, 0.7)
-        local stripe = card:CreateTexture(nil, "OVERLAY")
-        stripe:SetSize(3, CARD_H - 10)
-        stripe:SetPoint("LEFT", 4, 0)
         stripe:SetColorTexture(c.r, c.g, c.b, 0.85)
-        ns.DisableSharpening(stripe)
     else
-        card:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        stripe:SetColorTexture(0.35, 0.35, 0.38, 0.55)
     end
+    ns.DisableSharpening(stripe)
     return card
 end
 
@@ -199,11 +194,14 @@ local function CardLine(card, row, label, value, hex)
     end
 end
 
+-- The shell's own section heading, so this page's headings match the
+-- dashboard's and every other page's. It carries the divider with it,
+-- which is why there is no separate rule here any more.
 local function SectionLabel(yPos, text)
-    local s = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    s:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, CONTENT_TOP - yPos)
-    s:SetText(text)
-    ns.ApplyTextShadow(s)
+    local title = ns.Widgets:SectionTitle(f, text)
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, CONTENT_TOP - yPos)
+    title:SetPoint("RIGHT", f, "RIGHT", -PAD, 0)
+    return title
 end
 
 ------------------------------------------------------------
@@ -435,14 +433,7 @@ local function MakePanel(panelCol, title, titleHex)
     local p = CreateFrame("Frame", nil, f, "BackdropTemplate")
     p:SetSize(PW, PH)
     p:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + x, CONTENT_TOP - Y)
-    p:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    p:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-    p:SetBackdropBorderColor(0.2, 0.2, 0.2, 0.5)
+    ns.Widgets:Apply(p, "inset")
     ns.SmoothFrame(p)
 
     local s = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")

@@ -21,7 +21,11 @@ local _, ns = ...
 ns.BisUI = ns.BisUI or {}
 local UI = ns.BisUI
 
-local PAD = 12
+-- Padding comes from the shell, not from here. Eight pages had picked
+-- their own -- 12 in four of them, 14 in three -- so every page sat to a
+-- different rhythm from the chrome around it and from each other. One
+-- source means a spacing change lands everywhere at once.
+local PAD = (ns.Shell and ns.Shell.PAD) or 12
 -- Sized so the whole page fits without scrolling: 8 doll rows at
 -- ICON+GAP must not exceed 16 list rows at ROW_H, and the pair has
 -- to leave room for the stat block and the caveat underneath.
@@ -183,7 +187,37 @@ local function AcquireRow(self, parent)
     return row
 end
 
+--- A skinned surface behind a column.
+---
+--- The doll and the list were two ungrouped piles of widgets side by
+--- side on the page's own background, so nothing said where one ended
+--- and the other began. A surface under each says it without a caption.
+---
+--- Skinned on acquire rather than on create, because the skin can change
+--- between one render and the next.
+local function AcquirePanel(self, parent)
+    self._panels = self._panels or {}
+    self._panelIdx = (self._panelIdx or 0) + 1
+    local p = self._panels[self._panelIdx]
+    if not p then
+        p = CreateFrame("Frame", nil, parent)
+        self._panels[self._panelIdx] = p
+    else
+        p:SetParent(parent)
+    end
+    if ns.Widgets then ns.Widgets:Apply(p, "inset") end
+    p:ClearAllPoints()
+    -- Behind the icons and rows that sit on it, not over them.
+    p:SetFrameLevel(math.max((parent:GetFrameLevel() or 1), 1))
+    p:Show()
+    return p
+end
+
 local function Release(self)
+    for i = 1, (self._panelIdx or 0) do
+        if self._panels[i] then self._panels[i]:Hide() end
+    end
+    self._panelIdx = 0
     for i = 1, (self._rowIdx or 0) do
         if self._rows[i] then self._rows[i]:Hide() end
     end
@@ -394,6 +428,30 @@ local function ownedIlvl(slotID, entry, bags)
     return nil
 end
 
+--- Right-click any row on the page to reach the same item menu the
+--- trinket lists use -- including "remove as best in slot", which has to
+--- be reachable from the doll because that is where a pin is visible.
+---
+--- Only attached where the frame can take clicks at all: the doll draws
+--- some slots as plain textures.
+local function hookMenu(frame, itemID, title)
+    if not (frame.RegisterForClicks and itemID) then return end
+    frame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    local prev = frame:GetScript("OnClick")
+    frame:SetScript("OnClick", function(s, button, ...)
+        if button == "RightButton" then
+            if ns.ShowItemMenu then
+                ns:ShowItemMenu(s, itemID, {
+                    title = title,
+                    onChange = function() UI:Refresh() end,
+                })
+            end
+        elseif prev then
+            prev(s, button, ...)
+        end
+    end)
+end
+
 local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned)
     frame:SetScript("OnEnter", function(s)
         GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
@@ -431,6 +489,111 @@ local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned)
     frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
+-- The reverse of SLOT_INV, for labelling a pinned row that has no guide
+-- entry behind it to borrow a slot name from.
+local SLOT_NAME = {}
+for name, slots in pairs(SLOT_INV) do
+    -- Skip the numbered aliases: "Trinket 1" and "Trinket" both map to
+    -- 13, and the unnumbered one is what the guide data uses.
+    if not name:find("%d$") then
+        for _, invSlot in ipairs(slots) do
+            SLOT_NAME[invSlot] = SLOT_NAME[invSlot] or name
+        end
+    end
+end
+
+------------------------------------------------------------
+-- Your own picks
+--
+-- Deliberately not the favourites store. A favourite is "I am hunting
+-- this" and there can be several for one slot; a pin is "this one goes
+-- here" and there is exactly one per slot. Merging them would mean
+-- starring a fifth trinket quietly rewrote the list.
+--
+-- Keyed by numeric inventory slot, the same key AssignToSlots and the
+-- paper doll already use, so a pin needs no translation to be placed.
+------------------------------------------------------------
+local function PinTable(create, specID)
+    YippYappHelperDB = YippYappHelperDB or {}
+    if not YippYappHelperDB.bisPins then
+        if not create then return nil end
+        YippYappHelperDB.bisPins = {}
+    end
+    local charKey = ns.GetLootCharacterKey and ns:GetLootCharacterKey()
+        or (UnitName("player") .. "-" .. GetRealmName())
+    if not YippYappHelperDB.bisPins[charKey] then
+        if not create then return nil end
+        YippYappHelperDB.bisPins[charKey] = {}
+    end
+    specID = specID or (ns.GetPlayerSpecID and ns:GetPlayerSpecID())
+    if not specID then return nil end
+    if not YippYappHelperDB.bisPins[charKey][specID] then
+        if not create then return nil end
+        YippYappHelperDB.bisPins[charKey][specID] = {}
+    end
+    return YippYappHelperDB.bisPins[charKey][specID]
+end
+
+--- invSlot -> itemID for this spec. Never nil, so callers can index it.
+function ns:GetBisPins(specID)
+    return PinTable(false, specID) or {}
+end
+
+--- True when the item can actually go in that slot. Checked against the
+--- item rather than against whatever asked to pin it.
+function ns:CanPinToSlot(itemID, invSlot)
+    local slots = ns.GetItemSlots and ns:GetItemSlots(itemID)
+    if not slots then return false end
+    for _, s in ipairs(slots) do
+        if s == invSlot then return true end
+    end
+    return false
+end
+
+function ns:SetBisPin(invSlot, itemID, specID)
+    if not (invSlot and itemID) then return false end
+    if not ns:CanPinToSlot(itemID, invSlot) then return false end
+    local tbl = PinTable(true, specID)
+    if not tbl then return false end
+
+    -- The same item cannot hold two slots. Pinning a trinket already
+    -- pinned to the other slot is a move, not a second copy.
+    for slot, id in pairs(tbl) do
+        if id == itemID and slot ~= invSlot then tbl[slot] = nil end
+    end
+    tbl[invSlot] = itemID
+    return true
+end
+
+function ns:ClearBisPin(invSlot, specID)
+    local tbl = PinTable(false, specID)
+    if tbl then tbl[invSlot] = nil end
+end
+
+--- Move a pin to the slot beside it.
+---
+--- With the far slot empty, the pin simply moves: it now overrides that
+--- slot's guide pick, and the one it was overriding is shown again.
+--- With both slots pinned the two trade places rather than one being
+--- dropped -- you chose both, so neither should be discarded to make
+--- room for a move.
+function ns:MoveBisPin(fromSlot, toSlot, specID)
+    if fromSlot == toSlot then return false end
+    local tbl = PinTable(false, specID)
+    local moving = tbl and tbl[fromSlot]
+    if not moving then return false end
+    if not ns:CanPinToSlot(moving, toSlot) then return false end
+
+    local displaced = tbl[toSlot]
+    if displaced and not ns:CanPinToSlot(displaced, fromSlot) then
+        return false
+    end
+
+    tbl[toSlot] = moving
+    tbl[fromSlot] = displaced or nil
+    return true
+end
+
 ------------------------------------------------------------
 -- Assign BiS rows to inventory slots
 ------------------------------------------------------------
@@ -445,8 +608,15 @@ end
 --- nowhere on a doll to draw a third trinket, but dropping those rows
 --- silently would delete real advice from the page, so they come back
 --- separately and are listed as alternatives.
-local function AssignToSlots(bis)
+--- `seed` is the player's own picks, already placed. The guide then
+--- fills what is left, and whatever it can no longer place comes back as
+--- an alternative -- the same route an over-long guide list already
+--- takes, so a pick you override stays visible instead of vanishing.
+local function AssignToSlots(bis, seed)
     local bySlot, spare = {}, {}
+    for invSlot, entry in pairs(seed or {}) do
+        bySlot[invSlot] = entry
+    end
     for _, entry in ipairs(bis or {}) do
         local placed = false
         for _, invSlot in ipairs(SLOT_INV[entry.slot] or {}) do
@@ -498,8 +668,31 @@ function UI:Render(content, width)
         or ("|c" .. ACCENT_HEX .. specKey:gsub("_", " ") .. "|r"))
     ns.ApplyTextShadow(title)
 
+    -- Your pins are placed first so the guide fills in around them.
+    -- A pinned row carries `pinned` so the doll can mark it as yours and
+    -- offer to move or clear it; it has no guide metadata of its own,
+    -- which is the point -- it came from you, not from the guide.
+    -- Both halves of the page read bySlot, so seeding it puts a pin on
+    -- the doll and in the list at once and the guide's displaced pick
+    -- falls through to "Also listed".
+    --
+    -- `source` is where a guide row says which boss drops it, and a pin
+    -- has no guide behind it to ask. Left empty the column would render
+    -- as an item level trailing off into nothing, with no way to tell
+    -- your own choice from the guide's -- which is the one thing a pin
+    -- has to be able to say.
+    local seed = {}
+    for invSlot, itemID in pairs(ns:GetBisPins()) do
+        seed[invSlot] = {
+            itemID = itemID,
+            pinned = true,
+            slot   = SLOT_NAME[invSlot],
+            source = "|cffffd100your pick|r",
+        }
+    end
+
     local unresolved = 0
-    local bySlot, spare = AssignToSlots(data.bis)
+    local bySlot, spare = AssignToSlots(data.bis, seed)
     local bags = ScanBags()
     local have, total, atMax = 0, 0, 0
     for _, def in ipairs(DOLL) do
@@ -529,8 +722,7 @@ function UI:Render(content, width)
     -- first; "6 / 16 equipped, 6 at max rank" is the same fact twice.
     local countText = ("|cffffffff%d|r|cff888888 / %d collected|r"):format(have, total)
     if atMax < have then
-        countText = countText .. ("|cff888888, |r|cffffc83c%d|r|cff888888 at max rank|r")
-            :format(atMax)
+        countText = countText .. ("|cff%s, |r|cffffc83c%d|r|cff888888 at max rank|r"):format(ns.Widgets:Hex("muted"), atMax)
     end
     count:SetText(countText)
     y = y - 22
@@ -541,17 +733,34 @@ function UI:Render(content, width)
     stamp:SetPoint("TOPLEFT", PAD, y)
     local seasonOK = data.season == ns.CLASS_GUIDE_TARGET_SEASON
     stamp:SetText(seasonOK
-        and ("|cff666666" .. (data.season or "") .. "  ·  updated "
+        and ("|cff" .. ns.Widgets:Hex("faint") .. (data.season or "") .. "  ·  updated "
              .. (ns.CLASS_GUIDE_SCRAPED_AT or "?") .. "|r")
         or ("|cffffcc00" .. (data.season or "unknown season") .. " — not yet updated for "
             .. (ns.CLASS_GUIDE_TARGET_SEASON or "") .. "|r"))
     y = y - 20
 
+    y = y - 6
     local topY = y
 
     ------------------------------------------------------------
     -- Doll, left
+    --
+    -- Sits on its own surface. The height is the eight paired rows plus
+    -- the weapon row underneath, which is the doll's fixed shape --
+    -- unlike the list, it does not grow with the guide.
     ------------------------------------------------------------
+    local dollH = 8 * (ICON + GAP) + ICON + 24
+    local dollPanel = AcquirePanel(self, content)
+    dollPanel:SetPoint("TOPLEFT", PAD - 6, topY + 8)
+    dollPanel:SetSize(DOLL_W + 4, dollH)
+
+    -- The list's surface is acquired here, with the doll's, and sized at
+    -- the end once the guide's length is known. Acquiring it after the
+    -- rows would be simpler and wrong: sibling frames at the same level
+    -- draw in creation order, so a panel made last covers the rows it is
+    -- supposed to sit under.
+    local listPanel = AcquirePanel(self, content)
+
     local colL = PAD + 4
     local colR = PAD + DOLL_W - ICON - 4
     local function dollPos(def)
@@ -610,6 +819,7 @@ function UI:Render(content, width)
                 b.tex:SetDesaturated(true)
             end
             hookTooltip(b, entry.itemID, link, dollIlvl, dollRank, ownIlvl, owned)
+            hookMenu(b, entry.itemID, entry.name)
             b.tex:SetAlpha(1)
             local _ = name  -- name is shown in the list, not on the doll
         else
@@ -620,6 +830,40 @@ function UI:Render(content, width)
             b:SetBackdropBorderColor(0.20, 0.20, 0.22, 0.7)
         end
     end
+
+    ------------------------------------------------------------
+    -- Slot summary, under the doll
+    --
+    -- Arsenal pairs its two columns of slots with a line saying what is
+    -- wrong across all of them, and that is the part worth borrowing: a
+    -- doll shows you sixteen states at once and leaves you to add them
+    -- up. The counts come from the same pass that drew the icons, so
+    -- there is no second walk over the slots to disagree with the first.
+    ------------------------------------------------------------
+    local haveCount, bagCount, missingCount = 0, 0, 0
+    for _, def in ipairs(DOLL) do
+        local entry = bySlot[def.slot]
+        if entry then
+            local owned = ownedIlvl(def.slot, entry, bags)
+            if owned == "bags" then bagCount = bagCount + 1
+            elseif owned then haveCount = haveCount + 1
+            else missingCount = missingCount + 1 end
+        end
+    end
+
+    if not self._slotSummary then
+        self._slotSummary = ns.Widgets:Label(content, "GameFontNormalSmall")
+    end
+    self._slotSummary:ClearAllPoints()
+    self._slotSummary:SetPoint("TOPLEFT", PAD, topY - 8 * (ICON + GAP) - 6)
+    self._slotSummary:SetWidth(DOLL_W)
+    self._slotSummary:SetText(("%s  %s  %s"):format(
+        ("|cff%s%d equipped|r"):format(ns.Widgets:Hex("good"), haveCount),
+        bagCount > 0 and ("|cff%s%d in bags|r"):format(ns.Widgets:Hex("warn"), bagCount)
+            or ns.Widgets:Tint("faint", "0 in bags"),
+        missingCount > 0 and ("|cff%s%d missing|r"):format(ns.Widgets:Hex("muted"), missingCount)
+            or ns.Widgets:Tint("faint", "none missing")))
+    self._slotSummary:Show()
 
     local dollBottom = topY - 8 * (ICON + GAP) - 14
 
@@ -677,6 +921,7 @@ function UI:Render(content, width)
                     or ("|cff777777item " .. entry.itemID .. "|r")) .. " " .. mark)
             end
             hookTooltip(row, entry.itemID, link, ilvl, rank, ownIlvl, owned)
+            hookMenu(row, entry.itemID, entry.name)
             ly = ly - ROW_H
         end
     end
@@ -711,9 +956,15 @@ function UI:Render(content, width)
             end
             row.source:SetText("|cff6d6d77" .. sSrc .. "|r")
             hookTooltip(row, entry.itemID, link, sIlvl, sRank)
+            hookMenu(row, entry.itemID, entry.name)
             ly = ly - ROW_H
         end
     end
+
+    -- Sized now that the guide's length is known; it was acquired up
+    -- with the doll's panel so it sits behind the rows.
+    listPanel:SetPoint("TOPLEFT", listX - 8, topY + 8)
+    listPanel:SetSize(listW + 16, math.max((topY + 8) - ly + 4, 40))
 
     y = math.min(dollBottom, ly - 10)
 

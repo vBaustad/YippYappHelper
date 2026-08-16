@@ -989,6 +989,18 @@ equipWatcher:SetScript("OnEvent", function()
     wipe(equippedIlvlCache)
 end)
 
+--- The inventory slots an item can go in, or nil if it is not gear.
+---
+--- Exported so the Best in Slot page can check a pin before storing it.
+--- Deriving the slot from the item is the only way to be sure: the guide
+--- data carries a slot name per row, but a pin can come from anywhere,
+--- and taking its word would let a starred helm sit in a ring slot.
+function ns:GetItemSlots(itemID)
+    if not itemID then return nil end
+    local _, _, _, equipLoc = GetItemInfoInstant(itemID)
+    return equipLoc and EQUIP_LOC_SLOTS[equipLoc] or nil
+end
+
 --- Lowest equipped item level among the slots this item could fill.
 --- For paired slots (rings, trinkets, weapons) that is the piece you
 --- would actually replace, which is the comparison that matters.
