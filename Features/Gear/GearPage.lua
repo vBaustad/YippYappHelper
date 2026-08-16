@@ -29,7 +29,12 @@ if not (Shell and W) then return end
 
 local PAD, GAP = Shell.PAD, Shell.GAP
 
+-- Floor and ceiling. Cards size themselves to the column between
+-- these; below the floor the two text lines collide, above the
+-- ceiling they are mostly padding.
 local CARD_H      = 46
+local CARD_MAX_H  = 76
+local PER_COLUMN  = 8
 local CARD_GAP    = 4
 local SUMMARY_H   = 96
 
@@ -178,6 +183,17 @@ local function RefreshCard(card)
     end
 end
 
+--- The icon grows with the card.
+---
+--- Fixed at 30 it looked marooned once the cards filled the column at
+--- around 75px; the art is the first thing read on a card and should
+--- scale with it. Capped so it does not crowd the two text lines beside
+--- it.
+local function SizeCardIcon(card, cardH)
+    local size = math.max(26, math.min(cardH - 16, 46))
+    card.icon:SetSize(size, size)
+end
+
 ------------------------------------------------------------
 -- Build
 ------------------------------------------------------------
@@ -185,9 +201,16 @@ local function Build(host)
     ui = { host = host, cards = {} }
     ns.GearPageUI = ui
 
-    ui.summaryTitle = W:SectionTitle(host, "equipment")
-    ui.summaryTitle:SetPoint("TOPLEFT", PAD, -PAD)
-    ui.summaryTitle:SetPoint("RIGHT", host, "RIGHT", -PAD, 0)
+    -- No page heading. The tab along the bottom already says Gear
+    -- Upgrades, and a rule spanning all three columns sat at a different
+    -- height to the improvements rule inside the middle one -- two
+    -- horizontal lines at unrelated heights, which is what looked wrong.
+    -- The columns start at the top instead, and the height it was using
+    -- goes to the cards.
+    ui.top = CreateFrame("Frame", nil, host)
+    ui.top:SetHeight(1)
+    ui.top:SetPoint("TOPLEFT", PAD, -PAD)
+    ui.top:SetPoint("RIGHT", host, "RIGHT", -PAD, 0)
 
     for _, slotID in ipairs(LEFT_SLOTS) do
         ui.cards[slotID] = BuildCard(host, slotID)
@@ -274,32 +297,42 @@ local function Refresh(ctx)
     -- holding sentences; the side columns hold a name and two numbers.
     local sideW = math.floor((avail - GAP * 2) * 0.29)
     local midW = avail - GAP * 2 - sideW * 2
-    local top = ui.summaryTitle
+    local top = ui.top
+
+    -- Cards grow to fill the column. At a fixed 46 the eight of them
+    -- ended two thirds of the way down and left the rest of the page
+    -- empty; there is no reason for the height to be a constant when
+    -- the column count is.
+    local colH = height - PAD * 2
+    local cardH = math.floor((colH - CARD_GAP * (PER_COLUMN - 1)) / PER_COLUMN)
+    cardH = math.max(CARD_H, math.min(cardH, CARD_MAX_H))
 
     for i, slotID in ipairs(LEFT_SLOTS) do
         local card = ui.cards[slotID]
         card:ClearAllPoints()
-        card:SetWidth(sideW)
+        card:SetSize(sideW, cardH)
         card:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0,
-            -8 - (i - 1) * (CARD_H + CARD_GAP))
+            -(i - 1) * (cardH + CARD_GAP))
+        SizeCardIcon(card, cardH)
     end
     for i, slotID in ipairs(RIGHT_SLOTS) do
         local card = ui.cards[slotID]
         card:ClearAllPoints()
-        card:SetWidth(sideW)
+        card:SetSize(sideW, cardH)
         card:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0,
-            -8 - (i - 1) * (CARD_H + CARD_GAP))
+            -(i - 1) * (cardH + CARD_GAP))
+        SizeCardIcon(card, cardH)
     end
 
     ui.summary:ClearAllPoints()
     ui.summary:SetWidth(midW)
-    ui.summary:SetPoint("TOPLEFT", top, "BOTTOMLEFT", sideW + GAP, -8)
+    ui.summary:SetPoint("TOPLEFT", top, "BOTTOMLEFT", sideW + GAP, 0)
 
     ui.improveTitle:ClearAllPoints()
     ui.improveTitle:SetPoint("TOPLEFT", ui.summary, "BOTTOMLEFT", 0, -GAP)
     ui.improveTitle:SetPoint("RIGHT", ui.summary, "RIGHT", 0, 0)
 
-    local listTop = 8 + SUMMARY_H + GAP + 26
+    local listTop = SUMMARY_H + GAP + 26
     local listH = math.max(height - PAD * 2 - listTop - 8, 60)
     ui.improveScroll:ClearAllPoints()
     ui.improveScroll:SetSize(midW - 18, listH)
