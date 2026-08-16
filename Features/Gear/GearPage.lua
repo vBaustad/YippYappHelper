@@ -32,12 +32,15 @@ local PAD, GAP = Shell.PAD, Shell.GAP
 -- Floor and ceiling. Cards size themselves to the column between
 -- these; below the floor the two text lines collide, above the
 -- ceiling they are mostly padding.
-local CARD_H      = 30
+local CARD_H      = 40
 local CARD_MAX_H  = 76
 local PER_COLUMN  = 8
 local CARD_GAP    = 4
--- The least a scrolling list can be and still read as one.
-local IMPROVE_MIN = 120
+-- The improvements list's share of the page, and the least it can be.
+-- It is budgeted before the cards: the cards are a reference you glance
+-- at, the list is the part you read.
+local IMPROVE_MIN = 240
+local IMPROVE_SHARE = 0.38
 local IMPROVE_TITLE_H = 26
 
 -- Left column, then right. Ordered head-down rather than by slot id so
@@ -291,7 +294,15 @@ local function Refresh(ctx)
     -- and the list's own minimum. An earlier version left the heading
     -- and a gap out, so the cards claimed 40px they did not have and the
     -- list was squeezed under its floor to pay for it.
-    local lowerH = GAP + IMPROVE_TITLE_H + IMPROVE_MIN
+    -- The improvements take a share of the page, not a leftover.
+    --
+    -- They were budgeted at a bare minimum and the cards took the rest,
+    -- which is backwards: sixteen cards are a reference you glance at,
+    -- and the list is the part you actually read. It now claims its
+    -- share first and grows with the window; the cards take what is
+    -- left, down to a floor where their two text lines still fit.
+    local improveH = math.max(IMPROVE_MIN, math.floor((height - PAD * 2) * IMPROVE_SHARE))
+    local lowerH = GAP + IMPROVE_TITLE_H + improveH
     local colH = height - PAD * 2 - lowerH
     local cardH = math.floor((colH - CARD_GAP * (PER_COLUMN - 1)) / PER_COLUMN)
     cardH = math.max(CARD_H, math.min(cardH, CARD_MAX_H))
