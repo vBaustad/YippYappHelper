@@ -982,6 +982,25 @@ local function EquippedIlvl(slotID)
     return nil
 end
 
+--- True while a two-handed weapon is equipped.
+---
+--- Matters because an empty off-hand under a two-hander is not an empty
+--- slot -- it is a slot OCCUPIED by the other half of what you are
+--- already wielding. Treating it as empty is what made every one-hand
+--- weapon, shield and off-hand in the browser read "new", i.e. a free
+--- upgrade over nothing, to a player holding a 311 staff. Taking any of
+--- them costs you that staff.
+local TWO_HAND_LOCS = {
+    INVTYPE_2HWEAPON = true, INVTYPE_RANGED = true, INVTYPE_RANGEDRIGHT = true,
+}
+
+local function MainHandIsTwoHander()
+    local link = GetInventoryItemLink and GetInventoryItemLink("player", 16)
+    if not link then return false end
+    local _, _, _, equipLoc = GetItemInfoInstant(link)
+    return equipLoc and TWO_HAND_LOCS[equipLoc] or false
+end
+
 local equipWatcher = CreateFrame("Frame")
 equipWatcher:RegisterUnitEvent("UNIT_INVENTORY_CHANGED", "player")
 equipWatcher:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
@@ -1010,11 +1029,19 @@ function ns:GetEquippedIlvlForItem(itemID)
     local slots = equipLoc and EQUIP_LOC_SLOTS[equipLoc]
     if not slots then return nil end
 
-    local lowest
+    local lowest, twoHand
     for _, slotID in ipairs(slots) do
         local lvl = EquippedIlvl(slotID)
-        -- An empty slot is the weakest possible "current" item, so any
-        -- drop for it counts as an upgrade.
+        -- The off-hand is only genuinely empty if no two-hander is
+        -- filling it. Under a two-hander the honest baseline is that
+        -- weapon's own item level, because it is what you would be
+        -- giving up.
+        if not lvl and slotID == 17 then
+            if twoHand == nil then twoHand = MainHandIsTwoHander() end
+            if twoHand then lvl = EquippedIlvl(16) end
+        end
+        -- A genuinely empty slot is the weakest possible "current" item,
+        -- so any drop for it counts as an upgrade.
         if not lvl then return 0, slotID end
         if not lowest or lvl < lowest then lowest = lvl end
     end

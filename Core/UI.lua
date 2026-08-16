@@ -216,8 +216,8 @@ function ns:SetGearAppMode(enabled, contentWidth, contentHeight)
             ns.Widgets:Apply(equipPanel, "inset")
             ns.Widgets:Apply(infoPanel, "inset")
         else
-            equipPanel:SetBackdrop(nil)
-            infoPanel:SetBackdrop(nil)
+            ns.Widgets:Unskin(equipPanel)
+            ns.Widgets:Unskin(infoPanel)
         end
         close:Hide()
         equipTitle:Hide()

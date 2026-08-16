@@ -220,25 +220,53 @@ local function build(style)
         end
     end
 
-    -- Best rank first: the spec that wants it most leads the list.
+    -- Strongest claim first, which is `rel` and NOT `rank`.
+    --
+    -- The two answer different questions and only one of them is the
+    -- council's. `rank` is where this trinket sits in that spec's own
+    -- list; `rel` is how far behind that spec's BEST trinket it is. A
+    -- spec holding it at #7 but 0.6% off their best wants it more than
+    -- one holding it at #4 but 1.6% off -- rank cannot see that, because
+    -- it says nothing about how tightly packed the options behind it
+    -- are.
+    --
+    -- Sorted by rank, the list also read as broken: the percentages
+    -- beside the ranks came out in no order at all (-1.6, then -2.5,
+    -- then -0.6), because there is no reason for two different specs'
+    -- rankings to agree. By rel it descends cleanly, and a spec whose
+    -- rank is 1 has rel 0 by construction, so the top picks still lead.
     for _, bucket in pairs(byItem) do
         table.sort(bucket.specs, function(a, b)
+            if a.rel ~= b.rel then return a.rel > b.rel end
             if a.rank ~= b.rank then return a.rank < b.rank end
             return a.key < b.key
         end)
-        -- Ranked by the best spec that has actually been re-simmed. A
-        -- last-season spec placing it first is not a reason to lead the
-        -- browse list with it, because that placing was made against a
-        -- different set of trinkets.
+        -- The lowest rank any re-simmed spec gives it, found by looking
+        -- rather than by reading the first element. It used to take
+        -- specs[1], which was only the best rank while the array was
+        -- sorted by rank -- re-sorting above would have quietly turned
+        -- the browse list's ordering into "rank of whichever spec has
+        -- the best rel", which is not what "best: #N" claims to be.
+        --
+        -- Re-simmed specs only. A last-season spec placing it first is
+        -- not a reason to lead the browse list with it, because that
+        -- placing was made against a different set of trinkets.
         bucket.bestRank = 99
+        local anyFresh = false
         for _, entry in ipairs(bucket.specs) do
             if not T:IsStaleTier(entry.tier) then
-                bucket.bestRank = entry.rank
-                break
+                anyFresh = true
+                if entry.rank < bucket.bestRank then
+                    bucket.bestRank = entry.rank
+                end
             end
         end
-        if bucket.bestRank == 99 and bucket.specs[1] then
-            bucket.bestRank = bucket.specs[1].rank
+        if not anyFresh then
+            for _, entry in ipairs(bucket.specs) do
+                if entry.rank < bucket.bestRank then
+                    bucket.bestRank = entry.rank
+                end
+            end
         end
     end
 

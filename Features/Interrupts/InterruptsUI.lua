@@ -122,7 +122,7 @@ local function applyBackdrop()
         local a = (d.backdropAlpha or 85) / 100
         root:SetBackdropColor(0, 0, 0, a)
     else
-        root:SetBackdrop(nil)
+        ns.Widgets:Unskin(root)
     end
 end
 

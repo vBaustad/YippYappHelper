@@ -10,7 +10,9 @@ local _, ns = ...
 local PAD = (ns.Shell and ns.Shell.PAD) or 12
 local TILE_SIZE = 48
 local TILE_GAP = 5
-local HEADER_H = 20
+-- The heading's height is the section widget's business now, and comes
+-- back from ns.Widgets:SectionTitleHeight rather than being guessed at
+-- separately here.
 local SECTION_GAP = 12
 -- Breathing room between a group's panel edge and its tiles.
 local PANEL_PAD = 10
@@ -395,52 +397,35 @@ local function AcquireTex(parent)
     return tex
 end
 
--- Group panels.
+-- Group sections.
 --
 -- Each expansion sits on its own surface rather than under a rule. A
 -- divider says "a new list starts here"; a panel says "this is one
 -- thing", which is what an expansion's teleports are, and it is most of
 -- why Vaultloom's lists read as sections instead of one long column.
 --
+-- One widget now, not two. The heading's ornamental rule and the panel's
+-- top border used to be separate things drawn a few pixels apart, so
+-- every expansion carried two horizontal lines saying the same thing.
+-- ns.Widgets:SectionCard puts the ornament ON the card's top edge, which
+-- is the shape the rest of the addon can use as well.
+--
 -- Pooled like everything else here, and skinned on acquire rather than
 -- on create: the skin can change between refreshes.
-local panelPool = {}
-local panelPoolIdx = 0
+local sectionPool, sectionPoolIdx = {}, 0
 
-local function AcquirePanel(parent)
-    panelPoolIdx = panelPoolIdx + 1
-    local p = panelPool[panelPoolIdx]
-    if not p then
-        p = CreateFrame("Frame", nil, parent)
-        panelPool[panelPoolIdx] = p
+local function AcquireSection(parent)
+    sectionPoolIdx = sectionPoolIdx + 1
+    local s = sectionPool[sectionPoolIdx]
+    if not s then
+        s = ns.Widgets:SectionCard(parent)
+        sectionPool[sectionPoolIdx] = s
     else
-        p:SetParent(parent)
+        s:SetParent(parent)
     end
-    if ns.Widgets then ns.Widgets:Apply(p, "inset") end
-    p:ClearAllPoints()
-    p:Show()
-    return p
-end
-
---- A pooled section heading, so the expansion groups carry the same
---- title-and-divider the dashboard and every other page use. They were
---- raw fontstrings: the right words, but none of the shared styling, so
---- nine expansion headings read as nine loose labels rather than as the
---- page's structure.
-local titlePool, titlePoolIdx = {}, 0
-local function AcquireTitle(parent, text)
-    titlePoolIdx = titlePoolIdx + 1
-    local t = titlePool[titlePoolIdx]
-    if not t then
-        t = ns.Widgets:SectionTitle(parent, text)
-        titlePool[titlePoolIdx] = t
-    else
-        t:SetParent(parent)
-        t:SetText(text)
-    end
-    t:ClearAllPoints()
-    t:Show()
-    return t
+    s:ClearAllPoints()
+    s:Show()
+    return s
 end
 
 local function ResetPools()
@@ -450,10 +435,8 @@ local function ResetPools()
     fsPoolIdx = 0
     for i = 1, texPoolIdx do texPool[i]:Hide() end
     texPoolIdx = 0
-    for i = 1, panelPoolIdx do panelPool[i]:Hide() end
-    panelPoolIdx = 0
-    for i = 1, titlePoolIdx do titlePool[i]:Hide() end
-    titlePoolIdx = 0
+    for i = 1, sectionPoolIdx do sectionPool[i]:Hide() end
+    sectionPoolIdx = 0
 end
 
 ------------------------------------------------------------
@@ -508,34 +491,30 @@ function ns:RefreshTeleports()
         end
         local anyKnown = groupKnown > 0
 
-        -- Header, above its panel rather than inside it, so the panel
-        -- edge does not cut between a title and what it titles.
-        -- Colours from the skin rather than literal greys, so an
-        -- expansion heading here matches a section heading anywhere else
-        -- and follows a skin change with everything around it.
-        local hdr = AcquireTitle(content, ("|cff%s%s|r"):format(
-            ns.Widgets:Hex(anyKnown and "text" or "faint"), group.header))
-        hdr:SetPoint("TOPLEFT", content, "TOPLEFT", 2, y)
-        hdr:SetPoint("RIGHT", content, "RIGHT", -2, 0)
+        -- Heading, tally and card as one thing. The heading sits above
+        -- the card and the divider is the card's own top edge, so the
+        -- title is not cut off from what it titles and there is one line
+        -- between them instead of two.
+        --
+        -- The row count depends on the window width, so the card's
+        -- height is worked out before it is laid out rather than after.
+        local rowsNeeded = math.ceil(#group.entries / tilesPerRow)
+        local bodyH = rowsNeeded * (TILE_SIZE + 12 + TILE_GAP) - TILE_GAP + PANEL_PAD * 2
 
-        local tally = AcquireFS(content, "GameFontNormalSmall")
-        tally:SetPoint("TOPRIGHT", content, "TOPLEFT", cw - 2, y)
-        tally:SetJustifyH("RIGHT")
         local complete = groupKnown == #group.entries
-        tally:SetText(("|cff%s%d / %d|r"):format(
+        local section = AcquireSection(content)
+        section:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+        section:SetText(("|cff%s%s|r"):format(
+            ns.Widgets:Hex(anyKnown and "text" or "faint"), group.header))
+        section:SetValue(("|cff%s%d / %d|r"):format(
             ns.Widgets:Hex(complete and "good" or anyKnown and "muted" or "faint"),
             groupKnown, #group.entries))
-        y = y - HEADER_H
+        section:Layout(cw, bodyH)
 
-        -- The panel behind this group's tiles. Sized after the tiles are
-        -- placed, since the row count depends on the window width.
-        local rowsNeeded = math.ceil(#group.entries / tilesPerRow)
-        local panelH = rowsNeeded * (TILE_SIZE + 12 + TILE_GAP) - TILE_GAP + PANEL_PAD * 2
-        local panel = AcquirePanel(content)
-        panel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-        panel:SetSize(cw, panelH)
-
-        y = y - PANEL_PAD
+        -- Into the card: past the heading, then past the card's own top
+        -- padding. The tiles below are still anchored to `content`, so
+        -- this cursor has to land where the card's interior starts.
+        y = y - ns.Widgets:SectionTitleHeight() - PANEL_PAD
 
         -- Tiles
         for i, entry in ipairs(group.entries) do
@@ -645,7 +624,7 @@ end
 ------------------------------------------------------------
 function ns:SetTeleportAppMode(enabled, contentWidth, contentHeight)
     if enabled then
-        frame:SetBackdrop(nil)
+        ns.Widgets:Unskin(frame)
         closeBtn:Hide()
         titleFs:Hide()
         frame:SetMovable(false)

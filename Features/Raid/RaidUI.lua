@@ -128,11 +128,19 @@ end)
 local close = CreateFrame("Button", nil, raidFrame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", -2, -2)
 
+-- Forward-declared because SetRaidAppMode below touches both and both
+-- are built further down the file. Without this they resolve to globals
+-- inside that function, and the globals are nil -- so entering the shell
+-- threw on the first line that touched one, exactly as Consumables did.
+-- Same mistake, different page; a load harness finds these, reading does
+-- not.
+local overviewTab, overviewContainer
+
 function ns:SetRaidAppMode(enabled, contentWidth, contentHeight)
     if enabled then
         raidFrame:SetMovable(false)
         raidFrame:EnableMouse(false)
-        raidFrame:SetBackdrop(nil)
+        ns.Widgets:Unskin(raidFrame)
         close:Hide()
         -- A tab bar with one tab in it tells you nothing, and
         -- the shell already names the page above it. Hidden in
@@ -164,7 +172,8 @@ end
 local currentTab = "overview"
 local rescanBtn  -- forward declare
 
-local overviewContainer = CreateFrame("Frame", nil, raidFrame)
+-- Assigned, not re-declared: forward-declared above SetRaidAppMode.
+overviewContainer = CreateFrame("Frame", nil, raidFrame)
 overviewContainer:SetPoint("TOPLEFT", 0, -44)
 overviewContainer:SetPoint("BOTTOMRIGHT", 0, 0)
 
@@ -181,7 +190,7 @@ perfContainer:Hide()
 -- Reuse overviewContainer for groups content (merged)
 local groupsContainer = overviewContainer
 
-local overviewTab = ns.CreateUnderlineTab(raidFrame, "Overview", { 1.0, 1.0, 0.3 })
+overviewTab = ns.CreateUnderlineTab(raidFrame, "Overview", { 1.0, 1.0, 0.3 })
 overviewTab:SetSize(110, 24)
 overviewTab:SetPoint("TOPLEFT", 8, -18)
 

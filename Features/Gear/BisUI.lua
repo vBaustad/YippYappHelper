@@ -39,8 +39,36 @@ local ICON_MAX = 46
 local BIS_CHROME_H = 190
 local GAP = 4
 local DOLL_W = 380
--- Two text lines plus the padding the card's surface needs.
-local STAT_CARD_H = 62
+-- Two lines of stat text, and the build name above them.
+local STAT_LINES_H = 26
+local NAME_H = 15
+local NAME_GAP = 9
+-- Gold, and deliberately not the page's green ACCENT.
+--
+-- Blizzard's hero talent picker rims the tree you have taken in gold, so
+-- that is the colour people already read as "this is the one you
+-- picked". ACCENT is spoken for: the heading above these cards uses it
+-- to mean "this section", and one colour saying two different things is
+-- how a page stops being readable at a glance.
+local LIT = { 0.96, 0.78, 0.30 }
+-- The card's own padding, and the gap between two cards.
+--
+-- Both exist because the first version had neither: the text was placed
+-- first and the card drawn 12px out around it, so the gap between two
+-- columns had to exceed 24 before their cards stopped overlapping -- and
+-- it was 14, so they overlapped by ten. Anchoring the CARD and insetting
+-- the text makes that arithmetic impossible to get wrong.
+local CARD_PAD = 12
+local CARD_GAP = 12
+-- The hero talent medallion. Sized to be the card's subject rather than
+-- a badge on its heading: at the 22px it started as, the art the card is
+-- about was the smallest thing on it.
+local HERO_ART = 40
+local CIRCLE_MASK = "Interface\\AddOns\\YippYappHelper\\Media\\CircleMask"
+local CIRCLE_RING = "Interface\\AddOns\\YippYappHelper\\Media\\CircleRing"
+-- Enough to read as a card, not so much that a 62px block starts
+-- looking like a pill.
+local CARD_RADIUS = 8
 local ACCENT = { 0.45, 1.0, 0.55 }
 local ACCENT_HEX = "ff73ff8c"
 
@@ -120,6 +148,14 @@ local function AcquireFS(self, parent, template)
         self._fs[self._fsIdx] = fs
     end
     fs:SetParent(parent)
+    -- The font goes on at every acquire, not only at creation. The pool
+    -- is indexed, so which FontString a caller gets depends on how many
+    -- were taken before it -- and that count moves with the guide, since
+    -- "Also listed" only appears for some specs and pinning an item can
+    -- make it appear. Set once, a heading could come back wearing the
+    -- small font a stat line left on it.
+    local font = type(template) == "string" and _G[template] or template
+    if font and fs.SetFontObject then fs:SetFontObject(font) end
     fs:ClearAllPoints()
     fs:SetWidth(0)
     fs:SetWordWrap(false)
@@ -221,7 +257,203 @@ local function AcquirePanel(self, parent)
     return p
 end
 
+--- A rounded card, on its own pool.
+---
+--- Not AcquirePanel's. That pool hands the same frame to whichever
+--- caller asks next, so a doll panel that had been a stat card last
+--- render would come back square with its corners still rounded --
+--- ns.Widgets:Rounded and W:Apply each undo the other's painting, but
+--- only when they are told, and a shared pool never tells them.
+--- The card for the build you are actually specced into.
+---
+--- Blizzard's hero talent picker says which is which by lighting the
+--- whole panel behind the one you have taken, and that is the part worth
+--- borrowing: two priorities side by side with no mark between them
+--- makes the reader work out which one is theirs every time they open
+--- the page, and they already answered that question in the talent tree.
+---
+--- Mixed from the skin's own inset colour rather than replacing it, so
+--- the highlight follows a skin change instead of being a green card
+--- sitting in a brown window.
+--- How a card is painted, lit or not.
+---
+--- The wash is the part doing the work. A flat tint reads as "this card
+--- is a different colour"; a fade running out from under the medallion
+--- reads as the art lighting the card it sits on, which is what
+--- Blizzard's picker does and why the chosen one there is unmistakable.
+---
+--- Both states are mixed from the skin's OWN inset colour rather than
+--- replacing it, so the pair follows a skin change instead of being a
+--- gold card sitting in someone else's grey window.
+local function CardColours(lit)
+    local fill = ns.Widgets and ns.Widgets:Surface("inset")
+    if not fill then return nil end
+    if not lit then
+        -- Not a dimmer card -- the same card, with the faintest sheen so
+        -- the unpicked build reads as an alternative rather than as
+        -- something switched off.
+        return { wash = { 0.60, 0.60, 0.66, 0.10 } }
+    end
+    local function mix(i) return fill[i] + (LIT[i] - fill[i]) * 0.10 end
+    return {
+        fill = { mix(1), mix(2), mix(3), fill[4] or 1 },
+        edge = { LIT[1], LIT[2], LIT[3], 0.70 },
+        wash = { LIT[1], LIT[2], LIT[3], 0.28 },
+    }
+end
+
+local function AcquireCard(self, parent)
+    self._cards = self._cards or {}
+    self._cardIdx = (self._cardIdx or 0) + 1
+    local c = self._cards[self._cardIdx]
+    if not c then
+        c = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+        self._cards[self._cardIdx] = c
+    else
+        c:SetParent(parent)
+    end
+    c:ClearAllPoints()
+    -- Behind the text that sits on it, not over it.
+    c:SetFrameLevel(math.max((parent:GetFrameLevel() or 1), 1))
+    c:Show()
+    return c
+end
+
+--- The hero tree's art as the game itself draws it: the icon cut to a
+--- circle, inside a rim.
+---
+--- Blizzard's hero talent picker is exactly this shape -- a round
+--- medallion, gold-rimmed for the tree you have taken and grey for the
+--- one you have not -- so it is what people already recognise as a hero
+--- talent, and matching it costs a mask and a ring.
+---
+--- The rim is drawn OVER the medallion at the same size rather than
+--- around it. A masked circle frays over its last pixel or two, and the
+--- rim landing on that edge is what hides it.
+local function AcquireMedallion(self, parent)
+    self._meds = self._meds or {}
+    self._medIdx = (self._medIdx or 0) + 1
+    local m = self._meds[self._medIdx]
+    if not m then
+        m = {}
+        m.icon = parent:CreateTexture(nil, "ARTWORK")
+        -- CLAMPTOBLACKADDITIVE on both axes: outside the tile the mask
+        -- has to read as "hide", not repeat the disc across the icon.
+        m.mask = parent:CreateMaskTexture()
+        m.mask:SetTexture(CIRCLE_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        m.mask:SetAllPoints(m.icon)
+        m.icon:AddMaskTexture(m.mask)
+        m.ring = parent:CreateTexture(nil, "OVERLAY")
+        m.ring:SetTexture(CIRCLE_RING)
+        m.ring:SetAllPoints(m.icon)
+        self._meds[self._medIdx] = m
+    end
+    m.icon:SetParent(parent)
+    m.ring:SetParent(parent)
+    m.icon:ClearAllPoints()
+    m.icon:SetTexCoord(0, 1, 0, 1)
+    m.icon:SetDesaturated(false)
+    m.icon:Show()
+    m.ring:Show()
+    return m
+end
+
+--- Draw a piece of art that may be either kind of handle.
+---
+--- The talent API calls its field an "element ID", which is a file ID on
+--- some builds and an atlas name on others, and the two calls do not
+--- accept each other's argument -- SetTexture given an atlas name draws
+--- nothing at all, silently, which is exactly what the first version of
+--- this did. The type decides.
+---
+--- Cropping is only for file textures. An atlas already carries the
+--- texture coordinates of its slice out of a sheet, so re-cropping one
+--- does not trim its border, it shows a different part of the sheet.
+local function SetArt(tex, art, crop)
+    if type(art) == "string" then
+        if tex:SetAtlas(art) == false then return false end
+        return true
+    end
+    tex:SetTexture(art)
+    if crop then tex:SetTexCoord(0.08, 0.92, 0.08, 0.92) end
+    return true
+end
+
+------------------------------------------------------------
+-- Hero talent art
+------------------------------------------------------------
+--- Hero talent name -> the game's own icon for that tree.
+---
+--- The guide stores a build as a bare string -- "San'layn", "Mountain
+--- Thane" -- because that is what the source calls it. The client knows
+--- those as trait subtrees and ships art for each, so the card can show
+--- the tree instead of only naming it.
+---
+--- Keyed by lowercased name, and English-only in practice: the guide
+--- data is scraped from an English source while the API answers in the
+--- client's locale. A mismatched locale simply finds nothing and the
+--- card renders as it did before, which is the right failure -- an icon
+--- guessed from a near-match would be the wrong tree's art, and a
+--- picture is read faster than the name beside it.
+local function HeroTalentArt()
+    local out = {}
+    if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID
+            and C_ClassTalents.GetHeroTalentSpecsForClassSpec
+            and C_Traits and C_Traits.GetSubTreeInfo) then
+        return out
+    end
+
+    local ok, configID = pcall(C_ClassTalents.GetActiveConfigID)
+    if not ok or not configID then return out end
+
+    local idx = GetSpecialization and GetSpecialization()
+    local specID = idx and GetSpecializationInfo(idx)
+    if not specID then return out end
+
+    local okIDs, ids = pcall(C_ClassTalents.GetHeroTalentSpecsForClassSpec,
+        configID, specID)
+    if not okIDs or type(ids) ~= "table" then return out end
+
+    -- Which tree you actually took. Asked for directly where the client
+    -- offers it, since that is the question, and read back off each
+    -- subtree otherwise. Neither is guaranteed, and an unknown active
+    -- tree simply leaves every card unlit rather than lighting a guess.
+    local activeID
+    if C_ClassTalents.GetActiveHeroTalentSpec then
+        local okA, id = pcall(C_ClassTalents.GetActiveHeroTalentSpec)
+        if okA then activeID = id end
+    end
+
+    for _, subTreeID in ipairs(ids) do
+        local okInfo, info = pcall(C_Traits.GetSubTreeInfo, configID, subTreeID)
+        if okInfo and type(info) == "table" and info.name then
+            -- Zero is not an icon, and in Lua it is not false either --
+            -- which is how the first version of this reserved space for
+            -- a tile, indented the label past it, and drew nothing.
+            local icon = info.iconElementID
+            if type(icon) == "number" and icon <= 0 then icon = nil end
+            out[info.name:lower()] = {
+                icon   = icon,
+                active = (activeID ~= nil and subTreeID == activeID)
+                          or info.isActive == true,
+            }
+        end
+    end
+    return out
+end
+
 local function Release(self)
+    for i = 1, (self._cardIdx or 0) do
+        if self._cards[i] then self._cards[i]:Hide() end
+    end
+    self._cardIdx = 0
+    for i = 1, (self._medIdx or 0) do
+        local m = self._meds[i]
+        -- The mask goes with the icon it is attached to; hiding it
+        -- separately would unmask the icon rather than hide it.
+        if m then m.icon:Hide(); m.ring:Hide() end
+    end
+    self._medIdx = 0
     for i = 1, (self._panelIdx or 0) do
         if self._panels[i] then self._panels[i]:Hide() end
     end
@@ -644,8 +876,16 @@ end
 ------------------------------------------------------------
 -- Render
 ------------------------------------------------------------
+--- itemID -> true for everything currently on the page.
+---
+--- The event watcher reads this to decide whether an incoming item
+--- actually concerns us. GET_ITEM_INFO_RECEIVED is global, so without it
+--- the page redraws for items belonging to other addons entirely.
+UI._wantItem = UI._wantItem or {}
+
 function UI:Render(content, width, height)
     Release(self)
+    wipe(self._wantItem)
     local y = -8
     local inner = width - PAD * 2
 
@@ -719,6 +959,12 @@ function UI:Render(content, width, height)
 
     local unresolved = 0
     local bySlot, spare = AssignToSlots(data.bis, seed)
+    for _, entry in pairs(bySlot) do
+        if entry.itemID then self._wantItem[entry.itemID] = true end
+    end
+    for _, entry in ipairs(spare) do
+        if entry.itemID then self._wantItem[entry.itemID] = true end
+    end
     local bags = ScanBags()
     local have, total, atMax = 0, 0, 0
     for _, def in ipairs(DOLL) do
@@ -1014,49 +1260,155 @@ function UI:Render(content, width, height)
         h:SetPoint("TOPLEFT", PAD, y)
         h:SetTextColor(unpack(ACCENT))
         h:SetText("Stat Priority")
-        y = y - 20
+        -- Clear of the heading rather than tucked under it. The cards
+        -- were anchored 12px ABOVE this cursor to make room for their
+        -- own padding, which ran their top edge through the heading.
+        y = y - 26
 
         -- Side by side rather than stacked. Two or three builds down the
         -- page pushed the caveat off the bottom and forced a scrollbar;
         -- across the width they cost one row however many there are, and
         -- comparing two priorities is easier when they are adjacent.
+        --
+        -- Measured as CARDS, with the text inset into them. The reverse
+        -- -- columns of text with a card drawn around each -- is what let
+        -- two cards overlap while their text was still neatly apart.
         local n = #data.statPriority
-        local colGap = 14
-        local colW = math.floor((inner - (n - 1) * colGap) / n)
-        local tallest = 0
-        for i, entry in ipairs(data.statPriority) do
-            local x = PAD + (i - 1) * (colW + colGap)
-            -- Builds are named rather than collapsed: where two hero
-            -- talents want different stats, saying which is which is the
-            -- whole reason they are stored apart.
-            local blabel = table.concat(entry.builds or {}, " / ")
-            if entry.context and entry.context ~= "" then
-                blabel = blabel .. "  |cff666666(" .. entry.context .. ")|r"
+        local cardW = math.floor((inner - (n - 1) * CARD_GAP) / n)
+
+        local heroArt = HeroTalentArt()
+
+        -- Whether ANY card gets art, decided before any of them is
+        -- drawn. Per-card would be the obvious way and the wrong one: a
+        -- guide can name a build the client has no subtree for, and a
+        -- row of cards where one is 8px taller than its neighbour reads
+        -- as a mistake rather than as a difference.
+        local anyArt = false
+        for _, entry in ipairs(data.statPriority) do
+            for _, build in ipairs(entry.builds or {}) do
+                local a = heroArt[build:lower()]
+                if a and a.icon then anyArt = true end
             end
+        end
+        -- Name over stats in a column beside the medallion, so the card
+        -- is as tall as its text and the art sits centred against the
+        -- whole of it rather than perching on the first line.
+        local cardH = CARD_PAD * 2 + NAME_H + NAME_GAP + STAT_LINES_H
+        if anyArt then cardH = math.max(cardH, CARD_PAD * 2 + HERO_ART) end
+        local ringIdle = { ns.Widgets:Color("faint") }
+
+        for i, entry in ipairs(data.statPriority) do
+            local cardX = PAD + (i - 1) * (cardW + CARD_GAP)
+
+            -- Lit when it is the build you are specced into. Read across
+            -- every build the card covers, because two hero talents that
+            -- want the same stats share one, and taking either of them
+            -- makes that card the one that applies to you.
+            local lit = false
+            for _, build in ipairs(entry.builds or {}) do
+                local a = heroArt[build:lower()]
+                if a and a.active then lit = true end
+            end
+            -- Where the text starts: the card's corner, brought in by
+            -- its padding. Every anchor below is off this pair, so the
+            -- text cannot drift out of the card it belongs to.
+            local tx, ty = cardX + CARD_PAD, y - CARD_PAD
+
             -- Each build sits on its own card, so two hero talents read
             -- as two things rather than as one paragraph with a gap in
             -- it. The surface comes from the skin like every other card
             -- on the page; the text keeps its own anchors and simply
             -- sits on top.
-            local card = AcquirePanel(self, content)
-            card:SetPoint("TOPLEFT", x - 12, y + 12)
-            card:SetSize(colW + 24, STAT_CARD_H)
+            local card = AcquireCard(self, content)
+            card:SetPoint("TOPLEFT", cardX, y)
+            card:SetSize(cardW, cardH)
+            -- Painted after sizing, not on acquire: the wash divides the
+            -- shape by its width to place each piece in the fade, so a
+            -- card still at its default size would get a gradient
+            -- squeezed into the wrong width.
+            if ns.Widgets then
+                ns.Widgets:Rounded(card, "inset", CARD_RADIUS, CardColours(lit))
+            end
 
-            local b = AcquireFS(self, content, "GameFontNormalSmall")
-            b:SetPoint("TOPLEFT", x, y)
+            -- One medallion per build the card covers. Two builds share
+            -- a card when they want the same stats, and showing both
+            -- says which two rather than making the reader parse the
+            -- slash in the label.
+            --
+            -- Centred down the card rather than hung from its top edge,
+            -- which is what makes the art the card's subject instead of
+            -- a bullet in front of its heading.
+            local artW = 0
+            local medY = y - math.floor((cardH - HERO_ART) / 2)
+            for _, build in ipairs(entry.builds or {}) do
+                local art = heroArt[build:lower()]
+                if art and art.icon then
+                    local med = AcquireMedallion(self, content)
+                    SetArt(med.icon, art.icon, true)
+                    med.icon:SetSize(HERO_ART, HERO_ART)
+                    med.icon:SetPoint("TOPLEFT", content, "TOPLEFT", tx + artW, medY)
+                    -- The rim carries the same answer the card does, so
+                    -- a card covering two trees still says which of them
+                    -- is the one you took.
+                    if art.active then
+                        med.ring:SetVertexColor(LIT[1], LIT[2], LIT[3], 1)
+                    else
+                        med.ring:SetVertexColor(ringIdle[1], ringIdle[2], ringIdle[3], 0.9)
+                    end
+                    artW = artW + HERO_ART + 4
+                end
+            end
+
+            -- The text column starts clear of the art, and runs to the
+            -- card's far padding rather than to a width of its own -- so
+            -- one medallion or two, it still ends where the card does.
+            local colX = tx + (artW > 0 and (artW + 6) or 0)
+            local colW = math.max(cardX + cardW - CARD_PAD - colX, 40)
+
+            -- Builds are named rather than collapsed: where two hero
+            -- talents want different stats, saying which is which is the
+            -- whole reason they are stored apart. The name stays even
+            -- with the art beside it -- the art tells them apart at a
+            -- glance, the name is what they are called out loud.
+            -- Set in caps, as Blizzard's picker sets them. A hero talent
+            -- name is a proper noun for a thing you chose, and at the
+            -- weight it had before -- small, grey, level with the stats
+            -- under it -- it read as a caption on the priority rather
+            -- than as the name of the build the priority belongs to.
+            --
+            -- Only the names. The context note stays in its own case:
+            -- it is a sentence fragment, and shouting it makes it look
+            -- like part of the title.
+            local blabel = table.concat(entry.builds or {}, " / "):upper()
+            if entry.context and entry.context ~= "" then
+                blabel = blabel .. "  |cff666666(" .. entry.context .. ")|r"
+            end
+
+            local b = AcquireFS(self, content, "GameFontNormal")
+            b:SetPoint("TOPLEFT", colX, ty)
             b:SetWidth(colW)
-            b:SetTextColor(0.72, 0.72, 0.78)
+            -- Lit cards get the full text colour and unlit ones the
+            -- muted tone, so the pair reads at a glance even before the
+            -- gold registers.
+            if lit then
+                b:SetTextColor(ns.Widgets:Color("text"))
+            else
+                b:SetTextColor(ns.Widgets:Color("muted"))
+            end
             b:SetText(blabel)
+            ns.ApplyTextShadow(b)
 
             local sp = AcquireFS(self, content, "GameFontNormalSmall")
-            sp:SetPoint("TOPLEFT", x, y - 18)
+            sp:SetPoint("TOPLEFT", colX, ty - (NAME_H + NAME_GAP))
             sp:SetWidth(colW)
             sp:SetWordWrap(true)
             sp:SetText("|cffffffff" .. table.concat(entry.stats or {},
                 "|r |cff555555>|r |cffffffff") .. "|r")
-            tallest = math.max(tallest, sp:GetStringHeight() or 12)
         end
-        y = y - 14 - tallest - 10
+        -- Off the card's own bottom edge, not off the tallest run of
+        -- stat text. Measuring the text and ignoring the card is how the
+        -- caveat underneath ended up two pixels inside it.
+        y = y - cardH - 10
     end
 
     ------------------------------------------------------------
@@ -1126,6 +1478,16 @@ function UI:BuildInto(parent)
     -- Equipping a piece, changing spec, an item name arriving, or a
     -- piece landing in your bags all change what this page should say,
     -- so redraw rather than making the player reopen it.
+    --
+    -- Filtered and debounced, because the naive version made tooltips
+    -- unusable. GET_ITEM_INFO_RECEIVED is a GLOBAL event: the client
+    -- fires it once per item as data streams in, for every item anything
+    -- asks about -- this addon, other addons, the game itself. Each one
+    -- ran a full Refresh, and Refresh calls Release, which hides every
+    -- pooled frame and re-shows it. Hovering a row while that happened
+    -- fired OnLeave then OnEnter, so the tooltip vanished and came back
+    -- several times a second. That is the flicker: not a tooltip bug, a
+    -- redraw storm underneath it.
     local watcher = CreateFrame("Frame", nil, host)
     watcher:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
     watcher:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
@@ -1134,8 +1496,26 @@ function UI:BuildInto(parent)
     -- DELAYED rather than BAG_UPDATE, which fires once per bag per
     -- change and would rebuild the doll several times for one loot.
     watcher:RegisterEvent("BAG_UPDATE_DELAYED")
-    watcher:SetScript("OnEvent", function()
-        if parent:IsShown() then UI:Refresh() end
+
+    local pending = false
+    watcher:SetScript("OnEvent", function(_, event, itemID)
+        if not parent:IsShown() then return end
+        -- An item we are not drawing tells us nothing. This alone drops
+        -- the great majority of the traffic, since most of it belongs to
+        -- somebody else.
+        if event == "GET_ITEM_INFO_RECEIVED"
+           and itemID and not UI._wantItem[itemID] then
+            return
+        end
+        if pending then return end
+        pending = true
+        -- Coalesce the burst into one redraw. A quarter second is below
+        -- the threshold where a page feels stale and far above the gap
+        -- between two of these events.
+        C_Timer.After(0.25, function()
+            pending = false
+            if parent:IsShown() then UI:Refresh() end
+        end)
     end)
 
     self:Refresh()

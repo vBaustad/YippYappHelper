@@ -15,8 +15,11 @@ local CARD_GAP    = 10
 local SECTION_GAP = 14
 local uiScale     = ns:GetUIScale()
 local CARD_H      = math.floor(100 * uiScale)
-local TITLE_H     = 22
+local TITLE_H     = (ns.Widgets and ns.Widgets:SectionTitleHeight()) or 22
 local CONTENT_TOP = -34
+-- In the shell there is no window header to clear, only the page's own
+-- breathing room.
+local APP_CONTENT_TOP = -6
 -- Clamped to the shell content region, not the standalone frame width.
 -- GetAppFrameSize is screen-derived and returns around 960, so the four
 -- cards below were laid out to about 930px and rendered into the
@@ -24,8 +27,27 @@ local CONTENT_TOP = -34
 -- the page overflowing its region, not the cards being too wide.
 local SHELL_CW    = ns.Shell and ns.Shell.CONTENT_MIN or FRAME_W
 local CW          = math.min(FRAME_W, SHELL_CW) - PAD * 2
+-- Breathing room between a section card's edge and the cards on it.
+local SECTION_PAD = 10
 local COLS        = 4
-local CARD_W      = math.floor((CW - (COLS - 1) * CARD_GAP) / COLS) -- ~225
+-- The row of cards sits INSIDE a section card now, so it is narrower
+-- than the page by that card's padding at both ends.
+local INNER_W     = CW - SECTION_PAD * 2
+local CARD_W      = math.floor((INNER_W - (COLS - 1) * CARD_GAP) / COLS)
+
+-- Track names abbreviated for the value column.
+--
+-- Four cards across a 700px page leaves each value about 80px, and
+-- "295 - 302 Champion" is half as wide again -- which is why the page
+-- was showing "295 - 302 ..." and cutting off the very thing it exists
+-- to tell you. The Crest line keeps the full word; it has the width.
+local TRACK_SHORT = {
+    Adventurer = "Adv",
+    Veteran    = "Vet",
+    Champion   = "Champ",
+    Hero       = "Hero",
+    Myth       = "Myth",
+}
 
 -- Crest colour table (hex for text, rgb for borders/stripes)
 local CC = {
@@ -53,6 +75,18 @@ ns.Widgets:Apply(f, "panel")
 ns.SmoothFrame(f)
 f:Hide()
 ns.ProgressionFrame = f
+
+-- Everything on the page hangs off this rather than off the frame, so
+-- the whole block can move as one piece.
+--
+-- App mode hides the window header, and the content should ride up into
+-- the space it leaves instead of starting 34px down against nothing --
+-- which is the band of empty page above "Mythic+". With every section
+-- anchored individually to the frame that would have meant re-anchoring
+-- all of them on every mode switch.
+local root = CreateFrame("Frame", nil, f)
+root:SetPoint("TOPLEFT", f, "TOPLEFT", 0, CONTENT_TOP)
+root:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
 
 -- Header
 -- Season moves to the subtitle slot, matching the app frame's header.
@@ -86,7 +120,13 @@ function ns:SetProgressionAppMode(enabled)
         closeBtn:Hide()
         f:SetMovable(false)
         f:EnableMouse(false)
-        f:SetBackdrop(nil)
+        ns.Widgets:Unskin(f)
+        -- Up into the space the hidden header left. CONTENT_TOP clears a
+        -- title bar this page does not draw in app mode, and leaving it
+        -- put a band of empty page above the first section.
+        root:ClearAllPoints()
+        root:SetPoint("TOPLEFT", f, "TOPLEFT", 0, APP_CONTENT_TOP)
+        root:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
     else
         header:Show()
         if headerSub then headerSub:Show() end
@@ -95,11 +135,15 @@ function ns:SetProgressionAppMode(enabled)
         f:EnableMouse(true)
         ns.Widgets:Apply(f, "panel")
         ns.SmoothFrame(f)
+        root:ClearAllPoints()
+        root:SetPoint("TOPLEFT", f, "TOPLEFT", 0, CONTENT_TOP)
+        root:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
     end
 end
 
 ------------------------------------------------------------
--- Y cursor  (increases downward; actual anchor = CONTENT_TOP - Y)
+-- Y cursor  (increases downward; actual anchor is -Y against `root`,
+-- which carries whichever top offset the current mode wants)
 ------------------------------------------------------------
 local Y = 0
 
@@ -110,7 +154,7 @@ local function MakeCard(col, yPos, crestType)
     local x = (col - 1) * (CARD_W + CARD_GAP)
     local card = CreateFrame("Frame", nil, f, "BackdropTemplate")
     card:SetSize(CARD_W, CARD_H)
-    card:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + x, CONTENT_TOP - yPos)
+    card:SetPoint("TOPLEFT", root, "TOPLEFT", PAD + SECTION_PAD + x, -yPos)
     ns.Widgets:Apply(card, "row")
     ns.SmoothFrame(card)
 
@@ -183,8 +227,11 @@ local function CardLine(card, row, label, value, hex)
     l:SetText(label)
 
     local v = cardAcquireFs(card, "GameFontHighlight")
-    v:SetPoint("TOPLEFT", 62, -yOff)
-    v:SetWidth(CARD_W - 74)
+    -- 54, not 62: "Vault" is the longest label and does not need fifty
+    -- pixels. Every pixel the label column gives up is one the numbers
+    -- were being truncated for.
+    v:SetPoint("TOPLEFT", 54, -yOff)
+    v:SetWidth(CARD_W - 62)
     v:SetJustifyH("LEFT")
     v:SetWordWrap(false)
     if hex then
@@ -192,23 +239,43 @@ local function CardLine(card, row, label, value, hex)
     else
         v:SetText(value)
     end
+    -- Last resort, and only when it is actually needed: a value still
+    -- too wide drops a font size rather than losing its tail to an
+    -- ellipsis. A number you can read small beats half a number.
+    if v:GetStringWidth() > (CARD_W - 62) then
+        v:SetFontObject("GameFontHighlightSmall")
+    end
 end
 
--- The shell's own section heading, so this page's headings match the
--- dashboard's and every other page's. It carries the divider with it,
--- which is why there is no separate rule here any more.
-local function SectionLabel(yPos, text)
-    local title = ns.Widgets:SectionTitle(f, text)
-    title:SetPoint("TOPLEFT", f, "TOPLEFT", PAD, CONTENT_TOP - yPos)
-    title:SetPoint("RIGHT", f, "RIGHT", -PAD, 0)
-    return title
+--- A section: its heading, and the card its cards sit on.
+---
+--- These were a title with an ornamental rule trailing off to the right
+--- and the cards loose underneath, so a section read as a line with some
+--- boxes near it rather than as one block -- and the rule stopped
+--- nowhere in particular while the cards stopped somewhere else.
+--- SectionCard makes that rule the card's own top edge, which groups the
+--- cards and says where the section ends.
+local function Section(yPos, text, bodyH)
+    local s = ns.Widgets:SectionCard(f)
+    s:SetPoint("TOPLEFT", root, "TOPLEFT", PAD, -yPos)
+    s:SetText(text)
+    s:Layout(CW, bodyH)
+    return s
 end
+
+-- What a section costs above its cards -- the heading, then the card's
+-- own top padding -- and below them, that padding again plus the gap to
+-- whatever comes next.
+local SECTION_TOP    = TITLE_H + SECTION_PAD
+local SECTION_BOTTOM = SECTION_PAD + SECTION_GAP
+-- One row of cards, padded top and bottom.
+local ROW_BODY_H     = CARD_H + SECTION_PAD * 2
 
 ------------------------------------------------------------
 -- Section 1: Mythic+   (breakpoints: M0, +4, +9, +12)
 ------------------------------------------------------------
-SectionLabel(Y, "|cff00aaffMythic+|r")
-Y = Y + TITLE_H
+Section(Y, "|cff00aaffMythic+|r", ROW_BODY_H)
+Y = Y + SECTION_TOP
 
 -- Group M+ keys into ranges
 local mpGroups = {
@@ -238,15 +305,19 @@ for i, mg in ipairs(mpGroups) do
     CardTitle(card, mg.label, hex)
 
     -- Format ilvl + track, showing highest track
+    -- Compact on purpose: an en-dash with no spaces around it, and the
+    -- track abbreviated. "295-302 Champ" fits where "295 - 302 Champion"
+    -- did not, and a range that fits beats a range with its track cut
+    -- off -- the track is the half that says how far the item level can
+    -- still be pushed.
     local function FormatIlvlRange(lo, hi)
         local hiTrack = ns:GetTrackFromIlvl(hi)
         local tHex = hiTrack and CC[hiTrack] and CC[hiTrack].hex or "ffffffff"
-        local short = hiTrack or ""
-        if lo == hi then
-            return "|cffffffff" .. lo .. "|r |c" .. tHex .. short .. "|r"
-        else
-            return "|cffffffff" .. lo .. "|r - |cffffffff" .. hi .. "|r |c" .. tHex .. short .. "|r"
-        end
+        local short = hiTrack and (TRACK_SHORT[hiTrack] or hiTrack) or ""
+        local nums = (lo == hi) and tostring(lo)
+            or ("%d-%d"):format(lo, hi)
+        if short == "" then return "|cffffffff" .. nums .. "|r" end
+        return ("|cffffffff%s|r |c%s%s|r"):format(nums, tHex, short)
     end
 
     CardLine(card, 1, "Loot", FormatIlvlRange(loLoot, hiLoot))
@@ -254,7 +325,7 @@ for i, mg in ipairs(mpGroups) do
 
     CardLine(card, 3, "Crest", crestType, hex)
 end
-Y = Y + CARD_H + SECTION_GAP
+Y = Y + CARD_H + SECTION_BOTTOM
 
 ------------------------------------------------------------
 -- Section 2: Raid
@@ -262,14 +333,14 @@ Y = Y + CARD_H + SECTION_GAP
 -- Season 1 had three raid wings and a tab strip to filter between them.
 -- Season 2 is one raid, so the tabs are gone — the raid's name goes in
 -- the section label instead.
-SectionLabel(Y, "|cffa335eeRaid|r  |cff888888" ..
-    (ns.PROGRESSION.RAID_NAME or "") .. "|r")
+Section(Y, "|cffa335eeRaid|r  |cff888888" ..
+    (ns.PROGRESSION.RAID_NAME or "") .. "|r", ROW_BODY_H)
 
-Y = Y + TITLE_H
+Y = Y + SECTION_TOP
 
 -- Container for raid cards
 local raidCardContainer = CreateFrame("Frame", nil, f)
-raidCardContainer:SetPoint("TOPLEFT", f, "TOPLEFT", 0, CONTENT_TOP - Y)
+raidCardContainer:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -Y)
 raidCardContainer:SetSize(FRAME_W, CARD_H)
 
 -- Persistent card pool: one card per difficulty index. Cards live for
@@ -311,7 +382,7 @@ local function BuildRaidCards()
         local card = ensureCard(i)
         cardResetFs(card)
         card:ClearAllPoints()
-        card:SetPoint("TOPLEFT", raidCardContainer, "TOPLEFT", PAD + x, 0)
+        card:SetPoint("TOPLEFT", raidCardContainer, "TOPLEFT", PAD + SECTION_PAD + x, 0)
         card:SetBackdropColor(0.10, 0.10, 0.10, 0.9)
         card:SetBackdropBorderColor(c and (c.r * 0.6) or 0.25, c and (c.g * 0.6) or 0.25, c and (c.b * 0.6) or 0.25, 0.7)
 
@@ -325,7 +396,11 @@ local function BuildRaidCards()
         -- Title
         local titleFs = cardAcquireFs(card, "GameFontNormal")
         titleFs:SetPoint("TOPLEFT", 12, -8)
-        titleFs:SetText("|c" .. hex .. diff.difficulty .. "|r")
+        local titleStr = "|c" .. hex .. diff.difficulty .. "|r"
+        if diff.mythNine then
+            titleStr = titleStr .. ("  |cffff8000%s*|r"):format(diff.mythNine)
+        end
+        titleFs:SetText(titleStr)
         ns.ApplyTextShadow(titleFs)
 
         -- One card per difficulty: what bosses drop, what the vault
@@ -334,11 +409,12 @@ local function BuildRaidCards()
         -- Myth 9 rides along on the Loot line rather than taking a fourth
         -- row — CardLine puts row 4 at y=87 in a 100px card, which would
         -- sit on the border.
-        local lootStr = tostring(diff.loot)
-        if diff.mythNine then
-            lootStr = lootStr .. "  |cffff8000" .. diff.mythNine .. " last 2|r"
-        end
-        CardLine(card, 1, "Loot", lootStr)
+        -- Myth 9 rides on the TITLE row, not on the Loot value. It is a
+        -- property of the difficulty rather than of the drop, and the
+        -- value column is the one place on the card with no room to
+        -- spare -- squeezed in there it truncated to "328 344 l...",
+        -- which reads as two broken numbers.
+        CardLine(card, 1, "Loot", tostring(diff.loot))
         CardLine(card, 2, "Vault", tostring(diff.vault))
         CardLine(card, 3, "Crest", diff.crestType, hex)
 
@@ -347,13 +423,13 @@ local function BuildRaidCards()
 end
 
 BuildRaidCards()
-Y = Y + CARD_H + SECTION_GAP
+Y = Y + CARD_H + SECTION_BOTTOM
 
 ------------------------------------------------------------
 -- Section 3: Delves  (breakpoints: T4, T7, T10, T11)
 ------------------------------------------------------------
-SectionLabel(Y, "|cff00ff00Delves|r")
-Y = Y + TITLE_H
+Section(Y, "|cff00ff00Delves|r", ROW_BODY_H)
+Y = Y + SECTION_TOP
 
 -- Group delve tiers by crest type into ranges
 local delveGroups = {
@@ -417,7 +493,7 @@ for i, dg in ipairs(delveGroups) do
         CardLine(card, 3, "Crest", crestStr, hex)
     end
 end
-Y = Y + CARD_H + SECTION_GAP
+Y = Y + CARD_H + SECTION_BOTTOM
 
 ------------------------------------------------------------
 -- Section 4: Bottom row — two wider mini-panels
@@ -425,27 +501,36 @@ Y = Y + CARD_H + SECTION_GAP
 local PCOLS  = 2
 local PGAP   = 10
 local PW     = math.floor((CW - (PCOLS - 1) * PGAP) / PCOLS) -- ~461
-local PH     = math.floor(110 * uiScale)
 local PLINE  = 18
+-- Sized to their contents rather than to a guessed 110px.
+--
+-- Prey has three lines and Crafting three; at a fixed height both cards
+-- ended less than half way down and the page finished on two mostly
+-- empty boxes. A card that is taller than what it holds reads as
+-- something failing to load.
+local function PanelHeight(rows)
+    return SECTION_PAD + math.max(rows, 1) * PLINE + SECTION_PAD
+end
 
-local function MakePanel(panelCol, title, titleHex)
+--- One of the two bottom panels, on the same section card as the rows
+--- above it.
+---
+--- Their titles used to sit INSIDE the panel while every other section
+--- on the page put its title above one, so the bottom of the page read
+--- as a different kind of thing from the top. Returns the card's body,
+--- which is what the lines below are anchored into.
+local function MakePanel(panelCol, title, titleHex, rows)
     local x = (panelCol - 1) * (PW + PGAP)
-    local p = CreateFrame("Frame", nil, f, "BackdropTemplate")
-    p:SetSize(PW, PH)
-    p:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + x, CONTENT_TOP - Y)
-    ns.Widgets:Apply(p, "inset")
-    ns.SmoothFrame(p)
-
-    local s = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    s:SetPoint("TOPLEFT", 10, -8)
-    s:SetText("|c" .. titleHex .. title .. "|r")
-    ns.ApplyTextShadow(s)
-    return p
+    local sec = ns.Widgets:SectionCard(f)
+    sec:SetPoint("TOPLEFT", root, "TOPLEFT", PAD + x, -Y)
+    sec:SetText("|c" .. titleHex .. title .. "|r")
+    sec:Layout(PW, PanelHeight(rows))
+    return sec.body
 end
 
 local function PanelLine(panel, row, text)
     local s = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    s:SetPoint("TOPLEFT", 10, -30 - (row - 1) * PLINE)
+    s:SetPoint("TOPLEFT", 10, -SECTION_PAD - (row - 1) * PLINE)
     s:SetWidth(PW - 20)
     s:SetJustifyH("LEFT")
     s:SetWordWrap(false)
@@ -454,7 +539,7 @@ local function PanelLine(panel, row, text)
 end
 
 -- Panel 1 — Prey
-local p1 = MakePanel(1, "Prey", "ffffff66")
+local p1 = MakePanel(1, "Prey", "ffffff66", #ns.PROGRESSION.PREY)
 for i, e in ipairs(ns.PROGRESSION.PREY) do
     local c   = CC[e.crestType]
     local hex = c and c.hex or "ffffffff"
@@ -463,7 +548,7 @@ for i, e in ipairs(ns.PROGRESSION.PREY) do
 end
 
 -- Panel 2 — Crafting (Spark tiers)
-local p2 = MakePanel(2, "Crafting (Spark)", "ffff8000")
+local p2 = MakePanel(2, "Crafting (Spark)", "ffff8000", #ns.PROGRESSION.CRAFTING_SPARK)
 for i, spark in ipairs(ns.PROGRESSION.CRAFTING_SPARK) do
     local lo = spark.qualities[1]
     local hi = spark.qualities[#spark.qualities]

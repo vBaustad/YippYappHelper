@@ -68,6 +68,10 @@ local TAB_H = 22
 local TAB_W = 90
 local TAB_GAP = 4
 local TAB_Y = -36
+-- The vault chips get a row to themselves in app mode. In the standalone
+-- window they share the tab row, but the shell draws the tabs, so here
+-- the content has to start below the chips instead of behind them.
+local VAULT_ROW_H = TAB_H + 8
 local testMode = false
 
 local tabDefs = {
@@ -360,7 +364,32 @@ local function AcquireSecureBtn(parent)
     return btn
 end
 
+-- Section cards, pooled like everything else on the page.
+--
+-- The bottom of the Home view drew a bare 1px rule across the page and
+-- then two grey labels under it -- a line, and separately some text near
+-- it. SectionCard makes that rule the top edge of the card its content
+-- sits on, which is the shape the rest of the addon now uses.
+local secPool, secPoolIdx = {}, 0
+
+local function AcquireSection(parent)
+    secPoolIdx = secPoolIdx + 1
+    local sec = secPool[secPoolIdx]
+    if not sec then
+        sec = ns.Widgets:SectionCard(parent)
+        secPool[secPoolIdx] = sec
+    else
+        sec:SetParent(parent)
+    end
+    sec:ClearAllPoints()
+    sec:SetValue("")
+    sec:Show()
+    return sec
+end
+
 local function ResetPools()
+    for i = 1, secPoolIdx do secPool[i]:Hide() end
+    secPoolIdx = 0
     for i = 1, fsPoolIdx do fsPool[i]:Hide() end
     fsPoolIdx = 0
     for i = 1, texPoolIdx do texPool[i]:Hide() end
@@ -693,7 +722,13 @@ function ns:RefreshMythicPlus()
     local NAME_AREA = 110
     local ICON_GAP = 6
     local maxIconW = math.floor((cw - NAME_AREA - (numMaps - 1) * ICON_GAP) / numMaps)
-    local ICON_SIZE = math.min(74, math.max(maxIconW, 48))
+    -- 96, not 74. maxIconW already works out what the width allows, so
+    -- the cap was the only thing stopping the row using it -- eight
+    -- dungeons across a 700px page fit comfortably at 74 and left a band
+    -- of empty page beside them. The floor stays: below 48 the dungeon
+    -- art stops being recognisable, which is the whole point of showing
+    -- art rather than a list of names.
+    local ICON_SIZE = math.min(96, math.max(maxIconW, 48))
     local totalIconW = numMaps * ICON_SIZE + (numMaps - 1) * ICON_GAP
     local iconStartX = math.max(NAME_AREA, math.floor((cw - totalIconW) / 2))
 
@@ -1001,22 +1036,25 @@ function ns:RefreshMythicPlus()
 
     -- ── Bottom: Group Keystones (left) + Rating Goals (right) ──
     y = y - SECTION_GAP
-    local div2 = AcquireTex(content)
-    div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
-    div2:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, y)
-    div2:SetColorTexture(0.25, 0.25, 0.25, 0.6)
-    y = y - 8
 
     local bottomY = y
-    local halfW = math.floor(cw / 2) - 6
+    -- Not an even split. The left column is a handful of short keystone
+    -- rows; the right carries three progress bars AND the focus list
+    -- under them, and it was the one whose text had to wrap. Giving the
+    -- space to the column that has something to put in it.
+    local halfW = math.floor(cw * 0.42) - 6
+    local SEC_H = ns.Widgets:SectionTitleHeight()
+    local SEC_PAD = 8
 
     -- ── Left: Group Keystones ──
-    local ksHdr = AcquireFS(content)
-    ksHdr:SetPoint("TOPLEFT", content, "TOPLEFT", 0, bottomY)
-    ksHdr:SetFont(STANDARD_TEXT_FONT, 13, "")
-    ksHdr:SetText("|cffbbbbbbGroup Keystones|r")
-    local ksY = bottomY - 20
+    -- Acquired now and sized once its rows are placed: the card has to
+    -- exist first so it draws behind them, but how many keystones the
+    -- group is carrying is not known until they have been laid out.
+    local ksSec = AcquireSection(content)
+    ksSec:SetPoint("TOPLEFT", content, "TOPLEFT", 0, bottomY)
+    ksSec:SetText(ns.Widgets:Tint("muted", "Group Keystones"))
+    local ksTop = bottomY - SEC_H - SEC_PAD
+    local ksY = ksTop
 
     if #keystones > 0 then
         local KS_CARD_H = 36
@@ -1083,15 +1121,16 @@ function ns:RefreshMythicPlus()
         noKs:SetText(ns.Widgets:Tint("faint", "No keystones in group"))
         ksY = ksY - ROW_H
     end
+    ksSec:Layout(halfW, (ksTop - ksY) + SEC_PAD * 2)
 
     -- ── Right: Rating Goals ──
     local goalX = halfW + 12
-    local goalW = cw - goalX
-    local goalHdr = AcquireFS(content)
-    goalHdr:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, bottomY)
-    goalHdr:SetFont(STANDARD_TEXT_FONT, 13, "")
-    goalHdr:SetText("|cffbbbbbbRating Goals|r")
-    local goalY = bottomY - 20
+    local goalW = cw - goalX - SEC_PAD * 2
+    local goalSec = AcquireSection(content)
+    goalSec:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, bottomY)
+    goalSec:SetText(ns.Widgets:Tint("muted", "Rating Goals"))
+    local goalTop = bottomY - SEC_H - SEC_PAD
+    local goalY = goalTop
 
     local MILESTONES = { 2000, 2500, 3000 }
     local ownScore = ownRating
@@ -1123,7 +1162,7 @@ function ns:RefreshMythicPlus()
         -- Bar background
         local barBg = AcquireTex(content)
         barBg:SetSize(goalW, BAR_H)
-        barBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
+        barBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
         barBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
         barBg:SetDrawLayer("ARTWORK", 0)
 
@@ -1193,7 +1232,7 @@ function ns:RefreshMythicPlus()
             goalY = goalY - 2
 
             local focusHdr = AcquireFS(content)
-            focusHdr:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
+            focusHdr:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
             focusHdr:SetFont(STANDARD_TEXT_FONT, 13, "")
             focusHdr:SetText(string.format("|cffbbbbbbFocus for |cff%02x%02x%02x%d|r",
                 tr * 255, tg * 255, tb * 255, target))
@@ -1209,7 +1248,7 @@ function ns:RefreshMythicPlus()
                     -- Row background
                     local rowBg = AcquireTex(content)
                     rowBg:SetSize(goalW, FOCUS_ROW_H)
-                    rowBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
+                    rowBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
                     rowBg:SetColorTexture(0.08, 0.08, 0.08, 0.5)
                     rowBg:SetDrawLayer("BACKGROUND", 1)
 
@@ -1253,8 +1292,11 @@ function ns:RefreshMythicPlus()
             break  -- only show focus for the next unachieved milestone
         end
     end
+    goalSec:Layout(cw - goalX, (goalTop - goalY) + SEC_PAD * 2)
 
-    y = math.min(ksY, goalY)
+    -- Past whichever column ran longer, and past its card's bottom
+    -- padding: the two sit side by side and the page has to clear both.
+    y = math.min(ksY, goalY) - SEC_PAD
 end
 
 ------------------------------------------------------------
@@ -1262,7 +1304,7 @@ end
 ------------------------------------------------------------
 function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
     if enabled then
-        frame:SetBackdrop(nil)
+        ns.Widgets:Unskin(frame)
         closeBtn:Hide()
         -- The shell's strip replaces this one.
         for _, tab in pairs(tabButtons) do tab:Hide() end
@@ -1271,21 +1313,33 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
         frame:EnableMouse(false)
         local dw, dh = ns:GetAppFrameSize()
         frame:SetSize(contentWidth or dw, contentHeight or (dh - 34))
-        local appTabY = -18
-        for id, tab in pairs(tabButtons) do
-            tab:ClearAllPoints()
-            local idx = (id == "home") and 0 or 1
-            tab:SetPoint("TOPLEFT", PAD + idx * (TAB_W + TAB_GAP), appTabY)
-            tab:Show()
-        end
+
+        -- The page's own Home/Guild tabs stay hidden. They were hidden
+        -- four lines above and then re-anchored and re-shown right here,
+        -- which is why the page carried two identical tab rows: the
+        -- shell draws one from the subTabs it registers, and this drew
+        -- the other a few pixels from it. Hiding a control and then
+        -- showing it again is not a migration.
+        --
+        -- The vault chips move to the row the tabs vacated, so they are
+        -- a row of their own rather than something the content has to
+        -- flow around -- overlapping the dungeon tiles is exactly what
+        -- they did when the content moved up to fill the freed space.
+        local appTopY = -6
         vaultContainer:ClearAllPoints()
-        vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, appTabY)
+        vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, appTopY)
+
         content:ClearAllPoints()
-        -- No TAB_H: the page's own tab row is hidden in app mode
-        -- because the shell draws one, so reserving its height
-        -- just pushes the content down past empty space.
-        content:SetPoint("TOPLEFT", PAD, appTabY - 4)
+        -- Clear of the vault row, not of the tab row that is no longer
+        -- drawn.
+        content:SetPoint("TOPLEFT", PAD, appTopY - VAULT_ROW_H)
         content:SetPoint("BOTTOMRIGHT", -PAD, PAD)
+
+        -- The shell's content region already IS a surface. A second one
+        -- painted inside it is the recessed panel-within-a-panel that
+        -- made the page look indented, and it was still anchored to the
+        -- standalone tab row it no longer has.
+        if contentSurface then contentSurface:Hide() end
     else
         ns.Widgets:Apply(frame, "panel")
         closeBtn:Show()
@@ -1305,6 +1359,14 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
         content:ClearAllPoints()
         content:SetPoint("TOPLEFT", PAD, TAB_Y - TAB_H - 4)
         content:SetPoint("BOTTOMRIGHT", -PAD, PAD)
+        -- Standalone draws its own window, so it needs its own surface
+        -- back and its own tab row with it.
+        if contentSurface then
+            contentSurface:ClearAllPoints()
+            contentSurface:SetPoint("TOPLEFT", PAD - 8, TAB_Y - TAB_H + 2)
+            contentSurface:SetPoint("BOTTOMRIGHT", -PAD + 8, PAD - 6)
+            contentSurface:Show()
+        end
     end
 end
 

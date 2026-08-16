@@ -89,12 +89,17 @@ local STEP_COLORS = {
     { 0.86, 0.36, 0.36 },
 }
 
--- A ranked list is a top-N question. Twenty-five rows is a wall that
--- also forces a scrollbar; ten answers "what should I use" and the rest
--- are one click away. The spare room a short list leaves goes into
--- drawing it bigger rather than into more rows -- see UI:Draw.
-local TOP_N = 10
-local MAX_SEARCH_ROWS = 15
+-- A ranked list is a top-N question, but ten was answering a narrower
+-- one than the page had room for: both views left the bottom half of
+-- the panel empty and still said "+18 more". Twenty fills the region
+-- without forcing a scrollbar at the sizes the shell gives this page,
+-- and the tail is still one click away.
+--
+-- Shared by both views deliberately. My Spec and Loot Council are the
+-- same question asked from two directions, and a list that changes
+-- length when you switch tabs reads as one of them being truncated.
+local TOP_N = 20
+local MAX_SEARCH_ROWS = 20
 local MAX_SUGGEST = 5
 
 -- The ranked rows are laid out for roughly this many units across, and

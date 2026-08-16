@@ -140,11 +140,20 @@ specFs:SetTextColor(unpack(ns.COLORS.TEXT_TERTIARY))
 -- App mode
 ------------------------------------------------------------
 local HEADER_H = 34
-local filterBar  -- forward declare; created below
+-- Forward-declared, all three, because SetConsumablesAppMode below
+-- touches them and they are built further down the file.
+--
+-- filterBar was declared here and the other two were not, which is the
+-- whole of the "Consumables shows nothing" bug: a local declared LATER
+-- is not in scope inside a function written earlier, so `tabButtons`
+-- there resolved to a global, and the global was nil. It threw on
+-- pairs(nil) before the page had drawn a single row. Nothing about the
+-- call site looked wrong -- the table exists, just not yet.
+local filterBar, tabButtons, scrolls
 
 function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
     if enabled then
-        frame:SetBackdrop(nil)
+        ns.Widgets:Unskin(frame)
         closeBtn:Hide()
         -- The shell draws the strip in app mode.
         for _, btn in pairs(tabButtons) do btn:Hide() end
@@ -154,8 +163,8 @@ function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
         -- leaves a page looking emptier than it was.
         for _, scroll in pairs(scrolls) do
             scroll:ClearAllPoints()
-            scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -2)
-            scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -26, 8)
+            scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", 0, -2)
+            scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 8)
         end
         titleFs:Hide()
         specFs:Hide()
@@ -168,7 +177,7 @@ function ns:SetConsumablesAppMode(enabled, contentWidth, contentHeight)
         filterBar:ClearAllPoints()
         filterBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -10)
         filterBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, -10)
-        filterBar:SetBackdrop(nil)
+        ns.Widgets:Unskin(filterBar)
         if not filterBar._divider then
             local div = filterBar:CreateTexture(nil, "OVERLAY")
             div:SetColorTexture(0.35, 0.35, 0.35, 0.8)
@@ -205,6 +214,32 @@ filterBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, -34)
 ns.Widgets:Apply(filterBar, "row")
 ns.SmoothFrame(filterBar)
 
+--- The filter strip's borders, from the skin.
+---
+--- These controls were skinned with W:Apply and then immediately
+--- repainted with hardcoded greys and a cyan selection, so the top of
+--- the page wore a cold grey/cyan palette while the cards below it wore
+--- the skin's warm gold. That is the whole of "the top feels like a
+--- different style" -- the skin was reaching these frames and being
+--- overwritten a line later by a colour no skin can change.
+---
+--- The `inset` edge deliberately, not `row`: these read as controls
+--- sitting ON the page, and matching the cards' own hairline is what
+--- puts them in the same design as everything under them.
+local function EdgeIdle(btn)
+    local _, edge = ns.Widgets:Surface("inset")
+    if edge then
+        btn:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4] or 1)
+    else
+        btn:SetBackdropBorderColor(ns.Widgets:Color("faint"))
+    end
+end
+
+local function EdgeAccent(btn, alpha)
+    local r, g, b = ns.Widgets:Color("accent")
+    btn:SetBackdropBorderColor(r, g, b, alpha or 0.9)
+end
+
 -- Class label
 local classLabel = filterBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 classLabel:SetPoint("LEFT", 10, 0)
@@ -229,8 +264,9 @@ classBtnArrow:SetPoint("RIGHT", -4, 0)
 classBtnArrow:SetTextColor(unpack(ns.COLORS.TEXT_TERTIARY))
 classBtnArrow:SetText("v")
 
-classBtn:SetScript("OnEnter", function(self) self:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.6) end)
-classBtn:SetScript("OnLeave", function(self) self:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5) end)
+classBtn:SetScript("OnEnter", function(self) EdgeAccent(self, 0.55) end)
+classBtn:SetScript("OnLeave", EdgeIdle)
+EdgeIdle(classBtn)
 
 -- Class dropdown popup
 local classDropdown = CreateFrame("Frame", "YippYappConsumClassDropdown", UIParent, "BackdropTemplate")
@@ -407,12 +443,15 @@ function ns:RefreshConsumablesFilter()
             end
 
             -- Active styling
+            -- Selected reads in the skin's accent rather than a fixed
+            -- cyan, so the chosen spec is lit in the same colour the
+            -- rest of the window uses for "this one".
             if specID == selectedSpecID then
-                btn:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.8)
-                btn._label:SetTextColor(0.0, 0.8, 1.0)
+                EdgeAccent(btn, 0.9)
+                btn._label:SetTextColor(ns.Widgets:Color("accent"))
             else
-                btn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
-                btn._label:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
+                EdgeIdle(btn)
+                btn._label:SetTextColor(ns.Widgets:Color("muted"))
             end
 
             btn:Show()
@@ -437,11 +476,14 @@ local TAB_DEFS = {
     { id = "consumables",  label = "Consumables",  color = { 1.0, 0.53, 0.0 } },
 }
 
-local tabButtons = {}
+-- Assigned, not declared: both are forward-declared up by
+-- SetConsumablesAppMode, which reads them. Re-declaring them local here
+-- would shadow those and leave the function looking at nil again.
+tabButtons = {}
 local containers = {}
 -- The scroll frame that owns each container. Shown/hidden with the tab;
 -- the container itself is the scroll child and is always "visible".
-local scrolls = {}
+scrolls = {}
 
 for i, def in ipairs(TAB_DEFS) do
     local btn = ns.CreateUnderlineTab(frame, def.label, def.color)
@@ -456,34 +498,28 @@ for i, def in ipairs(TAB_DEFS) do
     -- ours to control. These were plain frames pinned to the panel edge,
     -- so a long guide simply drew past the bottom and over whatever was
     -- behind it.
-    -- A surface under the guide, created before the scroll frame so it
-    -- stays behind it -- siblings at the same frame level draw in
-    -- creation order.
-    local surface = ns.Widgets and ns.Widgets:Panel(frame, "inset")
-    if surface then
-        surface:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD - 8, -20)
-        surface:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 2)
-        ns.ConsumablesSurface = surface
-    end
+    -- No page-wide surface any more.
+    --
+    -- There used to be an "inset" panel spanning the whole content area,
+    -- anchored 22px LEFT of the filter bar -- so it hung off the page's
+    -- left edge, out past the tabs, and read as a second recessed window
+    -- inside the first. The shell's content region already IS the
+    -- surface; the sections below draw the cards that belong on it.
 
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", -PAD, -28)
-    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -26, 8)
+    -- Flush with the filter bar above it. The -PAD pulled the whole list
+    -- 14px left of the tabs and the class dropdown, which is why nothing
+    -- on the page lined up with anything else.
+    scroll:SetPoint("TOPLEFT", filterBar, "BOTTOMLEFT", 0, -28)
+    -- 10, not 26: the bar only appears when it is needed now, and when
+    -- it does it sits in the page margin beside the cards rather than
+    -- carving a permanent gutter out of them.
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 8)
     scroll:SetScript("OnMouseWheel", function(sf, delta)
         local v = sf:GetVerticalScroll() - delta * 30
         sf:SetVerticalScroll(math.max(0, math.min(v, sf:GetVerticalScrollRange())))
     end)
     scroll:Hide()
-
-    -- The surface follows the scroll frame rather than being shown and
-    -- hidden alongside it at every call site. This one is toggled per
-    -- tab from several places, and a surface that has to be remembered
-    -- separately is a surface left floating behind an empty page.
-    if surface then
-        surface:Hide()
-        scroll:HookScript("OnShow", function() surface:Show() end)
-        scroll:HookScript("OnHide", function() surface:Hide() end)
-    end
 
     local container = CreateFrame("Frame", nil, scroll)
     container:SetSize(math.max(frame:GetWidth() - 40, 400), 400)
@@ -616,7 +652,14 @@ local function AcquireHitBtn(parent)
     return btn
 end
 
+-- Forward-declared: the section pool is built further down with the row
+-- helpers it belongs to, but ResetPools up here has to release it. The
+-- load harness caught this immediately -- it is the same shape as the
+-- bug that had this very page rendering nothing.
+local ResetSections
+
 local function ResetPools()
+    ResetSections()
     for i = 1, fsPoolIdx do fsPool[i]:Hide() end
     fsPoolIdx = 0
     for i = 1, iconPoolIdx do iconPool[i]:Hide() end
@@ -672,27 +715,128 @@ end
 -- Row drawing
 ------------------------------------------------------------
 local LABEL_W = 120
+-- The card's own padding, and where content sits once it is inside one.
+-- Split, because the two axes want different answers.
+--
+-- Horizontally: nothing. The card IS the table's background, so a row
+-- that stops short of its edge leaves a border, then a gap, then the
+-- row -- padding on top of the page margin the card already sits in.
+-- Rows run to the card's edge and the hairline frames them.
+--
+-- Vertically: a little, so the first and last rows are not sitting on
+-- the border they are framed by.
+-- Zero on every side. The card IS the table's background, so ANY gap
+-- between its border and the table's own fill reads as the table
+-- floating inside a box.
+--
+-- The breathing room the table needs at its top and bottom is real, but
+-- it belongs INSIDE the table's fill, not outside it: a taller header
+-- band, and a strip of the same background under the last row. Padding
+-- the card instead leaves the card's own colour showing through, which
+-- is the gap it was supposed to remove.
+local SEC_PAD_X = 0
+local SEC_PAD = 0
+-- Space above the header text and below the last row, carried by the
+-- table's own background rather than by the card's padding.
+local TABLE_EDGE = 8
+-- Breathing room belongs to the TEXT, not to the card. Pushing the rows
+-- off the border just moved the whitespace outside where it reads as a
+-- seam; inside the row it reads as a margin.
+local ROW_TEXT_PAD = 14
+local SEC_GAP = 10
+local ROW_X = PAD + SEC_PAD_X
+
+--- The width this container's contents actually have.
+---
+--- Taken from the SCROLL FRAME, not from the container. SizeContent sets
+--- the container's own width and it runs AFTER everything has been
+--- drawn, so every row and card in a refresh was measuring itself
+--- against the width left over from the previous one. That was invisible
+--- while the rows were bare text on a full-width page; it became a card
+--- stopping half way across the panel the moment they gained a border.
+local function ContentWidth(parent)
+    local sf = parent and parent:GetParent()
+    local w = sf and sf:GetWidth() or 0
+    if w > 20 then return w - 4 end
+    w = (parent and parent:GetWidth()) or 0
+    if w > 20 then return w end
+    return frame:GetWidth()
+end
+
+-- Sections, pooled. Same widget Teleports, Progression, the Loot Browser
+-- and Mythic+ use, so a consumables list reads as the same kind of thing
+-- as everything else in the addon rather than as a bare table on a slab.
+local secPool, secPoolIdx = {}, 0
+
+local function AcquireSection(parent)
+    secPoolIdx = secPoolIdx + 1
+    local sec = secPool[secPoolIdx]
+    if not sec then
+        sec = ns.Widgets:SectionCard(parent)
+        secPool[secPoolIdx] = sec
+    else
+        sec:SetParent(parent)
+    end
+    sec:ClearAllPoints()
+    sec:SetValue("")
+    sec:Show()
+    -- Exposed so Tools/loadcheck.py can read the laid-out geometry back
+    -- and check the cards do not overlap or run past the region. Two
+    -- assignments, and it turns "the sections look right" into something
+    -- a check can decide.
+    ns.__consSecPool, ns.__consSecIdx = secPool, secPoolIdx
+    return sec
+end
+
+function ResetSections()
+    for i = 1, secPoolIdx do secPool[i]:Hide() end
+    secPoolIdx = 0
+    ns.__consSecIdx = 0
+end
+
+--- Open a section and return it plus the y its contents start at.
+---
+--- Titled with the SPEC, not the tab. The tab strip directly above
+--- already reads "Enchants" / "Gems" / "Consumables", so repeating it
+--- here would be a heading that tells you what you just clicked. Which
+--- spec the recommendations are for is the thing the card can say that
+--- nothing else on the page does -- the window's own spec label is
+--- hidden in app mode.
+---
+--- Sized on close rather than here: how many rows a spec has, and how
+--- tall its guide wraps to, are not known until they are drawn.
+local function OpenSection(parent, y, title)
+    local sec = AcquireSection(parent)
+    sec:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
+    sec:SetText(title)
+    return sec, y - ns.Widgets:SectionTitleHeight() - SEC_PAD
+end
+
+local function CloseSection(parent, sec, top, y)
+    local w = ContentWidth(parent)
+    sec:Layout(w - PAD * 2, (top - y) + SEC_PAD * 2)
+    return y - SEC_PAD - SEC_GAP
+end
 
 local function DrawRow(parent, y, itemID, label)
     local icon = GetItemIcon(itemID)
     local link = GetItemLink(itemID)
     local name = GetItemName(itemID) or ("item:" .. itemID)
-    local pw = parent:GetWidth()
-    if pw < 10 then pw = frame:GetWidth() end
+    local pw = ContentWidth(parent)
 
     local bg = AcquireBg(parent)
     bg:SetHeight(ROW_H)
-    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
-    bg:SetPoint("RIGHT", parent, "RIGHT", -PAD, 0)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
+    bg:SetPoint("RIGHT", parent, "RIGHT", -ROW_X, 0)
     bg:SetColorTexture(1, 1, 1, 0.02)
 
     local labelFs = AcquireFs(parent, "GameFontNormal")
-    labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 8, y - 3)
+    labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + ROW_TEXT_PAD, y - 3)
     labelFs:SetWidth(LABEL_W)
     labelFs:SetTextColor(0.65, 0.65, 0.65)
     labelFs:SetText(label)
 
-    local itemX = PAD + LABEL_W + 12
+    local itemX = ROW_X + ROW_TEXT_PAD + LABEL_W
     if icon then
         local tex = AcquireIcon(parent)
         tex:SetSize(ICON_SIZE, ICON_SIZE)
@@ -702,7 +846,7 @@ local function DrawRow(parent, y, itemID, label)
 
     local nameFs = AcquireFs(parent, "GameFontNormal")
     nameFs:SetPoint("TOPLEFT", parent, "TOPLEFT", itemX + ICON_SIZE + 6, y - 3)
-    nameFs:SetWidth(pw - itemX - ICON_SIZE - PAD - 10)
+    nameFs:SetWidth(pw - itemX - ICON_SIZE - ROW_X - 10)
     if link then
         nameFs:SetText(link)
     else
@@ -711,8 +855,8 @@ local function DrawRow(parent, y, itemID, label)
 
     local itemLink = link or ("item:" .. itemID)
     local btn = AcquireHitBtn(parent)
-    btn:SetSize(pw - PAD * 2, ROW_H)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
+    btn:SetSize(pw - ROW_X * 2, ROW_H)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
     btn:SetScript("OnEnter", function(self)
         -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
         -- row, so anchoring to the owner's right edge put the tooltip
@@ -736,22 +880,21 @@ local function DrawAltRow(parent, y, itemID)
     local icon = GetItemIcon(itemID)
     local link = GetItemLink(itemID)
     local name = GetItemName(itemID) or ("item:" .. itemID)
-    local pw = parent:GetWidth()
-    if pw < 10 then pw = frame:GetWidth() end
+    local pw = ContentWidth(parent)
 
     local bg = AcquireBg(parent)
     bg:SetHeight(ROW_H)
-    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
-    bg:SetPoint("RIGHT", parent, "RIGHT", -PAD, 0)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
+    bg:SetPoint("RIGHT", parent, "RIGHT", -ROW_X, 0)
     bg:SetColorTexture(1, 1, 1, 0.015)
 
     local labelFs = AcquireFs(parent, "GameFontNormalSmall")
-    labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 8, y - 4)
+    labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + ROW_TEXT_PAD, y - 4)
     labelFs:SetWidth(LABEL_W)
     labelFs:SetTextColor(0.4, 0.4, 0.4)
     labelFs:SetText("or")
 
-    local itemX = PAD + LABEL_W + 12
+    local itemX = ROW_X + ROW_TEXT_PAD + LABEL_W
     if icon then
         local tex = AcquireIcon(parent)
         tex:SetSize(ICON_SIZE, ICON_SIZE)
@@ -761,7 +904,7 @@ local function DrawAltRow(parent, y, itemID)
 
     local nameFs = AcquireFs(parent, "GameFontNormal")
     nameFs:SetPoint("TOPLEFT", parent, "TOPLEFT", itemX + ICON_SIZE + 6, y - 3)
-    nameFs:SetWidth(pw - itemX - ICON_SIZE - PAD - 10)
+    nameFs:SetWidth(pw - itemX - ICON_SIZE - ROW_X - 10)
     if link then
         nameFs:SetText(link)
     else
@@ -770,8 +913,8 @@ local function DrawAltRow(parent, y, itemID)
 
     local altLink = link or ("item:" .. itemID)
     local btn = AcquireHitBtn(parent)
-    btn:SetSize(pw - PAD * 2, ROW_H)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
+    btn:SetSize(pw - ROW_X * 2, ROW_H)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
     btn:SetScript("OnEnter", function(self)
         -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
         -- row, so anchoring to the owner's right edge put the tooltip
@@ -804,20 +947,19 @@ local function DrawStaleBanner(parent, y, data)
     if not target or not data then return y end
     if data.season == target then return y end
 
-    local pw = parent:GetWidth()
-    if pw < 10 then pw = frame:GetWidth() end
+    local pw = ContentWidth(parent)
 
     -- Kept to a single compact line: these containers do not scroll, so
     -- every pixel the banner adds pushes the last rows off the bottom.
     local bg = AcquireBg(parent)
     bg:SetHeight(20)
-    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y - 1)
-    bg:SetPoint("RIGHT", parent, "RIGHT", -PAD, 0)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y - 1)
+    bg:SetPoint("RIGHT", parent, "RIGHT", -ROW_X, 0)
     bg:SetColorTexture(0.45, 0.30, 0.05, 0.35)
 
     local fs = AcquireFs(parent, "GameFontNormalSmall")
-    fs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 6, y - 6)
-    fs:SetWidth(pw - PAD * 2 - 12)
+    fs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + 6, y - 6)
+    fs:SetWidth(pw - ROW_X * 2 - 12)
     fs:SetJustifyH("LEFT")
     fs:SetWordWrap(false)
     fs:SetText(("|cffffcc00%s advice|r — %s guides are not published yet.")
@@ -832,32 +974,47 @@ end
 --- scroll bar never knew there was anything to scroll.
 ---
 --- y runs negative downwards, hence the negation.
+--- Show the scroll bar only when there is something to scroll.
+---
+--- UIPanelScrollFrameTemplate draws its bar unconditionally, so a page
+--- whose content fitted still carried a full-height bar and the 26px of
+--- reserved gutter beside it -- a control for a gesture that does
+--- nothing, and a strip of dead page next to the cards.
+local function UpdateScrollBar(scroll, contentH)
+    local bar = scroll and (scroll.ScrollBar or scroll.scrollBar)
+    -- Type-checked, not just nil-checked. Which field holds the bar --
+    -- and whether the template makes one at all -- has changed between
+    -- client versions, so this asks whether what came back can actually
+    -- be shown rather than assuming it can.
+    if type(bar) ~= "table" or not bar.SetShown then return end
+    local viewH = scroll:GetHeight() or 0
+    -- The mouse wheel still works either way; this only decides whether
+    -- the bar is worth the width it takes.
+    bar:SetShown(viewH > 0 and contentH > viewH + 1)
+end
+
 local function SizeContent(parent, y)
-    local width = parent:GetParent() and parent:GetParent():GetWidth() or 0
-    if width > 20 then parent:SetWidth(width - 4) end
-    parent:SetHeight(math.max(-y + PAD, 1))
+    local width = ContentWidth(parent)
+    if width > 20 then parent:SetWidth(width) end
+    local h = math.max(-y + PAD, 1)
+    parent:SetHeight(h)
+    UpdateScrollBar(parent:GetParent(), h)
 end
 
 local function DrawGuide(parent, y, text)
-    local pw = parent:GetWidth()
-    if pw < 10 then pw = frame:GetWidth() end
-    local textW = pw - PAD * 2 - 20
+    local pw = ContentWidth(parent)
+    local textW = pw - ROW_X * 2 - ROW_TEXT_PAD * 2
 
-    -- Divider
-    local div = AcquireBg(parent)
-    div:SetHeight(1)
-    div:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 4, y - 6)
-    div:SetPoint("RIGHT", parent, "RIGHT", -PAD - 4, 0)
-    div:SetColorTexture(0.3, 0.3, 0.3, 0.3)
-    y = y - 16
+    -- No divider and no "Guide" heading here any more: the section card
+    -- this is drawn into carries both, and the rule is its top edge. The
+    -- hand-rolled pair drew a second line a few pixels from the card's
+    -- own, which is the doubled-rule problem every other page had.
 
-    -- Header
-    local hdr = AcquireFs(parent, "GameFontNormal")
-    hdr:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 8, y)
-    hdr:SetTextColor(unpack(ns.COLORS.TEXT_HEADER))
-    hdr:SetText("Guide")
-    ns.ApplyTextShadow(hdr)
-    y = y - 20
+    -- Prose gets a vertical margin where the table does not. Rows are
+    -- flush to the card's edges because the card is their frame and a
+    -- gap there reads as a seam; a paragraph pressed against the same
+    -- border just reads as text about to fall out of the box.
+    y = y - ROW_TEXT_PAD
 
     -- Split on double newlines into paragraphs
     local paragraphs = {}
@@ -874,7 +1031,7 @@ local function DrawGuide(parent, y, text)
 
     for i, para in ipairs(paragraphs) do
         local fs = AcquireFs(parent, "GameFontNormal")
-        fs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 10, y)
+        fs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + ROW_TEXT_PAD, y)
         fs:SetWidth(textW)
         fs:SetWordWrap(true)
         fs:SetSpacing(2)
@@ -883,30 +1040,49 @@ local function DrawGuide(parent, y, text)
         y = y - fs:GetStringHeight() - 10
     end
 
-    return y
+    return y - ROW_TEXT_PAD + 10
 end
 
 local function DrawColumnHeader(parent, y)
-    local pw = parent:GetWidth()
-    if pw < 10 then pw = frame:GetWidth() end
+    local pw = ContentWidth(parent)
 
+    -- Taller than its text needs, with the labels pushed down inside
+    -- it. The band still starts at the card's top border, so the space
+    -- above "Slot" is the header's own background rather than a gap
+    -- above the table.
+    local headerH = 18 + TABLE_EDGE
     local bg = AcquireBg(parent)
-    bg:SetHeight(18)
-    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, y)
-    bg:SetPoint("RIGHT", parent, "RIGHT", -PAD, 0)
+    bg:SetHeight(headerH)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
+    bg:SetPoint("RIGHT", parent, "RIGHT", -ROW_X, 0)
     bg:SetColorTexture(1, 1, 1, 0.03)
 
     local slotFs = AcquireFs(parent, "GameFontNormalSmall")
-    slotFs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + 8, y - 2)
+    slotFs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + ROW_TEXT_PAD, y - TABLE_EDGE - 2)
     slotFs:SetTextColor(0.45, 0.45, 0.45)
     slotFs:SetText("Slot")
 
     local itemFs = AcquireFs(parent, "GameFontNormalSmall")
-    itemFs:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD + LABEL_W + 12, y - 2)
+    itemFs:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X + ROW_TEXT_PAD + LABEL_W, y - TABLE_EDGE - 2)
     itemFs:SetTextColor(0.45, 0.45, 0.45)
     itemFs:SetText("Item")
 
-    return y - 20
+    return y - headerH - 2
+end
+
+--- A blank strip of the table's own background, closing it off.
+---
+--- The space under the last row has to be part of the TABLE. Card
+--- padding would leave the card's colour showing between the border and
+--- the rows, which is the gap this is meant to remove; a strip of
+--- row-coloured fill does the same job from the inside.
+local function DrawTableFoot(parent, y)
+    local bg = AcquireBg(parent)
+    bg:SetHeight(TABLE_EDGE)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
+    bg:SetPoint("RIGHT", parent, "RIGHT", -ROW_X, 0)
+    bg:SetColorTexture(1, 1, 1, 0.02)
+    return y - TABLE_EDGE
 end
 
 ------------------------------------------------------------
@@ -953,13 +1129,19 @@ function ns:RefreshConsumables()
     local ep = containers.enchants
     local ey = DrawStaleBanner(containers.enchants, -6, data)
     if data.enchants and #data.enchants > 0 then
-        ey = DrawColumnHeader(ep, ey)
+        local sec, top = OpenSection(ep, ey, specName)
+        sec:SetValue(("|cff%s%d slots|r"):format(
+            ns.Widgets:Hex("faint"), #data.enchants))
+        ey = DrawColumnHeader(ep, top)
         for _, e in ipairs(data.enchants) do
             ey = DrawRow(ep, ey, e.itemID, e.slot)
         end
+        ey = DrawTableFoot(ep, ey)
+        ey = CloseSection(ep, sec, top, ey)
     end
     if data.enchantGuide then
-        ey = DrawGuide(ep, ey, data.enchantGuide)
+        local sec, top = OpenSection(ep, ey, "Guide")
+        ey = CloseSection(ep, sec, top, DrawGuide(ep, top, data.enchantGuide))
     end
     SizeContent(ep, ey)
 
@@ -967,21 +1149,31 @@ function ns:RefreshConsumables()
     local gp = containers.gems
     local gy = DrawStaleBanner(gp, -6, data)
     if data.gems and #data.gems > 0 then
-        gy = DrawColumnHeader(gp, gy)
+        local sec, top = OpenSection(gp, gy, specName)
+        sec:SetValue(("|cff%s%d gems|r"):format(
+            ns.Widgets:Hex("faint"), #data.gems))
+        gy = DrawColumnHeader(gp, top)
         for _, g in ipairs(data.gems) do
             gy = DrawRow(gp, gy, g.itemID, g.label)
         end
+        gy = DrawTableFoot(gp, gy)
+        gy = CloseSection(gp, sec, top, gy)
     end
     if data.gemGuide then
-        gy = DrawGuide(gp, gy, data.gemGuide)
+        local sec, top = OpenSection(gp, gy, "Guide")
+        gy = CloseSection(gp, sec, top, DrawGuide(gp, top, data.gemGuide))
     end
     SizeContent(gp, gy)
 
     -- Consumables tab
     local cp = containers.consumables
     local cy = DrawStaleBanner(cp, -6, data)
+    local cSec, cTop
     if data.consumables and #data.consumables > 0 then
-        cy = DrawColumnHeader(cp, cy)
+        cSec, cTop = OpenSection(cp, cy, specName)
+        cSec:SetValue(("|cff%s%d items|r"):format(
+            ns.Widgets:Hex("faint"), #data.consumables))
+        cy = DrawColumnHeader(cp, cTop)
         for _, c in ipairs(data.consumables) do
             cy = DrawRow(cp, cy, c.itemID, c.label)
             if c.alt then
@@ -989,8 +1181,13 @@ function ns:RefreshConsumables()
             end
         end
     end
+    if cSec then
+        cy = DrawTableFoot(cp, cy)
+        cy = CloseSection(cp, cSec, cTop, cy)
+    end
     if data.consumableGuide then
-        cy = DrawGuide(cp, cy, data.consumableGuide)
+        local sec, top = OpenSection(cp, cy, "Guide")
+        cy = CloseSection(cp, sec, top, DrawGuide(cp, top, data.consumableGuide))
     end
     SizeContent(cp, cy)
 end

@@ -274,6 +274,16 @@ local function AcquireRow(parent)
     end
 
     row:SetParent(parent)
+    -- Level set explicitly, every acquire.
+    --
+    -- These rows are pooled and reparented, and a pooled frame carries
+    -- whatever level it was last given. The section cards behind them
+    -- pin to the content frame's CURRENT level, so any row still holding
+    -- an older, lower level ends up underneath the card it is supposed
+    -- to sit on -- which is a whole page of content visible only as a
+    -- shadow through a panel. Leaving this to SetParent's re-derivation
+    -- is the same ambiguity that hid the Consumables rows.
+    row:SetFrameLevel((parent:GetFrameLevel() or 1) + 1)
     row:ClearAllPoints()
     row.countLabel:SetText("")
     row.countLabel:Hide()
@@ -287,6 +297,9 @@ local function AcquireRow(parent)
     return row
 end
 
+--- Icons hang off whichever row asked for them, so they inherit that
+--- row's level and need no pinning of their own -- but they are pooled
+--- across rows, so the parent has to be reasserted.
 local function AcquireIcon(parent)
     local icon = table.remove(iconPool)
     if not icon then
@@ -474,8 +487,35 @@ local function AcquireLabel(parent)
     return label
 end
 
+-- Section headings, pooled.
+--
+-- These were 18px rows filled with a hardcoded purple and purple text --
+-- a coloured bar, not a heading, and a colour no skin could reach. Every
+-- other page in the addon says "a new section starts here" with a title
+-- and the shared divider, so this one does too.
+local sectionPool, activeSections = {}, {}
+
+local function AcquireSection(parent)
+    local s = table.remove(sectionPool)
+    if not s then s = ns.Widgets:SectionCard(parent) end
+    s:SetParent(parent)
+    s:ClearAllPoints()
+    s:SetValue("")
+    s:Show()
+    table.insert(activeSections, s)
+    -- Exposed for Tools/loadcheck.py, as the Consumables pool is: it is
+    -- what lets the harness check layering and geometry on this page
+    -- rather than only on that one.
+    ns.__lootSections = activeSections
+    return s
+end
+
 local function ReleaseAll()
     GameTooltip:Hide()
+    for _, s in ipairs(activeSections) do
+        s:Hide(); s:ClearAllPoints(); table.insert(sectionPool, s)
+    end
+    wipe(activeSections)
     for _, r in ipairs(activeRows) do r:Hide(); r:ClearAllPoints(); r.dungBg:Hide(); table.insert(rowPool, r) end
     wipe(activeRows)
     for _, ic in ipairs(activeIcons) do ic:Hide(); ic:ClearAllPoints(); ic.itemLink = nil; ic.itemID = nil; ic._diffColor = nil; ic:SetSize(ICON_SIZE, ICON_SIZE); ic.tierBadge:Hide(); ic.favStar:Hide(); ic.tex:SetTexture(nil); table.insert(iconPool, ic) end
@@ -487,10 +527,37 @@ end
 ------------------------------------------------------------
 -- Helper: create a filter chip button
 ------------------------------------------------------------
+--- Control borders, from the skin.
+---
+--- Every selector on this page was skinned with W:Apply and then had its
+--- border repainted a line later with a hardcoded grey and a fixed cyan
+--- highlight. Those are colours no skin can reach, which is why the
+--- class, spec, slot, difficulty and stat controls all read as a
+--- different design from the cards under them.
+---
+--- The `inset` edge deliberately: it is the hairline the section cards
+--- wear, so the controls sit in the same design as the page they filter.
+local function EdgeIdle(btn)
+    if not btn or not btn.SetBackdropBorderColor then return end
+    local _, edge = ns.Widgets:Surface("inset")
+    if edge then
+        btn:SetBackdropBorderColor(edge[1], edge[2], edge[3], edge[4] or 1)
+    else
+        btn:SetBackdropBorderColor(ns.Widgets:Color("faint"))
+    end
+end
+
+local function EdgeAccent(btn, alpha)
+    if not btn or not btn.SetBackdropBorderColor then return end
+    local r, g, b = ns.Widgets:Color("accent")
+    btn:SetBackdropBorderColor(r, g, b, alpha or 0.9)
+end
+
 local function MakeChip(parent, text, width, onClick)
     local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
     btn:SetSize(width, 24)
-    ns.Widgets:Apply(btn, "row")
+    ns.Widgets:Apply(btn, "inset")
+    EdgeIdle(btn)
     ns.SmoothFrame(btn)
     ns.AddGlowHighlight(btn, 0.06)
 
@@ -520,7 +587,11 @@ local function UpdateLayout(f)
 
     -- In-app mode: no card border/background — just a bottom divider line.
     if f.inAppMode then
-        f._filterCard:SetBackdrop(nil)
+        -- Unskin, not SetBackdrop(nil): the card's inner shadow is four
+        -- textures the backdrop knows nothing about, and leaving them
+        -- behind is what kept a recessed block sitting under a strip
+        -- that was supposed to be flush with the page.
+        ns.Widgets:Unskin(f._filterCard)
         if not f._filterDivider then
             local div = f._filterCard:CreateTexture(nil, "OVERLAY")
             div:SetColorTexture(0.35, 0.35, 0.35, 0.8)
@@ -540,10 +611,14 @@ local function UpdateLayout(f)
     f._viewTabBar:SetPoint("TOPLEFT", f._filterCard, "BOTTOMLEFT", 0, tabGap)
     f._viewTabBar:SetPoint("TOPRIGHT", f._filterCard, "BOTTOMRIGHT", 0, tabGap)
 
-    f._content:ClearAllPoints()
-    f._content:SetPoint("TOPLEFT", f._viewTabBar, "BOTTOMLEFT", -hPad, -2)
-    f._content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 4)
-    f._content:SetClipsChildren(true)
+    -- The SCROLL frame is what gets placed now; the content is its
+    -- child and takes its width from it. Anchoring the child directly
+    -- would detach it from the viewport and it would stop scrolling.
+    f._scroll:ClearAllPoints()
+    f._scroll:SetPoint("TOPLEFT", f._viewTabBar, "BOTTOMLEFT", -hPad, -2)
+    f._scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 4)
+    local sw = f._scroll:GetWidth() or 0
+    if sw > 1 then f._content:SetWidth(sw) end
 end
 
 ------------------------------------------------------------
@@ -596,9 +671,13 @@ function ns:CreateLootBrowserFrame()
     -- the labels only cost horizontal space.
 
     local classBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
-    classBtn:SetSize(130, 24)
+    -- 100, not 130. The widest thing this ever shows is "Death Knight",
+    -- and the row it sits in was running off the frame's right edge --
+    -- so the slack these three carried is what the stat chips needed.
+    classBtn:SetSize(100, 24)
     classBtn:SetPoint("LEFT", 10, 0)
-    ns.Widgets:Apply(classBtn, "row")
+    ns.Widgets:Apply(classBtn, "inset")
+    EdgeIdle(classBtn)
     ns.SmoothFrame(classBtn)
     ns.AddGlowHighlight(classBtn, 0.06)
 
@@ -617,7 +696,8 @@ function ns:CreateLootBrowserFrame()
     classDropdown:SetSize(160, 10)
     classDropdown:SetFrameStrata("DIALOG")
     classDropdown:SetClampedToScreen(true)
-    ns.Widgets:Apply(classDropdown, "row")
+    ns.Widgets:Apply(classDropdown, "inset")
+    EdgeIdle(classDropdown)
     ns.SmoothFrame(classDropdown)
     classDropdown:EnableMouse(true)
     classDropdown:Hide()
@@ -673,8 +753,8 @@ function ns:CreateLootBrowserFrame()
             classDropdown:Show()
         end
     end)
-    classBtn:SetScript("OnEnter", function(self) self:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.6) end)
-    classBtn:SetScript("OnLeave", function(self) self:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5) end)
+    classBtn:SetScript("OnEnter", function(self) EdgeAccent(self, 0.6) end)
+    classBtn:SetScript("OnLeave", function(self) EdgeIdle(self) end)
 
     local classDiv = filterCard:CreateTexture(nil, "ARTWORK")
     classDiv:SetSize(1, 20)
@@ -683,9 +763,10 @@ function ns:CreateLootBrowserFrame()
 
     -- ============ SPEC DROPDOWN ============
     local specBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
-    specBtn:SetSize(140, 24)
+    specBtn:SetSize(112, 24)
     specBtn:SetPoint("LEFT", classDiv, "RIGHT", 10, 0)
-    ns.Widgets:Apply(specBtn, "row")
+    ns.Widgets:Apply(specBtn, "inset")
+    EdgeIdle(specBtn)
     ns.SmoothFrame(specBtn)
     ns.AddGlowHighlight(specBtn, 0.06)
 
@@ -711,7 +792,8 @@ function ns:CreateLootBrowserFrame()
     specDropdown:SetSize(160, 10)
     specDropdown:SetFrameStrata("DIALOG")
     specDropdown:SetClampedToScreen(true)
-    ns.Widgets:Apply(specDropdown, "row")
+    ns.Widgets:Apply(specDropdown, "inset")
+    EdgeIdle(specDropdown)
     ns.SmoothFrame(specDropdown)
     specDropdown:EnableMouse(true)
     specDropdown:Hide()
@@ -805,10 +887,10 @@ function ns:CreateLootBrowserFrame()
         end
     end)
     specBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.6)
+        EdgeAccent(self, 0.6)
     end)
     specBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        EdgeIdle(self)
     end)
 
     -- Divider between spec and slot
@@ -819,9 +901,10 @@ function ns:CreateLootBrowserFrame()
 
     -- ============ SLOT DROPDOWN ============
     local slotBtn = CreateFrame("Button", nil, filterCard, "BackdropTemplate")
-    slotBtn:SetSize(120, 24)
+    slotBtn:SetSize(96, 24)
     slotBtn:SetPoint("LEFT", div1, "RIGHT", 10, 0)
-    ns.Widgets:Apply(slotBtn, "row")
+    ns.Widgets:Apply(slotBtn, "inset")
+    EdgeIdle(slotBtn)
     ns.SmoothFrame(slotBtn)
     ns.AddGlowHighlight(slotBtn, 0.06)
 
@@ -842,7 +925,8 @@ function ns:CreateLootBrowserFrame()
     slotDropdown:SetSize(160, 10)
     slotDropdown:SetFrameStrata("DIALOG")
     slotDropdown:SetClampedToScreen(true)
-    ns.Widgets:Apply(slotDropdown, "row")
+    ns.Widgets:Apply(slotDropdown, "inset")
+    EdgeIdle(slotDropdown)
     ns.SmoothFrame(slotDropdown)
     slotDropdown:EnableMouse(true)
     slotDropdown:Hide()
@@ -953,10 +1037,10 @@ function ns:CreateLootBrowserFrame()
         end
     end)
     slotBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.6)
+        EdgeAccent(self, 0.6)
     end)
     slotBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        EdgeIdle(self)
     end)
 
     -- ============ FAVORITES TOGGLE ============
@@ -1008,13 +1092,24 @@ function ns:CreateLootBrowserFrame()
     div2:SetColorTexture(0.25, 0.25, 0.25, 0.5)
 
     -- ============ STAT FILTER CHIPS ============
-    local statAllBtn = MakeChip(filterCard, "All", 36, function() ns:LootBrowser_ClearStats() end)
+    --
+    -- Chained left to right from the divider, as before.
+    --
+    -- An attempt to anchor this group from the card's RIGHT edge -- to
+    -- stop the last chip running off a narrow frame -- was worse: the
+    -- group then grew leftwards into the slot dropdown and the favourite
+    -- star ended up sitting on top of it. Two groups anchored from
+    -- opposite ends of the same strip collide in the middle unless
+    -- something reserves the space between them, and nothing here does.
+    -- Overflow off one edge beats overlap in the middle until the strip
+    -- can actually measure itself.
+    local statAllBtn = MakeChip(filterCard, "All", 32, function() ns:LootBrowser_ClearStats() end)
     statAllBtn:SetPoint("LEFT", div2, "RIGHT", 10, 0)
     f._statAllBtn = statAllBtn
 
     local statButtons = {}
     for i, statInfo in ipairs(ns.LOOT_SECONDARY_STATS) do
-        local btn = MakeChip(filterCard, statInfo.short, 52, function(self)
+        local btn = MakeChip(filterCard, statInfo.short, 46, function(self)
             ns:LootBrowser_ToggleStat(self.statKey)
         end)
         btn.statKey = statInfo.key
@@ -1103,7 +1198,8 @@ function ns:CreateLootBrowserFrame()
     diffDropdown:SetSize(150, 40)
     diffDropdown:SetPoint("TOPRIGHT", diffBtn, "BOTTOMRIGHT", 0, -2)
     diffDropdown:SetFrameStrata("DIALOG")
-    ns.Widgets:Apply(diffDropdown, "row")
+    ns.Widgets:Apply(diffDropdown, "inset")
+    EdgeIdle(diffDropdown)
     ns.SmoothFrame(diffDropdown)
     diffDropdown:EnableMouse(true)
     diffDropdown:Hide()
@@ -1125,22 +1221,43 @@ function ns:CreateLootBrowserFrame()
     -- ================================================================
     -- CONTENT AREA (no scroll — content fits within frame)
     -- ================================================================
-    -- A surface under the results, created before the content frame so it
-    -- stays behind it: siblings at the same frame level draw in creation
-    -- order. Anchored to the content rather than to the page, so the
-    -- app-mode layout pass that re-anchors the content carries it along
-    -- instead of leaving the two to drift apart.
-    local contentSurface = ns.Widgets and ns.Widgets:Panel(f, "inset")
-    f._contentSurface = contentSurface
+    -- No full-bleed surface behind the results.
+    --
+    -- There was one, and it was drawn OVER the entire list. The comment
+    -- justifying it said "created before the content frame so it stays
+    -- behind it: siblings at the same frame level draw in creation
+    -- order" -- which is true of REGIONS inside one frame and not of
+    -- sibling FRAMES. Both sat at level 6, the surface won, and the whole
+    -- loot list showed through it as a shadow. /fstack named it in one
+    -- line after three wrong guesses from the symptoms.
+    --
+    -- Removed rather than pushed down a level: the shell's content region
+    -- is already the page's surface, and each instance now draws its own
+    -- section card, so this was a third background between the two.
+    -- Scrolled. The list is every dungeon in the season with a row per
+    -- boss, so "content fits within frame" -- which is what this used to
+    -- assume -- stopped being true the moment the season had more than a
+    -- few instances. Everything past the fold was drawn and unreachable.
+    local scroll = CreateFrame("ScrollFrame", nil, f)
+    scroll:SetPoint("TOPLEFT", viewTabBar, "BOTTOMLEFT", 0, -4)
+    scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PAD, 8)
+    f._scroll = scroll
 
-    local content = CreateFrame("Frame", nil, f)
-    content:SetPoint("TOPLEFT", viewTabBar, "BOTTOMLEFT", 0, -4)
-    content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PAD, 8)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
     f._content = content
-    if contentSurface then
-        contentSurface:SetPoint("TOPLEFT", content, "TOPLEFT", -8, 6)
-        contentSurface:SetPoint("BOTTOMRIGHT", content, "BOTTOMRIGHT", 8, -4)
-    end
+
+    -- Wheel only, no bar. The rows are wide and the page has no room to
+    -- give a gutter, and a list this long is one people flick through
+    -- rather than drag.
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(sf, delta)
+        local range = sf:GetVerticalScrollRange() or 0
+        local v = (sf:GetVerticalScroll() or 0) - delta * 40
+        if v < 0 then v = 0 elseif v > range then v = range end
+        sf:SetVerticalScroll(v)
+    end)
 
     local loadingText = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     loadingText:SetPoint("CENTER")
@@ -1211,7 +1328,7 @@ function ns:LootBrowser_UpdateSlotDropdown()
             f._favBtn._star:SetDesaturated(false)
         else
             f._favBtn:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-            f._favBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+            EdgeIdle(f._favBtn)
             f._favBtn._star:SetVertexColor(0.55, 0.55, 0.55)
             f._favBtn._star:SetDesaturated(true)
         end
@@ -1240,10 +1357,10 @@ function ns:LootBrowser_UpdateStatBar()
     local numSel = #stats
 
     if numSel == 0 then
-        f._statAllBtn:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.6)
+        EdgeAccent(f._statAllBtn, 0.6)
         f._statAllBtn.label:SetTextColor(0.0, 0.8, 1.0)
     else
-        f._statAllBtn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+        EdgeIdle(f._statAllBtn)
         f._statAllBtn.label:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
     end
 
@@ -1253,13 +1370,13 @@ function ns:LootBrowser_UpdateStatBar()
             if key == btn.statKey then isSel = true; break end
         end
         if isSel then
-            btn:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.6)
+            EdgeAccent(btn, 0.6)
             btn.label:SetTextColor(0.0, 0.8, 1.0)
         elseif numSel >= 2 then
-            btn:SetBackdropBorderColor(0.15, 0.15, 0.15, 0.5)
+            EdgeIdle(btn)
             btn.label:SetTextColor(unpack(ns.COLORS.TEXT_TERTIARY))
         else
-            btn:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+            EdgeIdle(btn)
             btn.label:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
         end
     end
@@ -1344,11 +1461,11 @@ function ns:LootBrowser_UpdateDisplayToggles()
     local function style(chip, on)
         if on then
             chip:SetBackdropColor(0.05, 0.20, 0.28, 0.9)
-            chip:SetBackdropBorderColor(0.0, 0.8, 1.0, 0.8)
+            EdgeAccent(chip, 0.8)
             chip.label:SetTextColor(0.6, 0.9, 1.0)
         else
             chip:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
-            chip:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.5)
+            EdgeIdle(chip)
             chip.label:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
         end
     end
@@ -1694,30 +1811,38 @@ function ns:LootBrowser_RefreshDisplay()
         globalRowIdx = globalRowIdx + 1
     end
 
-    -- Helper to render a section header (instance names)
-    local SECTION_H = 18
-    local function RenderSectionHeader(text, subText, tint)
-        local row = AcquireRow(f._content)
-        row:SetSize(contentW, SECTION_H)
-        row:SetPoint("TOPLEFT", f._content, "TOPLEFT", 0, -yOff)
-        tint = tint or { 0.12, 0.06, 0.18, 0.6 }
-        row.bg:SetColorTexture(tint[1], tint[2], tint[3], tint[4])
-        row.srcLabel:SetFontObject("GameFontNormal")
-        row.srcLabel:ClearAllPoints()
-        row.srcLabel:SetPoint("LEFT", row, "LEFT", 12, 0)
-        row.srcLabel:SetTextColor(0.75, 0.45, 1.0)
-        row.srcLabel:SetText(text)
-        row.srcLabel:SetAlpha(1)
-        if subText then
-            -- Right-aligned in a header; RenderRow restores the default
-            -- anchor when the pooled row is reused as an item row.
-            row.countLabel:ClearAllPoints()
-            row.countLabel:SetPoint("RIGHT", row, "RIGHT", -12, 0)
-            row.countLabel:SetJustifyH("RIGHT")
-            row.countLabel:SetText(subText)
-            row.countLabel:Show()
-        end
-        yOff = yOff + SECTION_H
+    -- Instance headings.
+    --
+    -- The rows of a section are anchored to the content frame at absolute
+    -- offsets rather than parented into the heading's card, so the card's
+    -- body is laid out to exactly the height those rows will occupy and
+    -- they land on top of it. The caller measures that block first and
+    -- passes it in as `bodyH`; the divider is then the card's own top
+    -- edge, the same shape Teleports and Progression use.
+    local SECTION_H = ns.Widgets:SectionTitleHeight()
+    local SECTION_INNER_PAD = 6
+    local SECTION_GAP = 10
+
+    --- Open a section. Returns it, plus the offset its rows begin at.
+    ---
+    --- Acquired BEFORE the rows and sized AFTER them, for the same reason
+    --- the Best in Slot list panel is: the card has to exist first so it
+    --- draws behind the rows that sit on it, but its height is not known
+    --- until they have been placed. Sizing it on the way in would mean
+    --- counting the rows twice and having the two counts disagree the
+    --- first time a filter hid one.
+    local function OpenSection(text, subText)
+        local s = AcquireSection(f._content)
+        s:SetPoint("TOPLEFT", f._content, "TOPLEFT", 0, -yOff)
+        s:SetText(text)
+        if subText then s:SetValue(subText) end
+        yOff = yOff + SECTION_H + SECTION_INNER_PAD
+        return s, yOff
+    end
+
+    local function CloseSection(s, rowsTop)
+        s:Layout(contentW, (yOff - rowsTop) + SECTION_INNER_PAD * 2)
+        yOff = yOff + SECTION_INNER_PAD + SECTION_GAP
     end
 
     ------------------------------------------------------------
@@ -1840,11 +1965,11 @@ function ns:LootBrowser_RefreshDisplay()
         for _, inst in ipairs(cache.dungeons) do
             local data = shapedLookup[inst.name]
             local count = data and #(data.items or {}) or 0
-            RenderSectionHeader(inst.name,
-                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"), 
-                    count, count ~= 1 and "s" or "") or nil,
-                { 0.06, 0.12, 0.18, 0.6 })
+            local sec, rowsTop = OpenSection(inst.name,
+                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"),
+                    count, count ~= 1 and "s" or "") or nil)
             RenderBossRows(inst, "dungeon", data, true)
+            CloseSection(sec, rowsTop)
         end
 
     elseif view == "raid" then
@@ -1852,10 +1977,27 @@ function ns:LootBrowser_RefreshDisplay()
         for _, raidInst in ipairs(cache.raids) do
             local data = shapedLookup[raidInst.name]
             local count = data and #(data.items or {}) or 0
-            RenderSectionHeader(raidInst.name,
-                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"), 
+            local sec, rowsTop = OpenSection(raidInst.name,
+                count > 0 and ("|cff%s%d item%s|r"):format(ns.Widgets:Hex("muted"),
                     count, count ~= 1 and "s" or "") or nil)
             RenderBossRows(raidInst, "raid", data)
+            CloseSection(sec, rowsTop)
+        end
+    end
+
+    -- The scroll child has to be told how tall its contents came out, or
+    -- the scroll range stays zero and the wheel does nothing however far
+    -- past the fold the list runs. yOff is the running cursor every row
+    -- and section above advanced, so it already is that number.
+    if f._scroll then
+        local sw = f._scroll:GetWidth() or 0
+        if sw > 1 then f._content:SetWidth(sw) end
+        f._content:SetHeight(math.max(yOff, 1))
+        -- A shorter list after a filter change can leave the view
+        -- scrolled past the new end, which reads as an empty page.
+        local range = f._scroll:GetVerticalScrollRange() or 0
+        if (f._scroll:GetVerticalScroll() or 0) > range then
+            f._scroll:SetVerticalScroll(range)
         end
     end
 end
@@ -1870,7 +2012,7 @@ function ns:SetLootBrowserAppMode(enabled, contentWidth, contentHeight)
     if enabled then
         f:SetMovable(false)
         f:EnableMouse(false)
-        f:SetBackdrop(nil)
+        ns.Widgets:Unskin(f)
         local dw, dh = ns:GetAppFrameSize()
         f:SetSize(contentWidth or dw, contentHeight or (dh - 34))
         f._titleFs:Hide()
