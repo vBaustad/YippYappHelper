@@ -115,8 +115,11 @@ Shell:RegisterPage({
     Build = function(host)
         if ns.BisUI and ns.BisUI.BuildInto then ns.BisUI:BuildInto(host) end
     end,
-    Refresh = function()
-        if ns.BisUI and ns.BisUI.Refresh then ns.BisUI:Refresh() end
+    Refresh = function(ctx)
+        -- ctx forwarded so the page can size to the region. Refresh
+        -- reads it off its own content frame, but passing it keeps the
+        -- page honest about where its dimensions come from.
+        if ns.BisUI and ns.BisUI.Refresh then ns.BisUI:Refresh(ctx) end
     end,
 })
 

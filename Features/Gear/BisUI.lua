@@ -31,6 +31,12 @@ local PAD = (ns.Shell and ns.Shell.PAD) or 12
 -- to leave room for the stat block and the caveat underneath.
 local ROW_H = 20
 local ICON = 34
+-- Ceiling for the scaled doll icon: past this the slot art is being
+-- magnified rather than shown, and the rows drift apart.
+local ICON_MAX = 46
+-- Everything on the page that is not the doll: the header above it and
+-- the stat priority block below.
+local BIS_CHROME_H = 190
 local GAP = 4
 local DOLL_W = 300
 local ACCENT = { 0.45, 1.0, 0.55 }
@@ -636,10 +642,28 @@ end
 ------------------------------------------------------------
 -- Render
 ------------------------------------------------------------
-function UI:Render(content, width)
+function UI:Render(content, width, height)
     Release(self)
     local y = -8
     local inner = width - PAD * 2
+
+    -- The doll's icons scale to the room it has.
+    --
+    -- ICON was a constant, so the doll was the same height in any
+    -- region and the page stopped two thirds of the way down. Nine rows
+    -- -- eight paired plus the weapons -- have to fit between the header
+    -- and the stat priority block beneath, so the icon is whatever
+    -- divides into that, floored where the slot art stops being legible.
+    local iconSize = ICON
+    if height and height > 0 then
+        local room = height - BIS_CHROME_H
+        -- Inverted from dollH, which is 9*icon + 8*GAP + 24: eight
+        -- paired rows, the weapon row, and the panel's own padding.
+        -- Dividing by nine without subtracting that padding overshot by
+        -- 12px and the doll ran past the region it was sizing to.
+        iconSize = math.floor((room - GAP * 8 - 24) / 9)
+        iconSize = math.max(ICON, math.min(iconSize, ICON_MAX))
+    end
 
     local specKey, specName = PlayerSpec()
     local data = specKey and ns.ClassGuideData and ns.ClassGuideData[specKey]
@@ -749,7 +773,7 @@ function UI:Render(content, width)
     -- the weapon row underneath, which is the doll's fixed shape --
     -- unlike the list, it does not grow with the guide.
     ------------------------------------------------------------
-    local dollH = 8 * (ICON + GAP) + ICON + 24
+    local dollH = 8 * (iconSize + GAP) + iconSize + 24
     local dollPanel = AcquirePanel(self, content)
     dollPanel:SetPoint("TOPLEFT", PAD - 6, topY + 8)
     dollPanel:SetSize(DOLL_W + 4, dollH)
@@ -762,24 +786,27 @@ function UI:Render(content, width)
     local listPanel = AcquirePanel(self, content)
 
     local colL = PAD + 4
-    local colR = PAD + DOLL_W - ICON - 4
+    local colR = PAD + DOLL_W - iconSize - 4
     local function dollPos(def)
         if def.side == "L" then
-            return colL, topY - (def.row - 1) * (ICON + GAP)
+            return colL, topY - (def.row - 1) * (iconSize + GAP)
         elseif def.side == "R" then
-            return colR, topY - (def.row - 1) * (ICON + GAP)
+            return colR, topY - (def.row - 1) * (iconSize + GAP)
         end
         -- Weapons sit centred under the two columns.
         local slotsOnRow = (def.slot == 16) and 0 or 1
-        local centre = PAD + DOLL_W / 2 - ICON - GAP / 2
-        return centre + slotsOnRow * (ICON + GAP),
-               topY - (def.row - 1) * (ICON + GAP) - 6
+        local centre = PAD + DOLL_W / 2 - iconSize - GAP / 2
+        return centre + slotsOnRow * (iconSize + GAP),
+               topY - (def.row - 1) * (iconSize + GAP) - 6
     end
 
     for _, def in ipairs(DOLL) do
         local entry = bySlot[def.slot]
         local b = AcquireIcon(self, content)
         local x, iy = dollPos(def)
+        -- Sized here, not at creation: the buttons are pooled and the
+        -- icon size now depends on the region.
+        b:SetSize(iconSize, iconSize)
         b:SetPoint("TOPLEFT", x, iy)
 
         if entry then
@@ -855,7 +882,7 @@ function UI:Render(content, width)
         self._slotSummary = ns.Widgets:Label(content, "GameFontNormalSmall")
     end
     self._slotSummary:ClearAllPoints()
-    self._slotSummary:SetPoint("TOPLEFT", PAD, topY - 8 * (ICON + GAP) - 6)
+    self._slotSummary:SetPoint("TOPLEFT", PAD, topY - 8 * (iconSize + GAP) - 6)
     self._slotSummary:SetWidth(DOLL_W)
     self._slotSummary:SetText(("%s  %s  %s"):format(
         ("|cff%s%d equipped|r"):format(ns.Widgets:Hex("good"), haveCount),
@@ -865,7 +892,7 @@ function UI:Render(content, width)
             or ns.Widgets:Tint("faint", "none missing")))
     self._slotSummary:Show()
 
-    local dollBottom = topY - 8 * (ICON + GAP) - 14
+    local dollBottom = topY - 8 * (iconSize + GAP) - 14
 
     ------------------------------------------------------------
     -- List, right
@@ -883,7 +910,7 @@ function UI:Render(content, width)
 
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
-            if icon then row.icon:SetTexture(icon) end
+            if iconSize then row.iconSize:SetTexture(iconSize) end
             row.name:SetWidth(listW - 26 - 118)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff5a5a62item " .. entry.itemID .. "|r"))
@@ -943,7 +970,7 @@ function UI:Render(content, width)
             row:SetWidth(listW)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
-            if icon then row.icon:SetTexture(icon) end
+            if iconSize then row.iconSize:SetTexture(iconSize) end
             row.name:SetWidth(listW - 26 - 118)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff777777item " .. entry.itemID .. "|r"))
@@ -1050,7 +1077,11 @@ end
 
 function UI:Refresh()
     if self._content then
-        self:Render(self._content, self._content:GetWidth())
+        -- Height as well as width. Render only ever took width, so the
+        -- doll was drawn at a fixed size regardless of the region and
+        -- left the bottom third of the page empty.
+        self:Render(self._content, self._content:GetWidth(),
+            self._content:GetHeight())
     end
 end
 
