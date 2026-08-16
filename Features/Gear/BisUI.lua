@@ -910,7 +910,7 @@ function UI:Render(content, width, height)
 
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
-            if iconSize then row.iconSize:SetTexture(iconSize) end
+            if icon then row.icon:SetTexture(icon) end
             row.name:SetWidth(listW - 26 - 118)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff5a5a62item " .. entry.itemID .. "|r"))
@@ -970,7 +970,7 @@ function UI:Render(content, width, height)
             row:SetWidth(listW)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
-            if iconSize then row.iconSize:SetTexture(iconSize) end
+            if icon then row.icon:SetTexture(icon) end
             row.name:SetWidth(listW - 26 - 118)
             row.name:SetText(name and (hex .. name .. "|r")
                 or ("|cff777777item " .. entry.itemID .. "|r"))
