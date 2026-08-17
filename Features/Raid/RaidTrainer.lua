@@ -1306,13 +1306,23 @@ local function UpdateBossPosition(dt)
     -- so the boss walking to the middle IS the phase starting, and the
     -- player should see it happen rather than find her there.
     local phase = CurrentPhase()
+    local gx, gy
     if phase and phase.bossAt == "centre" then
-        local d = math.sqrt(b.x * b.x + b.y * b.y)
+        gx, gy = 0, 0
+    elseif phase and phase.bossAt == "revive" and S.revive then
+        -- Exactly where he fell. Not a tidy-up: the player chose this
+        -- spot by where they pushed him, and the intermission is built
+        -- around walking back and forth to it.
+        gx, gy = S.revive.x, S.revive.y
+    end
+    if gx then
+        local dx, dy = gx - b.x, gy - b.y
+        local d = math.sqrt(dx * dx + dy * dy)
         local step = BOSS_MOVE_SPEED * dt
         if d <= step then
-            b.x, b.y = 0, 0
+            b.x, b.y = gx, gy
         elseif d > 0.001 then
-            b.x, b.y = b.x - b.x / d * step, b.y - b.y / d * step
+            b.x, b.y = b.x + dx / d * step, b.y + dy / d * step
         end
         return
     end
@@ -2708,7 +2718,16 @@ KINDS.chaser = {
     end,
     Tick = function(a, dt)
         local gx, gy = 0, 0
-        if a.goal == "player" then gx, gy = S.px, S.py end
+        if a.goal == "player" then
+            gx, gy = S.px, S.py
+        elseif a.goal == "boss" and S.bossActor then
+            -- Spirits drift toward ZUL'JIN, not toward the middle of the
+            -- room -- and after phase one he is wherever the player left
+            -- him. Sending them to the centre regardless quietly undid
+            -- the rule about where to kill him, because the goalie line
+            -- was in the same place either way.
+            gx, gy = S.bossActor.x, S.bossActor.y
+        end
         local d = dist(a.x, a.y, gx, gy)
         if d > 1 then
             a.x = a.x + (gx - a.x) / d * a.speed * dt
@@ -2716,7 +2735,9 @@ KINDS.chaser = {
         end
         if a.goal ~= "player" and d <= (a.r + 4) then
             a.dead = true
-            Hurt(a.damage or 30, a.name .. " reached the middle")
+            Hurt(a.damage or 30, a.name ..
+                (a.goal == "boss" and " reached him -- that is a heal"
+                 or " reached the middle"))
             if a.feeds and S.scenario and S.scenario.energy then
                 S.energy = math.min((S.scenario.energy.max or 100),
                     S.energy + a.feeds)
@@ -2943,7 +2964,10 @@ KINDS.carry = {
         a.r = a.r or 5
         a.held = false
         a.resolveAt = nil
-        a.expireAt = S.time + (a.window or 16)
+        -- A lingering carry lasts the PHASE, and the phase boundary is
+        -- what judges it. See the note where it expires, and
+        -- `orbsExplode` in EnterPhase.
+        a.expireAt = a.lingers and math.huge or (S.time + (a.window or 16))
     end,
     Tick = function(a)
         if not a.held then
@@ -2974,18 +2998,51 @@ KINDS.carry = {
             if dist(S.px, S.py, tx, ty) <= (a.reach or 18) then
                 a.dead = true
                 S.carrying = nil
-                Credit(a.name .. " delivered")
                 -- What delivering it is FOR. The mechanic is only worth
                 -- carrying because of this.
                 if a.drainEnergy then
                     S.energy = math.max(0, S.energy - a.drainEnergy)
+                end
+                if a.rot then
+                    -- "Each destroyed orb puts a stacking dot on the
+                    -- raid, so the healers set the pace" -- and "take
+                    -- them in batches" is the instruction that follows.
+                    --
+                    -- So delivering is not free, and the cost is
+                    -- entirely about RHYTHM: a couple in quick
+                    -- succession is the batch the raid is braced for,
+                    -- and the third inside the same window is the one
+                    -- the healers were not asked about.
+                    if (S.orbRotUntil or 0) < S.time then S.orbRot = 0 end
+                    S.orbRot = (S.orbRot or 0) + 1
+                    S.orbRotUntil = S.time + (a.rotFor or 7)
+                    local safe = a.rotSafe or 2
+                    if S.orbRot > safe then
+                        Hurt((a.rotDamage or 9) * (S.orbRot - safe),
+                            ("%s -- %d destroyed at once, let the dot fall off")
+                                :format(a.name, S.orbRot))
+                    else
+                        Credit(a.name .. " destroyed")
+                    end
+                else
+                    Credit(a.name .. " delivered")
                 end
             end
         end
         if S.time > a.expireAt then
             a.dead = true
             if S.carrying == a then S.carrying = nil end
-            Hurt(a.damage or 20, a.name .. " was lost")
+            -- An orb that nobody collected is NOT a miss on its own.
+            --
+            -- On the Coiled Altar the guide is explicit that they sit
+            -- there all phase and every one still alive explodes at the
+            -- push -- one event, at a known moment, that the raid stacks
+            -- for. Punishing each orb on its own little timer replaced
+            -- that with a drizzle of unrelated failures and removed the
+            -- reason to clear them before pushing.
+            if not a.lingers then
+                Hurt(a.damage or 20, a.name .. " was lost")
+            end
         end
     end,
     Draw = function(a, s)
@@ -3903,6 +3960,47 @@ local function EnterPhase(i)
         raise = #S.corpses
     end
 
+    -- Every venom orb still on the floor when Zul'jin is pushed goes off
+    -- at once. The guide's own two sentences: "every one still alive
+    -- when the phase ends explodes at once", and "clear as many as you
+    -- can before you push him, and stack for the explosion when he
+    -- dies".
+    --
+    -- Counted here, before ClearActors takes them away, for exactly the
+    -- reason the Ritual's corpses are: the tally has to survive the
+    -- clear even though the actors cannot.
+    if leaving and leaving.orbsExplode then
+        local left = 0
+        for _, a in ipairs(S.actors) do
+            if a.kind == "carry" and a.lingers and not a.dead then
+                left = left + 1
+            end
+        end
+        if left > 0 then
+            Hurt(left * (leaving.orbDamage or 7),
+                ("%d orb%s left on the floor exploded at the push"):format(
+                    left, left == 1 and "" or "s"))
+        else
+            Credit("Floor clear at the push -- nothing exploded")
+        end
+    end
+
+    -- Where he died is where he comes back. "Kill Zul'jin in the MIDDLE
+    -- of the room. He is resurrected exactly where he died" is rule
+    -- three on this boss, and it was the only one with no consequence
+    -- attached -- the trainer put him back wherever the next phase felt
+    -- like.
+    if leaving and leaving.recordsDeathSpot and S.bossActor then
+        S.revive = { x = S.bossActor.x, y = S.bossActor.y }
+        local off = math.sqrt(S.revive.x ^ 2 + S.revive.y ^ 2)
+        if off > 46 then
+            Hurt(0, ("Zul'jin died %d out from the middle -- he comes back there")
+                :format(math.floor(off)))
+        else
+            Credit("Zul'jin died near the middle -- he comes back there")
+        end
+    end
+
     S.phaseIndex = i
     S.phaseTime = 0
     S.nextEvent = 1
@@ -4218,6 +4316,7 @@ function T:Start(bossId, heroic)
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
     S.element, S.volleyFlip = nil, nil
+    S.revive, S.orbRot, S.orbRotUntil = nil, 0, 0
     bothDotsText:Hide()
 
     ReleaseInput()

@@ -902,16 +902,28 @@ SC.alteredfangs = {
     phases = {
         {
             name = "Phase One -- Zul'jin", untilPct = 58, hpFloor = 58, duration = 38,
+            -- The two things this phase is judged on, both at its very
+            -- end: what is still lying on the floor, and where he was
+            -- standing when he went down.
+            orbsExplode = true, orbDamage = 8,
+            recordsDeathSpot = true,
             call = "Clear the orbs -- every one still alive explodes at the push",
             events = Timeline(
                 -- "Run over an orb to pick it up... carry them into a
                 -- pile and let the tank clear several with one cone."
                 -- The drop zone is in FRONT of the boss and moves as it
                 -- turns, so the job is tracking where the cone will be.
-                Every(3, 6, 5, {
+                --
+                -- They LINGER: an uncollected orb is not a miss on its
+                -- own, it is one more in the pile that goes off at the
+                -- push. And destroying them stacks a dot, so they come
+                -- in batches -- clearing eight in six seconds is its own
+                -- way to wipe.
+                Every(3, 6, 6, {
                     kind = "carry", name = "Venom Orb", school = "nature",
-                    to = "front", frontDist = 34, reach = 16, window = 14,
-                    damage = 18,
+                    to = "front", frontDist = 34, reach = 16,
+                    lingers = true, rot = true, rotSafe = 2, rotFor = 7,
+                    rotDamage = 9, damage = 18,
                     deliverCall = "Carry it in front of the boss, into the cone's path",
                 }),
                 Every(5, 9, 4, {
@@ -991,14 +1003,21 @@ SC.alteredfangs = {
         {
             name = "Intermission -- the burn", duration = 20, bossImmune = true,
             hpFloor = 26,
-            call = "Play goalie -- spirits reaching Zul'jin heal him",
+            -- He is standing exactly where he died, which the player
+            -- chose. That is what makes rule three ("kill him in the
+            -- MIDDLE") worth obeying: a Zul'jin resurrected against the
+            -- wall gives the drifting spirits a short run and the goalie
+            -- a long one.
+            bossAt = "revive",
+            bloodlust = true,
+            call = "Play goalie -- spirits reaching Zul'jin heal him. BLOODLUST.",
             events = Timeline(
                 -- Goalie duty, using the chaser's goal-reached branch for
                 -- something that is not a wipe: these heal the boss, and
                 -- standing in the way is the whole job.
                 Every(2, 4, 5, {
                     kind = "chaser", name = "Drifting Spirit", school = "shadow",
-                    where = "edge", goal = "centre", speed = 10, hp = 70,
+                    where = "edge", goal = "boss", speed = 10, hp = 70,
                     art = "blob", damage = 22, intercept = true,
                     call = "Body-block it -- do not let it reach him",
                 }),
@@ -1009,14 +1028,19 @@ SC.alteredfangs = {
         },
         {
             name = "Phase Three -- both at once", duration = 34, hpFloor = 0,
+            -- Same judgement as phase one, and the guide is blunt that
+            -- this is the hardest thing in the raid with almost no room
+            -- to do any of it.
+            orbsExplode = true, orbDamage = 8,
             call = "Orbs onto the spirit pile. One cone, both problems.",
             events = Timeline(
                 -- Phase three wants the orbs on the SAME spot the
                 -- spirits are frozen: one cone, both problems.
-                Every(3, 6, 4, {
+                Every(3, 6, 5, {
                     kind = "carry", name = "Venom Orb", school = "nature",
-                    to = "front", frontDist = 34, reach = 16, window = 13,
-                    damage = 18,
+                    to = "front", frontDist = 34, reach = 16,
+                    lingers = true, rot = true, rotSafe = 2, rotFor = 7,
+                    rotDamage = 9, damage = 18,
                     deliverCall = "Orbs onto the spirit pile -- in front of the boss",
                 }),
                 Every(5, 10, 3, {

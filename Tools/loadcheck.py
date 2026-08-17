@@ -3696,6 +3696,166 @@ def main():
         print("  FAIL trainer alternating soaks: %s" % alt)
         failures.append(("trainer alternating soaks", str(alt)))
 
+    # The Coiled Altar's three cross-phase rules, none of which had a
+    # consequence attached before: orbs left on the floor explode at the
+    # push, destroying them in a rush costs more than doing it in
+    # batches, and Zul'jin comes back exactly where he died.
+    altar = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+
+            --- Play phase one, either ignoring the orbs or collecting
+            --- them, and report the damage taken AT THE PUSH.
+            local function phaseOne(collect, holdBossAt)
+                math.randomseed(3429)
+                T:Start("alteredfangs", false)
+                S.countdown = 0
+                local atPush, orbsLeft = 0, 0
+                for _ = 1, 1600 do
+                    S.firing = false
+                    S.hp = 100
+                    -- The boss is parked, so "where he died" is decided
+                    -- by this check rather than by the puddle-avoidance
+                    -- walk. Its position is the subject of the third
+                    -- claim below.
+                    if S.bossActor then
+                        S.bossActor.hp = S.bossActor.maxHp * 0.99
+                        if holdBossAt then
+                            S.bossActor.x, S.bossActor.y = holdBossAt[1], holdBossAt[2]
+                        end
+                    end
+                    if collect then
+                        -- Walk to the nearest loose orb, or to the drop
+                        -- point while holding one.
+                        local target
+                        if S.carrying then
+                            local b = S.bossActor
+                            local fa = (b and b.facing) or 0
+                            target = { b.x + math.cos(fa) * 34, b.y + math.sin(fa) * 34 }
+                        else
+                            local bd
+                            for _, a in ipairs(S.actors) do
+                                if a.kind == "carry" and not a.dead and not a.held then
+                                    local d = math.sqrt((a.x - S.px) ^ 2 + (a.y - S.py) ^ 2)
+                                    if not bd or d < bd then target, bd = { a.x, a.y }, d end
+                                end
+                            end
+                        end
+                        if target then S.px, S.py = target[1], target[2] end
+                    else
+                        S.px, S.py = 0, -80
+                    end
+                    local was = S.phaseIndex
+                    local hp = S.hp
+                    update(f, 0.05)
+                    if S.phaseIndex > was then
+                        -- The push frame. Everything the boundary did is
+                        -- on this one update.
+                        atPush = hp - S.hp
+                        break
+                    end
+                    if not S.running then break end
+                end
+                for _, a in ipairs(S.actors) do
+                    if a.kind == "carry" and not a.dead then orbsLeft = orbsLeft + 1 end
+                end
+                local revive = S.revive
+                T:Stop()
+                return atPush, orbsLeft, revive
+            end
+
+            local ignored = phaseOne(false, { 0, 0 })
+            local cleared = phaseOne(true, { 0, 0 })
+            if ignored <= 0 then
+                problems[#problems + 1] =
+                    "leaving every orb on the floor cost nothing at the push"
+            end
+            if cleared >= ignored then
+                problems[#problems + 1] = string.format(
+                    "the push cost %.0f after clearing orbs and %.0f after ignoring them",
+                    cleared, ignored)
+            end
+
+            -- Zul'jin comes back where he fell.
+            local _, _, mid = phaseOne(false, { 0, 0 })
+            local _, _, wall = phaseOne(false, { 78, 0 })
+            if not mid or not wall then
+                problems[#problems + 1] = "no resurrection point was ever recorded"
+            elseif math.abs(wall.x - 78) > 2 then
+                problems[#problems + 1] = string.format(
+                    "he died at x=78 but comes back at x=%.0f", wall.x)
+            elseif math.abs(mid.x) > 2 then
+                problems[#problems + 1] = string.format(
+                    "he died at the middle but comes back at x=%.0f", mid.x)
+            end
+
+            -- And the intermission actually puts him there, with the
+            -- spirits walking at HIM rather than at the room's centre.
+            math.randomseed(3429)
+            T:Start("alteredfangs", false)
+            S.countdown = 0
+            -- How close the spirits get to HIM against how close they
+            -- get to the middle of the room.
+            --
+            -- Measured as two minima rather than as a per-frame "is it
+            -- closing" test: a spirit walking from the rim toward a boss
+            -- parked at x=70 is often reducing both distances at once
+            -- for part of its trip, so the frame-by-frame version was
+            -- true of a spirit heading for the centre as well.
+            local minToBoss, minToMid, sawSpirit = 1e9, 1e9, false
+            local endedAt = 0
+            for _ = 1, 2600 do
+                S.firing, S.hp = false, 100
+                S.px, S.py = 0, -80
+                if S.bossActor then
+                    S.bossActor.hp = S.bossActor.maxHp * 0.99
+                    if S.phaseIndex == 1 then S.bossActor.x, S.bossActor.y = 70, 0 end
+                end
+                update(f, 0.05)
+                if S.phaseIndex == 3 then
+                    local b = S.bossActor
+                    if b then endedAt = b.x end
+                    for _, a in ipairs(S.actors) do
+                        if a.name == "Drifting Spirit" and not a.dead and b then
+                            sawSpirit = true
+                            local dBoss = math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2)
+                            local dMid = math.sqrt(a.x * a.x + a.y * a.y)
+                            if dBoss < minToBoss then minToBoss = dBoss end
+                            if dMid < minToMid then minToMid = dMid end
+                        end
+                    end
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+            if not sawSpirit then
+                problems[#problems + 1] = "the intermission spawned no Drifting Spirits"
+            elseif math.abs(endedAt) < 40 then
+                problems[#problems + 1] = string.format(
+                    "Zul'jin died at x=70 but the intermission had him at x=%.0f", endedAt)
+            elseif minToBoss >= minToMid then
+                problems[#problems + 1] = string.format(
+                    "spirits got within %.0f of Zul'jin and %.0f of the middle"
+                    .. " -- they are walking at the room, not at him",
+                    minToBoss, minToMid)
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format(
+                "ok:the push cost %.0f with orbs left against %.0f cleared;"
+                .. " he revives where he fell (x=%.0f) and the spirits walk at him",
+                ignored, cleared, endedAt)
+        end
+    """)(ns)
+    if altar and str(altar).startswith("ok:"):
+        print("  ok   trainer coiled altar: %s" % str(altar)[3:])
+    else:
+        print("  FAIL trainer coiled altar: %s" % altar)
+        failures.append(("trainer coiled altar", str(altar)))
+
     # Ranged and healers hold still.
     #
     # The formation used to rotate wholesale with the boss's facing,
