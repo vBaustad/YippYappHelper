@@ -878,6 +878,20 @@ local function TickOtherTeam(dt)
     end
 end
 
+--- Frostfire Volley's dot, when it was never cleared.
+---
+--- Judged when it LAPSES rather than on a timer, because the mechanic is
+--- not "take damage over a minute" -- it is "you failed to find the
+--- opposite puddle", and that is a single verdict with a deadline.
+local function TickElement()
+    local e = S.element
+    if e and e.expiry <= S.time then
+        S.element = nil
+        S.debuffs.Fire, S.debuffs.Ice = nil, nil
+        Hurt(28, ("Frostfire Volley -- your %s never got cleared"):format(e.school))
+    end
+end
+
 --- Both golems' dots, for standing where you can hit both.
 ---
 --- "Standing in the middle to hit both bosses gives you both dots" is
@@ -2301,6 +2315,129 @@ KINDS.puddle = {
         put(V(a, 1, "ARTWORK", 0), "blob", a.x, a.y, a.r * 2, s, col, 0.45 * fade)
         put(V(a, 2, "ARTWORK", 2), "blob", a.x, a.y, a.r * 2.05, s, col, 0.30 * fade,
             S.time * 0.15)
+    end,
+}
+
+------------------------------------------------------------
+-- volley / cleanse -- Frostfire Volley, and the pairing
+--
+-- The first item on this file's own list of things that could be built
+-- and were not, and the fight's own guide says why it was worth it:
+-- "this is the one to be scared of".
+--
+-- Fire lands on some players, ice on others. Each leaves a large puddle
+-- and a long dot, and you clear YOUR dot by walking into somebody
+-- else's OPPOSITE puddle -- which removes the debuff and the puddle
+-- together. Get caught by the other element while still carrying the
+-- first and Elemental Explosion very likely wipes the raid.
+--
+-- What makes this different from every other verb here is that the
+-- answer is not a distance from something. It is a distance from the
+-- RIGHT something, out of two kinds that look alike apart from colour --
+-- so it is the only mechanic in the trainer where reading the palette is
+-- the mechanic rather than a shortcut. That is also why the carried
+-- element is written over the player's head in words: a fight that
+-- punishes a colour mistake should not be scored on colour alone.
+------------------------------------------------------------
+local OPPOSITE = { fire = "frost", frost = "fire" }
+
+KINDS.volley = {
+    Init = function(a)
+        -- Alternated rather than rolled, so a round always drills both
+        -- directions. Random assignment gave runs that were fire four
+        -- times over, which teaches "walk to the blue one" instead of
+        -- "walk to the other one".
+        S.volleyFlip = not S.volleyFlip
+        a.school = S.volleyFlip and "fire" or "frost"
+    end,
+    Resolve = function(a)
+        local carried = S.element
+        if carried and carried.expiry > S.time then
+            -- Both elements at once. The wipe the guide names.
+            Hurt(a.damage or 40,
+                ("Elemental Explosion -- %s landed while you still carried %s")
+                    :format(a.school, carried.school))
+            S.element = nil
+            return
+        end
+
+        S.element = { school = a.school, expiry = S.time + (a.carry or 20) }
+        ApplyDebuff(a.school == "fire" and "Fire" or "Ice", a.carry or 20)
+        callOut:SetTextColor(1, 0.8, 0.35)
+        callOut:SetText(("Frostfire Volley -- you have %s. Clear it in a %s puddle.")
+            :format(a.school:upper(), (OPPOSITE[a.school] or "?"):upper()))
+        S.callUntil = S.time + 2.6
+
+        -- Yours drops where you are standing, exactly as the guide
+        -- describes -- so a player who took it into the group has just
+        -- made the group's problem worse.
+        Spawn({
+            kind = "cleanse", name = "Frostfire puddle", school = a.school,
+            r = a.puddleR or 14, life = a.life or 26,
+            where = { x = S.px, y = S.py },
+        })
+        -- And the rest of the raid drops theirs. The opposite element is
+        -- what you actually need, so there are always at least two of
+        -- them somewhere findable.
+        local opp = OPPOSITE[a.school]
+        for k = 1, (a.others or 2) do
+            local ang = math.random() * math.pi * 2
+            local rad = 34 + math.random() * 40
+            Spawn({
+                kind = "cleanse", name = "Frostfire puddle", school = opp,
+                r = a.puddleR or 14, life = a.life or 26,
+                where = { x = math.cos(ang) * rad, y = math.sin(ang) * rad },
+            })
+        end
+    end,
+    Draw = function(a, s)
+        local p = castProgress(a)
+        put(V(a, 1, "ARTWORK", 2), "ring", S.px, S.py, 26, s,
+            SCHOOL[a.school] or C.bad, 0.35 + 0.55 * p)
+    end,
+}
+
+--- The puddles a volley leaves. Standing in the OPPOSITE one clears you.
+---
+--- Not a hazard: a puddle of your own element is useless, not harmful.
+--- Making the wrong one hurt would have turned a "find the other colour"
+--- puzzle into "avoid all puddles", which is a verb this file already
+--- has four of.
+KINDS.cleanse = {
+    Init = function(a)
+        a.expireAt = S.time + (a.life or 26)
+        a.resolveAt = nil
+    end,
+    Tick = function(a, dt)
+        local carried = S.element
+        if carried and carried.expiry > S.time
+            and carried.school ~= a.school
+            and dist(S.px, S.py, a.x, a.y) <= a.r then
+            S.element = nil
+            S.debuffs.Fire, S.debuffs.Ice = nil, nil
+            a.dead = true
+            -- The puddle goes with the debuff. That is the guide's own
+            -- wording and it matters: clearing tidies the floor, so
+            -- doing it early is doubly right.
+            Credit("Frostfire cleared -- and the puddle with it")
+            return
+        end
+        if S.time > a.expireAt then a.dead = true end
+    end,
+    Draw = function(a, s)
+        local fade = math.min(1, (a.expireAt - S.time) / 2)
+        local col = SCHOOL[a.school] or C.goo
+        local carried = S.element
+        -- The one you need is lit; the one you do not is dim. Colour is
+        -- doing real work here, so it gets help.
+        local wanted = carried and carried.expiry > S.time
+            and carried.school ~= a.school
+        local alpha = wanted and 0.55 or 0.24
+        put(V(a, 1, "ARTWORK", 0), "blob", a.x, a.y, a.r * 2, s, col, alpha * fade)
+        if wanted then
+            put(V(a, 2, "ARTWORK", 2), "ring", a.x, a.y, a.r * 2.1, s, col,
+                0.85 * fade, S.time * 0.8)
+        end
     end,
 }
 
@@ -3874,6 +4011,7 @@ local function Update(_, elapsed)
     S.time = S.time + elapsed
     S.phaseTime = S.phaseTime + elapsed
     TickEnergy(elapsed)
+    TickElement()
     TickOtherTeam(elapsed)
     TickUncoiledRot(elapsed)
     TickBothDots(elapsed)
@@ -4079,6 +4217,7 @@ function T:Start(bossId, heroic)
     S.phaseIndex, S.phaseTime = 1, 0
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
+    S.element, S.volleyFlip = nil, nil
     bothDotsText:Hide()
 
     ReleaseInput()

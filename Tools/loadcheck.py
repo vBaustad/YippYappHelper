@@ -3449,6 +3449,130 @@ def main():
         print("  FAIL trainer vashnik: %s" % vash)
         failures.append(("trainer vashnik", str(vash)))
 
+    # Frostfire Volley's pairing.
+    #
+    # The one mechanic in the trainer whose answer is a distance from the
+    # RIGHT thing rather than from a thing, so all three halves are worth
+    # asserting separately: the opposite puddle clears you, your own does
+    # not, and taking a second element while carrying the first is the
+    # explosion the guide is frightened of.
+    volley = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+            math.randomseed(3497)
+
+            --- Run the Iku phase until the player is carrying an element,
+            --- then hand control back.
+            local function untilCarrying()
+                T:Start("explorers", false)
+                S.countdown = 0
+                -- Straight to the empowered phase; the volley lives there.
+                for _ = 1, 4000 do
+                    S.hp, S.firing = 100, false
+                    S.px, S.py = 0, -88
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    S.energy = 0
+                    update(f, 0.05)
+                    if S.element then return true end
+                    if not S.running then break end
+                end
+                return false
+            end
+
+            if not untilCarrying() then
+                T:Stop()
+                return "Frostfire Volley never handed the player an element"
+            end
+
+            --- Walk onto the nearest cleanse puddle of a given school and
+            --- see whether the debuff survives.
+            local function stepOnto(school)
+                local best, bd
+                for _, a in ipairs(S.actors) do
+                    if a.kind == "cleanse" and a.school == school and not a.dead then
+                        local d = math.sqrt(a.x * a.x + a.y * a.y)
+                        if not bd or d < bd then best, bd = a, d end
+                    end
+                end
+                if not best then return nil end
+                for _ = 1, 20 do
+                    S.hp, S.firing = 100, false
+                    S.energy = 0
+                    S.px, S.py = best.x, best.y
+                    update(f, 0.05)
+                end
+                return S.element == nil
+            end
+
+            local mine = S.element.school
+            local opp = (mine == "fire") and "frost" or "fire"
+
+            -- Your own element does nothing.
+            --
+            -- The nil case is a failure, not a pass: if the volley left
+            -- no puddle of your own element there was nothing to stand
+            -- in, and "it did not clear you" would be true of an empty
+            -- floor. Half this check is that BOTH kinds are on the
+            -- ground and only one of them works.
+            local clearedBySame = stepOnto(mine)
+            if clearedBySame == nil then
+                problems[#problems + 1] =
+                    "the volley left no puddle of your own element to test against"
+            elseif clearedBySame == true then
+                problems[#problems + 1] =
+                    "standing in your OWN element cleared the debuff"
+            end
+            -- The opposite one clears it.
+            local clearedByOpp = stepOnto(opp)
+            if clearedByOpp == nil then
+                problems[#problems + 1] =
+                    "the volley left no puddle of the opposite element to use"
+            elseif clearedByOpp == false then
+                problems[#problems + 1] =
+                    "standing in the OPPOSITE element did not clear the debuff"
+            end
+            T:Stop()
+
+            -- And a second element while carrying the first is the wipe.
+            if not untilCarrying() then
+                T:Stop(); return "could not set up the double-element case"
+            end
+            local hurtBefore = S.failed
+            local hpDrop = 0
+            for _ = 1, 900 do
+                -- Parked at the wall, never clearing, so the next volley
+                -- lands on a player who still has the first.
+                S.firing = false
+                S.px, S.py = 0, -88
+                S.energy = 0
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                local hp = S.hp
+                update(f, 0.05)
+                if S.hp < hp then hpDrop = hpDrop + (hp - S.hp) end
+                S.hp = 100
+                if not S.running then break end
+            end
+            T:Stop()
+            if S.failed <= hurtBefore then
+                problems[#problems + 1] =
+                    "carrying an element into the next set cost nothing"
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format(
+                "ok:opposite puddle clears and your own does not;"
+                .. " never clearing cost %.0f health across the phase", hpDrop)
+        end
+    """)(ns)
+    if volley and str(volley).startswith("ok:"):
+        print("  ok   trainer frostfire: %s" % str(volley)[3:])
+    else:
+        print("  FAIL trainer frostfire: %s" % volley)
+        failures.append(("trainer frostfire", str(volley)))
+
     # Ranged and healers hold still.
     #
     # The formation used to rotate wholesale with the boss's facing,

@@ -41,11 +41,15 @@ local _, ns = ...
 -- thing a lone dot in an arena can practise. Inventing a shape for them
 -- would be inventing a fight.
 --
+-- BUILT SINCE, and worth recording because each was listed here as
+-- impractical and turned out not to be:
+--   * Frostfire Volley's paired clearing. See KINDS.volley/cleanse.
+--   * two boss actors, which the Sentinels and the Twin Fangs both
+--     needed and which their headline rules are made of.
+--   * every add on Vashnik walking for the pool, and feeding the bar
+--     when it arrives.
+--
 -- Still missing that COULD be built, in order of value:
---   * Frostfire Volley's paired clearing -- you carry fire or ice and
---     clear it by walking into the OPPOSITE puddle. Needs a debuff that
---     carries an element and a matching-puddle check.
---   * the Sentinels' 40-yard separation, which needs two boss actors.
 --   * carrying venom orbs into a PILE for the tank's cone (Coiled
 --     Altar). The carry verb exists; the pile does not.
 --   * Sszorak's tunnel orbs -- reading a count BEFORE the intermission
@@ -419,29 +423,25 @@ SC.explorers = {
             ),
         },
         {
-            name = "Scrollsage Iku empowered", duration = 30, hpFloor = 50,
-            call = "Frostfire Volley -- clear it before the next set",
+            name = "Scrollsage Iku empowered", duration = 34, hpFloor = 50,
+            call = "Frostfire Volley -- clear it in the OPPOSITE puddle",
             events = Timeline(
-                -- The real mechanic pairs fire and ice and has you clear
-                -- yours in the OPPOSITE puddle. That pairing needs a verb
-                -- the trainer does not have yet; what is drilled here is
-                -- the spatial half, plus the guide's warning that
-                -- carrying one into the next set is the wipe.
-                Every(3, 9, 3, {
-                    kind = "drop", name = "Frostfire Volley", school = "frost",
-                    cast = 4, minDist = 26, r = 14, life = 16, dps = 13, damage = 22,
-                    call = "Frostfire -- take it away, then clear it EARLY",
-                }),
-                Every(7, 9, 3, {
-                    kind = "dodge", name = "Frostfire pool", school = "fire",
-                    cast = 2.4, r = 14, damage = 20,
-                    leaves = { r = 14, life = 14, dps = 12 },
+                -- The real mechanic, at last: you are handed fire or ice
+                -- and you clear it by walking into somebody else's
+                -- puddle of the other one. The sets are spaced so that
+                -- carrying one into the next is possible but not
+                -- inevitable -- which is the whole warning.
+                Every(4, 11, 3, {
+                    kind = "volley", name = "Frostfire Volley",
+                    cast = 3.4, carry = 16, life = 24, others = 2,
+                    puddleR = 14, damage = 40,
                 }),
                 Every(5, 13, 2, {
                     kind = "caster", name = "Icebound Flames", school = "frost",
                     hp = 120, castLen = 8, damage = 30, r = 5.5, art = "hex",
+                    call = "Icebound Flames -- stop the cast",
                 }),
-                { at = 20, kind = "carry", name = "Fish", school = "frost",
+                { at = 24, kind = "carry", name = "Fish", school = "frost",
                   to = "boss", reach = 20, window = 16, damage = 24, drainEnergy = 40 }
             ),
         },
