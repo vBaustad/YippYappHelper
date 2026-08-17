@@ -363,6 +363,15 @@ local phaseText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 phaseText:SetPoint("TOP", arena, "TOP", 0, -10)
 if ns.ApplyTextShadow then ns.ApplyTextShadow(phaseText) end
 
+-- What the player is currently carrying, over their own head.
+--
+-- A split soak only works if you can see which side of it you are on,
+-- and until now nothing on screen said so -- the mechanic resolved and
+-- the consequence arrived fourteen seconds later with no thread between
+-- them.
+local debuffText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+if ns.ApplyTextShadow then ns.ApplyTextShadow(debuffText) end
+
 local resultText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 resultText:SetPoint("TOP", bigText, "BOTTOM", 0, -8)
 resultText:SetWidth(ARENA_PX - 80)
@@ -429,6 +438,7 @@ local S = {
     energy = 0, carrying = nil,
     heroic = false, countdown = 0, flash = 0, callUntil = 0,
     scenario = nil, boss = nil, bossActor = nil,
+    debuffs = {},
 }
 T.state = S
 
@@ -602,6 +612,20 @@ local function Credit(why)
     end
 end
 
+--- Debuffs the player is carrying, by name, with the time they lapse.
+---
+--- The trainer had no notion of state that OUTLIVES a mechanic, and that
+--- is what a split soak is made of: soaking marks you, and being marked
+--- is the reason to sit the next one out. Without somewhere to keep that
+--- between two casts, "then switch" cannot be expressed at all.
+local function HasDebuff(name)
+    return (S.debuffs[name] or 0) > S.time
+end
+
+local function ApplyDebuff(name, dur)
+    S.debuffs[name] = S.time + (dur or 12)
+end
+
 local function AddStack(n)
     local mech = S.scenario and S.scenario.stacks
     if not mech then return end
@@ -739,6 +763,9 @@ local function ResetAllies()
             -- Which soak group they belong to. The tank is left out: it
             -- has its own soaks and is never in the raid's rotation.
             soakGroup = ((i - 2) % 3) + 1,
+            -- When this ally last soaked a marking soak. Same rule
+            -- as the player's: singed people sit the next one out.
+            soakedUntil = 0,
             x = math.cos(spot.angle) * spot.dist,
             y = math.sin(spot.angle) * spot.dist,
             aim = spot.angle + math.pi,
@@ -794,6 +821,25 @@ local function DangerPush(x, y)
         px, py = px + dx / d * strength, py + dy / d * strength
     end
 
+    -- The boss's front, always. "Nobody but the tank stands in the cone"
+    -- is a position the raid holds for the whole fight, not a thing it
+    -- reacts to when a cast starts -- and reacting was too late anyway,
+    -- because the frontals here have a two-second warning.
+    local b = S.bossActor
+    if b then
+        local dx, dy = x - b.x, y - b.y
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d > 0.001 and d < 78 then
+            local off = math.abs(((atan2(dy, dx) - (b.facing or 0) + math.pi)
+                % (math.pi * 2)) - math.pi)
+            if off < 0.65 then
+                local strength = (0.65 - off) / 0.65
+                px, py = px + (-math.sin(b.facing or 0)) * strength * 1.4,
+                         py + (math.cos(b.facing or 0)) * strength * 1.4
+            end
+        end
+    end
+
     for _, a in ipairs(S.actors) do
         if a.dead then
             -- nothing
@@ -831,51 +877,109 @@ local function DangerPush(x, y)
     return px, py
 end
 
---- Walk the boss toward the player, and note which way it now faces.
+--- How bad the ground is in a cone pointing `dir` from the boss.
 ---
---- The tank is understood to be doing the walking: it stands at the
---- boss's facing by formation, so "the boss moves toward the player" and
---- "the tank leads it there" are the same motion described twice.
+--- Used to pick which way it should face. Lower is cleaner.
+local function ConeCost(bx, by, dir, rx, ry)
+    local cost = 0
+    -- Pointing it anywhere near the raid is the worst thing it can do.
+    local toRaid = atan2(ry - by, rx - bx)
+    local off = math.abs(((dir - toRaid + math.pi) % (math.pi * 2)) - math.pi)
+    if off < 1.1 then cost = cost + (1.1 - off) * 40 end
+    -- And a cone swept across bad ground is a cone nobody can stand in
+    -- to do anything else.
+    for _, a in ipairs(S.actors) do
+        if not a.dead and (a.kind == "puddle" or a.kind == "dodge") then
+            local along, across = alongAcross(a.x, a.y, bx, by, dir)
+            if along > 0 and along < 90 and across < (a.r or 10) + 18 then
+                cost = cost + 8
+            end
+        end
+    end
+    return cost
+end
+
+--- Turn and walk the boss, for reasons the player can follow.
+---
+--- The tank is understood to be doing both. It used to re-aim at RANDOM
+--- every nine seconds, which is why this was hard to read: the cone
+--- swung somewhere for no reason, and there was nothing to anticipate.
+---
+--- Now the facing is chosen: away from the raid, and away from ground
+--- that is already ruined. That is exactly what a tank does, and it
+--- means the safe side is always "where everyone else is standing" --
+--- a rule the player can hold rather than a direction they must watch.
+--- It still moves, because the raid moves and the floor keeps changing.
+---
+--- The boss also WALKS off bad ground rather than only turning on it.
 local function UpdateBossPosition(dt)
     local b = S.bossActor
     if not b then return end
+    b.facing = b.facing or TANK_ANGLE
 
-    if not (S.scenario and S.scenario.bossFollowsTank) then
-        -- Stationary boss: it still turns.
-        b.facing = b.facing or TANK_ANGLE
-        if not b.reaimAt or S.time >= b.reaimAt then
-            b.facingGoal = math.random() * math.pi * 2
-            b.reaimAt = S.time + BOSS_REAIM_EVERY
-        end
-        local diff = (b.facingGoal or b.facing) - b.facing
-        -- Shortest way round, or a turn from 350 degrees to 10 would take
-        -- the long way and swing the cone through the whole raid.
-        while diff > math.pi do diff = diff - math.pi * 2 end
-        while diff < -math.pi do diff = diff + math.pi * 2 end
-        local step = BOSS_TURN_RATE * dt
-        if math.abs(diff) <= step then
-            b.facing = b.facingGoal or b.facing
-        else
-            b.facing = b.facing + (diff > 0 and step or -step)
+    local rx, ry = RaidCentre()
+
+    if S.scenario and S.scenario.bossFollowsTank then
+        -- Vashnik: the PLAYER steers, because where the boss stands
+        -- picks the altars. Faces the player, who is leading it.
+        local dx, dy = S.px - b.x, S.py - b.y
+        if (dx * dx + dy * dy) > 16 then b.facing = atan2(dy, dx) end
+        local gx, gy = clampToArena(S.px, S.py, ARENA_R - BOSS_LEASH)
+        local mx, my = gx - b.x, gy - b.y
+        local d = math.sqrt(mx * mx + my * my)
+        local step = BOSS_MOVE_SPEED * dt
+        if d <= step then
+            b.x, b.y = gx, gy
+        elseif d > 0.001 then
+            b.x, b.y = b.x + mx / d * step, b.y + my / d * step
         end
         return
     end
 
-    local dx, dy = S.px - b.x, S.py - b.y
-    if (dx * dx + dy * dy) > 16 then b.facing = atan2(dy, dx) end
-    b.facing = b.facing or TANK_ANGLE
+    -- Re-aimed on a cadence rather than every frame, so the cone holds
+    -- still long enough to be read and to be stood behind.
+    if not b.reaimAt or S.time >= b.reaimAt then
+        local best, bestCost
+        for k = 0, 11 do
+            local cand = (k / 12) * math.pi * 2
+            local cost = ConeCost(b.x, b.y, cand, rx, ry)
+            if not bestCost or cost < bestCost then best, bestCost = cand, cost end
+        end
+        b.facingGoal = best or b.facing
+        b.reaimAt = S.time + BOSS_REAIM_EVERY
+    end
 
-    -- Bounded, so the boss can reach the altars but can never be parked
-    -- against the wall where half its mechanics have nowhere to resolve.
-    local gx, gy = clampToArena(S.px, S.py, ARENA_R - BOSS_LEASH)
-    local mx, my = gx - b.x, gy - b.y
-    local d = math.sqrt(mx * mx + my * my)
-    local step = BOSS_MOVE_SPEED * dt
-    if d <= step then
-        b.x, b.y = gx, gy
-    elseif d > 0.001 then
-        b.x = b.x + mx / d * step
-        b.y = b.y + my / d * step
+    local diff = (b.facingGoal or b.facing) - b.facing
+    -- Shortest way round, or a turn from 350 degrees to 10 takes the long
+    -- way and swings the cone through the whole raid on its way.
+    while diff > math.pi do diff = diff - math.pi * 2 end
+    while diff < -math.pi do diff = diff + math.pi * 2 end
+    local step = BOSS_TURN_RATE * dt
+    if math.abs(diff) <= step then
+        b.facing = b.facingGoal or b.facing
+    else
+        b.facing = b.facing + (diff > 0 and step or -step)
+    end
+
+    -- And step off anything it is standing in. Slowly, and only far
+    -- enough to get clear -- a boss that fled every puddle would drag
+    -- melee around the room all fight.
+    local px, py = 0, 0
+    for _, a in ipairs(S.actors) do
+        if not a.dead and a.kind == "puddle" then
+            local dx, dy = b.x - a.x, b.y - a.y
+            local d = math.sqrt(dx * dx + dy * dy)
+            local reach = (a.r or 10) + b.r
+            if d < reach and d > 0.001 then
+                px, py = px + dx / d, py + dy / d
+            end
+        end
+    end
+    local plen = math.sqrt(px * px + py * py)
+    if plen > 0.001 then
+        local step2 = BOSS_MOVE_SPEED * 0.7 * dt
+        b.x, b.y = clampToArena(b.x + px / plen * step2,
+                                b.y + py / plen * step2, 30)
     end
 end
 
@@ -937,6 +1041,13 @@ end
 --- Ordered by priority, and the order is the raid's: a mechanic on YOU
 --- outranks a mechanic on the group, which outranks damage.
 local function AllyGoal(ally, index)
+    -- Which soak, if any, this ally is actually going to. Recorded
+    -- rather than inferred: counting bodies inside a circle cannot tell
+    -- an assignment from somebody who happened to be standing there, and
+    -- once the raid started getting shoved out of the boss's cone it
+    -- could not tell them apart at all.
+    ally.goalSoak = nil
+
     -- 1. Something is on them personally. The destination was fixed when
     --    the mechanic landed -- see AssignRunOut for why it is not
     --    recomputed.
@@ -979,7 +1090,8 @@ local function AllyGoal(ally, index)
                     -- is an assignment and only its group does.
                     or a.soakBy == nil and ally.role ~= "TANK"
                         and (a.group == nil or a.group == ally.soakGroup)
-                ) then
+                ) and not (a.marks and S.time < (ally.soakedUntil or 0)) then
+                ally.goalSoak = a
                 return a.x, a.y
             elseif a.kind == "refuge" then
                 local best, bestD
@@ -1073,6 +1185,15 @@ local function UpdateAllies(dt)
             ally.x = ally.x + dx / len * ALLY_SPEED * dt
             ally.y = ally.y + dy / len * ALLY_SPEED * dt
             ally.x, ally.y = clampToArena(ally.x, ally.y, ALLY_WALL_PAD)
+        end
+
+        -- Standing in a marking soak counts as having taken it, so they
+        -- sit the next one out and the swap is visible.
+        for _, act in ipairs(S.actors) do
+            if not act.dead and act.kind == "soak" and act.marks
+                and dist(ally.x, ally.y, act.x, act.y) <= act.r then
+                ally.soakedUntil = S.time + (act.marksFor or 14)
+            end
         end
 
         -- Standing in something. They do not have health, but a raid that
@@ -1575,12 +1696,46 @@ KINDS.dodge = {
 
 KINDS.soak = {
     Init = function(a) a.spinDir = (math.random() < 0.5) and -1 or 1 end,
+    -- A soak with `marks` is a SPLIT soak, and it has four outcomes
+    -- rather than two.
+    --
+    -- Hungering Pyre is the case: soak it and the damage splits, but you
+    -- are singed and should let somebody else take the next one --
+    -- and everybody who does NOT soak is set alight instead, which is
+    -- itself a job rather than a punishment. Scoring it as
+    -- in-good / out-bad threw away the whole mechanic, and the raid
+    -- alternating was invisible because nothing recorded who had just
+    -- gone.
     Resolve = function(a)
-        if dist(S.px, S.py, a.x, a.y) <= a.r then
+        local inside = dist(S.px, S.py, a.x, a.y) <= a.r
+        local marked = a.marks and HasDebuff(a.marks)
+
+        if inside and marked then
+            -- The one real mistake, and it has to hurt more than the job
+            -- you were avoiding. Set gently, always soaking came out
+            -- CHEAPER than alternating -- the mark cost nothing, so the
+            -- correct play was to ignore it.
+            Hurt((a.damage or 20) * 3,
+                a.name .. " -- you are still " .. a.marks .. ", let someone else take it")
+        elseif inside then
             Credit(a.name .. " soaked")
+            if a.marks then ApplyDebuff(a.marks, a.marksFor or 14) end
             if a.clears then AddStack(-a.clears) end
+        elseif marked then
+            -- Correctly sitting it out. Still catches the follow-up,
+            -- because everybody outside the circle does.
+            Credit("Sat out " .. a.name .. " -- correct")
         else
             Hurt(a.damage or 20, a.name)
+        end
+
+        -- What happens to everyone who stayed out, whether they were
+        -- right to or not.
+        if not inside and a.onMiss then
+            local ev = {}
+            for k, v in pairs(a.onMiss) do ev[k] = v end
+            ev.where = "player"
+            Spawn(ev)
         end
         a.flashUntil = S.time + 0.25
     end,
@@ -2828,6 +2983,22 @@ local function DrawDots(s)
         t.label:SetText(a.label or "")
     end
 
+    -- The badge follows the player, so it is read where they are looking.
+    local carried, soonest = nil, nil
+    for name, expiry in pairs(S.debuffs) do
+        if expiry > S.time and (not soonest or expiry < soonest) then
+            carried, soonest = name, expiry
+        end
+    end
+    if carried then
+        debuffText:SetPoint("CENTER", arena, "CENTER",
+            S.px * s, (S.py + PLAYER_R * 4) * s)
+        debuffText:SetText(("|cffffcc44%s %.0f|r"):format(carried, soonest - S.time))
+        debuffText:Show()
+    else
+        debuffText:Hide()
+    end
+
     if S.scenario and S.scenario.well then
         put(wellTex, "ring", 0, 0, 18, s, C.well, 0.9, -S.time * 0.6)
     else
@@ -3090,6 +3261,7 @@ function T:Start(bossId, heroic)
     S.px, S.py, S.aim = 0, -60, math.pi / 2
     S.nextEvent, S.passed, S.failed, S.stacks = 1, 0, 0, 0
     S.flash, S.callUntil, S.fireCd = 0, 0, 0
+    wipe(S.debuffs)
     S.countdown = 3.2
 
     S.phases = PhasesOf(sc)

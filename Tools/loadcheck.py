@@ -2869,6 +2869,118 @@ def main():
         print("  FAIL trainer boss one: %s" % bossone)
         failures.append(("trainer boss one", str(bossone)))
 
+    # Hungering Pyre's split.
+    #
+    # Soaking marks you Singed and you should sit the next one out;
+    # everybody who stays out is set alight instead, and the Flames are a
+    # job rather than a punishment. Scored in-good/out-bad the mechanic
+    # collapsed to two outcomes and the alternation was invisible.
+    #
+    # This checks the STRUCTURE -- that the mark is applied, that staying
+    # out sets you alight, and that soaking while still marked costs more
+    # than soaking clean. It deliberately does NOT try to prove
+    # alternating is the optimal line: total misses in that phase are
+    # dominated by the adds and the Echoes, so a score comparison there
+    # measures everything except the mechanic. Proving that needs
+    # per-mechanic scoring, which the trainer does not keep.
+    split = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            --- Run to the intermission and hand back the live Pyre.
+            local function toPyre()
+                T:Start("soulcoiler", false)
+                S.countdown = 0
+                for _ = 1, 4000 do
+                    S.hp = 100
+                    if S.bossActor then
+                        S.bossActor.hp = S.bossActor.maxHp * 0.5
+                    end
+                    update(f, 0.05)
+                    if not S.running then return nil end
+                    if S.phaseIndex >= 2 then
+                        for _, a in ipairs(S.actors) do
+                            if a.kind == "soak" and a.marks and not a.resolved then
+                                return a
+                            end
+                        end
+                    end
+                end
+                return nil
+            end
+
+            -- 1. Soaking marks you.
+            local pyre = toPyre()
+            if not pyre then T:Stop(); return "never reached a Hungering Pyre" end
+            local clean
+            for _ = 1, 400 do
+                S.hp = 100
+                S.px, S.py = pyre.x, pyre.y
+                local before = S.hp
+                update(f, 0.05)
+                if pyre.resolved then clean = before - S.hp break end
+                if not S.running then break end
+            end
+            local singed = (S.debuffs["Singed"] or 0) > S.time
+            T:Stop()
+            if not singed then return "soaking did not apply the Singed mark" end
+
+            -- 2. Staying out sets you alight.
+            pyre = toPyre()
+            if not pyre then return "never reached a second Hungering Pyre" end
+            for _ = 1, 400 do
+                S.hp = 100
+                S.px, S.py = -pyre.x, -pyre.y - 60
+                update(f, 0.05)
+                if pyre.resolved then break end
+                if not S.running then break end
+            end
+            local flames = false
+            for _ = 1, 60 do
+                S.hp = 100
+                update(f, 0.05)
+                for _, a in ipairs(S.actors) do
+                    if a.name == "Slithering Flames" then flames = true end
+                end
+            end
+            T:Stop()
+            if not flames then return "staying out of the Pyre set nobody alight" end
+
+            -- 3. Soaking while still marked costs more than soaking clean.
+            pyre = toPyre()
+            if not pyre then return "never reached a third Hungering Pyre" end
+            S.debuffs["Singed"] = S.time + 30
+            local marked
+            for _ = 1, 400 do
+                S.hp = 100
+                S.px, S.py = pyre.x, pyre.y
+                local before = S.hp
+                update(f, 0.05)
+                if pyre.resolved then marked = before - S.hp break end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if not (clean and marked) then
+                return "could not measure both soaks"
+            end
+            if marked <= clean then
+                return string.format(
+                    "soaking while Singed cost %.0f and soaking clean cost %.0f -- the mark is free",
+                    marked, clean)
+            end
+            return string.format("ok:Singed applied, Flames spawned, %.0f vs %.0f damage",
+                marked, clean)
+        end
+    """)(ns)
+    if split and str(split).startswith("ok:"):
+        print("  ok   trainer split soak: %s" % str(split)[3:])
+    else:
+        print("  FAIL trainer split soak: %s" % split)
+        failures.append(("trainer split soak", str(split)))
+
     # Phases.
     #
     # The whole point of the rebuild, and the one claim nothing else here
@@ -3042,11 +3154,17 @@ def main():
             local f = ns.RaidTrainerFrame
             local update = f._scripts.OnUpdate
 
+            -- Who is GOING to it, not who happens to be standing in it.
+            --
+            -- The geometric version could not tell an assignment from a
+            -- coincidence: Ravenous Feast is sixteen units across and
+            -- lands on the raid, and once allies started being pushed
+            -- clear of the boss's cone they drifted through soaks they
+            -- were never assigned. The AI records its own intent now.
             local function inSoak(act)
                 local n = 0
                 for _, a in ipairs(S.allies) do
-                    local dx, dy = a.x - act.x, a.y - act.y
-                    if math.sqrt(dx * dx + dy * dy) <= act.r then n = n + 1 end
+                    if a.goalSoak == act then n = n + 1 end
                 end
                 return n
             end

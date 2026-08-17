@@ -170,7 +170,18 @@ SC.soulcoiler = {
                   call = "Second Echo" },
                 Every(8, 11, 3, {
                     kind = "soak", name = "Hungering Pyre", school = "fire",
-                    soakBy = "melee", cast = 3.2, r = 16, damage = 26,
+                    cast = 3.2, r = 16, damage = 26,
+                    -- Soaking marks you Singed; everybody who stays out
+                    -- is set alight instead, and the Flames are how the
+                    -- corpses get burned. Two jobs, and you alternate
+                    -- between them.
+                    marks = "Singed", marksFor = 14,
+                    onMiss = {
+                        kind = "drop", name = "Slithering Flames", school = "fire",
+                        cast = 8, minDist = 26, r = 12, life = 10, dps = 12,
+                        damage = 20,
+                        call = "Slithering Flames -- take it clear of the raid",
+                    },
                     call = "Hungering Pyre -- split it, park it on the corpses",
                 }),
                 -- Everyone who does NOT soak the Pyre gets their own
