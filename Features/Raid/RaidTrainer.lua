@@ -454,7 +454,7 @@ local S = {
     energy = 0, carrying = nil,
     heroic = false, countdown = 0, flash = 0, callUntil = 0,
     scenario = nil, boss = nil, bossActor = nil,
-    debuffs = {},
+    debuffs = {}, corpses = {},
 }
 T.state = S
 
@@ -626,6 +626,58 @@ local bossWard = arena:CreateTexture(nil, "ARTWORK", nil, 4)
 bossWard:SetTexture(ART.swirl)
 local bossWardRing = arena:CreateTexture(nil, "ARTWORK", nil, 5)
 bossWardRing:SetTexture(ART.ring)
+
+------------------------------------------------------------
+-- Corpses
+--
+-- Restless Amani do not stay dead. Each one leaves a body where it fell,
+-- and the Ritual of Awakening raises every corpse still lying there --
+-- which is what Slithering Flames is FOR. Without them the Flames were
+-- half a mechanic: a debuff you carried away from the raid for no
+-- reason, arriving right after you had been told you played correctly,
+-- so it read as a punishment for soaking.
+--
+-- Kept out of the actor list on purpose. Actors belong to a phase and
+-- are cleared at its boundary; a corpse has to survive from the phase
+-- that made it into the phase that burns it.
+------------------------------------------------------------
+local MAX_CORPSES = 14
+local corpseTex = {}
+for i = 1, MAX_CORPSES do
+    corpseTex[i] = arena:CreateTexture(nil, "ARTWORK", nil, 5)
+    corpseTex[i]:SetTexture(ART.skull)
+end
+
+local function AddCorpse(x, y)
+    if #S.corpses >= MAX_CORPSES then return end
+    S.corpses[#S.corpses + 1] = { x = x, y = y }
+end
+
+--- Burn every corpse within `r` of a point. Returns how many.
+local function BurnCorpses(x, y, r)
+    local n = 0
+    for i = #S.corpses, 1, -1 do
+        local c = S.corpses[i]
+        if dist(x, y, c.x, c.y) <= r then
+            table.remove(S.corpses, i)
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local function DrawCorpses(s)
+    for i = 1, MAX_CORPSES do
+        local c = S.corpses[i]
+        if c then
+            -- Dim and small, so a floor of them reads as litter to clear
+            -- rather than as a dozen more things to dodge.
+            put(corpseTex[i], "skull", c.x, c.y, 11, s, { 0.55, 0.52, 0.60 }, 0.75)
+        else
+            corpseTex[i]:Hide()
+        end
+    end
+end
 
 ------------------------------------------------------------
 -- Forward declarations
@@ -893,9 +945,31 @@ local function DangerPush(x, y)
         end
     end
 
+    -- The well. Standing in it is what the whole fight forbids, and it
+    -- is not an actor -- it is a hole in the floor -- so nothing in the
+    -- loop below would ever have kept the raid off it.
+    if S.scenario and S.scenario.well then
+        repel(0, 0, 26)
+    end
+
     for _, a in ipairs(S.actors) do
         if a.dead then
             -- nothing
+        elseif a.kind == "projectile" then
+            -- The lane a spirit is taking, or is about to. Each one pops
+            -- on the FIRST body it touches, so an ally standing in the
+            -- line does not merely take a hit -- it takes the hit that
+            -- was going to miss everyone, and stops the spirit reaching
+            -- the far wall where it would have been harmless.
+            local along, across = alongAcross(x, y, a.x, a.y, a.dir)
+            local half = a.r + 12
+            if along >= -6 and across < half then
+                local nx, ny = -math.sin(a.dir), math.cos(a.dir)
+                local side = ((x - a.x) * nx + (y - a.y) * ny) >= 0 and 1 or -1
+                local strength = (half - across) / half
+                px, py = px + nx * side * strength * 1.6,
+                         py + ny * side * strength * 1.6
+            end
         elseif a.kind == "dodge" and not a.resolved then
             repel(a.x, a.y, a.r + 7)
         elseif a.kind == "puddle" then
@@ -1928,6 +2002,14 @@ KINDS.drop = {
         else
             Hurt(a.damage or 18, a.name .. " dropped on the raid")
         end
+        if a.burns then
+            -- The point of carrying it. Cremating the bodies is the job,
+            -- and it is scored as one rather than as damage avoided.
+            local n = BurnCorpses(S.px, S.py, (a.r or 13) + 4)
+            if n > 0 then
+                Credit(("Burned %d corpse%s"):format(n, n == 1 and "" or "s"))
+            end
+        end
         Spawn({
             kind = "puddle", name = a.name, school = a.school,
             r = a.r or 13, life = a.life or 20, permanent = a.permanent,
@@ -2196,6 +2278,7 @@ KINDS.chaser = {
         -- Silent when the raid got it on their own: not a pass, but not
         -- a miss either. The add was handled, just not by you.
         if a.playerHit then Credit(a.name .. " killed") end
+        if a.leavesCorpse then AddCorpse(a.x, a.y) end
         -- One becomes two becomes four. Smaller and weaker each time, or
         -- the third wave is unkillable inside a sixty-second round.
         if a.splits and a.splits > 0 then
@@ -3186,6 +3269,7 @@ local function DrawDots(s)
         wellTex:Hide()
     end
 
+    DrawCorpses(s)
     DrawAltars(s)
     DrawTunnels(s)
     DrawBoss(s)
@@ -3207,10 +3291,40 @@ local ClearActors
 --- nowhere. Ground effects go with them, because every one of these
 --- fights resets its floor at a phase boundary.
 local function EnterPhase(i)
+    -- What the Ritual raises, worked out BEFORE the field is cleared and
+    -- spawned AFTER it.
+    --
+    -- Spawning them here and then calling ClearActors below deleted them
+    -- in the same breath -- eight bodies went in, nothing came out, and
+    -- the phase looked exactly as it should from the outside. The count
+    -- has to survive the clear even though the actors cannot.
+    local raise = 0
+    local leaving = S.phases and S.phases[S.phaseIndex]
+    if leaving and leaving.raisesCorpses and #S.corpses > 0 then
+        raise = #S.corpses
+    end
+
     S.phaseIndex = i
     S.phaseTime = 0
     S.nextEvent = 1
     ClearActors()
+
+    if raise > 0 then
+        -- One add back on its feet per body nobody burned, from where it
+        -- fell, walking at the well again.
+        for _, c in ipairs(S.corpses) do
+            Spawn({
+                kind = "chaser", name = "Raised Amani", school = "shadow",
+                goal = "centre", speed = 12, hp = 60, art = "hex",
+                damage = 26, feeds = 5, leavesCorpse = true,
+                where = { x = c.x, y = c.y },
+            })
+        end
+        wipe(S.corpses)
+        Hurt(0, ("%d corpse%s raised -- they were never burned"):format(
+            raise, raise == 1 and "" or "s"))
+    end
+
     local p = CurrentPhase()
     if p then
         phaseText:SetTextColor(1, 0.85, 0.35)
@@ -3457,6 +3571,7 @@ function T:Start(bossId, heroic)
     S.nextEvent, S.passed, S.failed, S.stacks = 1, 0, 0, 0
     S.flash, S.callUntil, S.fireCd = 0, 0, 0
     wipe(S.debuffs)
+    wipe(S.corpses)
     S.countdown = 3.2
 
     S.phases = PhasesOf(sc)

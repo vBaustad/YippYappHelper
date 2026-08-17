@@ -111,12 +111,12 @@ SC.soulcoiler = {
                 Every(3, 9, 5, {
                     kind = "chaser", name = "Restless Amani", school = "shadow",
                     where = "edge", goal = "centre", speed = 11, hp = 60,
-                    art = "hex", damage = 26, feeds = 5,
+                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
                 }),
                 Every(7, 9, 4, {
                     kind = "chaser", name = "Restless Amani", school = "shadow",
                     where = "edge", goal = "centre", speed = 12, hp = 60,
-                    art = "hex", damage = 26, feeds = 5, heroicOnly = true,
+                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true, heroicOnly = true,
                 }),
                 -- Four spirits, travelling outward at the tank. Each
                 -- pops on the first body it touches, so the line has to
@@ -156,7 +156,9 @@ SC.soulcoiler = {
             -- one event the player watches happen rather than a state
             -- they find her already in.
             hpFloor = 55, bossImmune = true, bossAt = "centre",
-            call = "Kill both Echoes, and burn the corpses",
+            -- Anything still on the floor when this ends gets back up.
+            raisesCorpses = true,
+            call = "Kill both Echoes -- and burn every corpse before it ends",
             events = Timeline(
                 -- Soul Transfer channels into one side of the room and
                 -- the Echo lands at the end of it, so the beam is a place
@@ -184,7 +186,8 @@ SC.soulcoiler = {
                         kind = "drop", name = "Slithering Flames", school = "fire",
                         cast = 8, minDist = 26, r = 12, life = 10, dps = 12,
                         damage = 20,
-                        call = "Slithering Flames -- take it clear of the raid",
+                        burns = true,
+                        call = "Slithering Flames -- YOURS. Go and burn the corpses.",
                     },
                     call = "Hungering Pyre -- split it, park it on the corpses",
                 }),
@@ -198,7 +201,7 @@ SC.soulcoiler = {
                 Every(6, 10, 3, {
                     kind = "chaser", name = "Restless Amani", school = "shadow",
                     where = "edge", goal = "centre", speed = 11, hp = 60,
-                    art = "hex", damage = 26, feeds = 5,
+                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
                 })
             ),
         },
@@ -233,7 +236,7 @@ SC.soulcoiler = {
                 Every(9, 10, 4, {
                     kind = "chaser", name = "Restless Amani", school = "shadow",
                     where = "edge", goal = "centre", speed = 13, hp = 60,
-                    art = "hex", damage = 26, feeds = 5,
+                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
                 }),
                 Every(14, 15, 2, {
                     kind = "drop", name = "Essence Rend", school = "shadow",

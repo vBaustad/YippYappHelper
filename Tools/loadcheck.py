@@ -2943,8 +2943,19 @@ def main():
                 if not S.running then break end
             end
             local singed = (S.debuffs["Singed"] or 0) > S.time
+            -- And nothing was set alight by the cast we just soaked.
+            -- "I soaked, got Singed, and still got the circle" is the
+            -- report this exists to settle, and reasoning about it from
+            -- the source was not good enough twice running.
+            local flamesOnSoaker = false
+            for _, a in ipairs(S.actors) do
+                if a.name == "Slithering Flames" then flamesOnSoaker = true end
+            end
             T:Stop()
             if not singed then return "soaking did not apply the Singed mark" end
+            if flamesOnSoaker then
+                return "soaking the Pyre set the soaker alight anyway"
+            end
 
             -- 2. Staying out sets you alight.
             pyre = toPyre()
@@ -3016,6 +3027,110 @@ def main():
     else:
         print("  FAIL trainer split soak: %s" % split)
         failures.append(("trainer split soak", str(split)))
+
+    # Corpses, which are what the Flames are for.
+    #
+    # Restless Amani leave bodies, the Ritual raises every one still
+    # lying there, and Slithering Flames is how they get cremated. Until
+    # this existed the Flames were half a mechanic -- a debuff you
+    # carried away for no reason, arriving right after you had been told
+    # you played correctly, which reads as a punishment for soaking.
+    #
+    # Two claims: killing adds leaves bodies, and burning them is what
+    # stops the Ritual raising them.
+    corpses = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            --- Play phase one, shooting everything, and count the bodies.
+            local function toIntermission(burn)
+                T:Start("soulcoiler", false)
+                S.countdown = 0
+                local peak, raised, after, atEnd = 0, 0, 0, -1
+                for _ = 1, 4000 do
+                    S.hp, S.firing = 100, true
+                    if S.bossActor then
+                        S.bossActor.hp = S.bossActor.maxHp * 0.5
+                    end
+                    if burn then
+                        -- Stand on a corpse, so the Flames land on it.
+                        local c = S.corpses[1]
+                        if c then S.px, S.py = c.x, c.y end
+                    else
+                        -- Shoot the nearest add from the far side of the
+                        -- room, rather than standing next to it.
+                        --
+                        -- Parking on top of the adds was not a control:
+                        -- corpses form where adds die, so the player's
+                        -- own Flames were burning them incidentally and
+                        -- the "nobody burned anything" run burned
+                        -- everything.
+                        local near, nd
+                        for _, a in ipairs(S.actors) do
+                            if a.enemy and not a.dead then
+                                local d = math.sqrt(a.x * a.x + a.y * a.y)
+                                if not nd or d < nd then near, nd = a, d end
+                            end
+                        end
+                        if near then
+                            local d = math.sqrt(near.x * near.x + near.y * near.y)
+                            if d > 1 then
+                                S.px, S.py = -near.x / d * 78, -near.y / d * 78
+                            end
+                        end
+                    end
+                    update(f, 0.05)
+                    if #S.corpses > peak then peak = #S.corpses end
+                    for _, a in ipairs(S.actors) do
+                        if a.name == "Raised Amani" and not a.counted then
+                            a.counted = true
+                            raised = raised + 1
+                        end
+                    end
+                    -- Kept running a little past the transition. The
+                    -- Ritual raises the bodies as the phase ENDS, so
+                    -- breaking the moment the index changes counts none
+                    -- of them and reports that nothing was raised.
+                    if S.phaseIndex >= 3 then
+                        if after == 0 then atEnd = #S.corpses end
+                        after = after + 1
+                        if after > 60 then break end
+                    end
+                    if not S.running then break end
+                end
+                local gotTo = S.phaseIndex
+                T:Stop()
+                return peak, raised, atEnd, gotTo
+            end
+
+            local peak, raised = toIntermission(false)
+            if peak == 0 then
+                return "adds died and left no corpses at all"
+            end
+            if raised == 0 then
+                -- Measured as adds that got back up, not as corpses left
+                -- on the floor: the Ritual empties the list when it
+                -- fires, so counting survivors afterwards compares zero
+                -- with zero and passes whatever the Flames did.
+                return "corpses were never burned and the Ritual raised nobody"
+            end
+            local peakB, raisedB = toIntermission(true)
+            if raisedB >= raised then
+                return string.format(
+                    "burning raised %d and ignoring them raised %d -- the Flames do nothing",
+                    raisedB, raised)
+            end
+            return string.format("ok:%d bodies at peak, %d raised when burned against %d when not",
+                peak, raisedB, raised)
+        end
+    """)(ns)
+    if corpses and str(corpses).startswith("ok:"):
+        print("  ok   trainer corpses: %s" % str(corpses)[3:])
+    else:
+        print("  FAIL trainer corpses: %s" % corpses)
+        failures.append(("trainer corpses", str(corpses)))
 
     # Phases.
     #
