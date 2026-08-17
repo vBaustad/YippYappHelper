@@ -564,6 +564,8 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh shell <page> — open a specific page")
         print("  /yh classic — the old window")
         print("  /yh raid — scan raid/party for tier pieces")
+        print("  /yh guide — boss guide for the current raid")
+        print("  /yh train [boss] — practise a boss's mechanics")
         print("  /yh mplus — open Mythic+ helper")
         print("  /yh loot — open loot browser")
         print("  /yh profile — show/set player profile")
@@ -688,6 +690,61 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
                 ns.RaidFrame:Show()
                 if ns.RefreshRaidOverview then ns:RefreshRaidOverview() end
             end
+        end
+        return
+    end
+
+    -- /yh guide — Raid Tools, opened straight onto the Boss Guide.
+    --
+    -- Worth its own command rather than "open the app, find the page,
+    -- find the tab": the moment somebody wants this is thirty seconds
+    -- before a pull, and three clicks is two too many.
+    if cmd == "guide" then
+        if ns.AppFrame then
+            if not ns.AppFrame:IsShown() then ns:ToggleApp() end
+            ns:ShowAppPage("raid")
+            if ns.Shell then ns.Shell:SetSubTab("raid", "guide") end
+        end
+        return
+    end
+
+    -- /yh train [boss] — straight into the arena.
+    if cmd == "train" then
+        local G, T = ns.RaidGuide, ns.RaidTrainer
+        if not (G and T) then return end
+        local want = strlower(strtrim(arg or ""))
+        if want ~= "" then
+            for _, boss in ipairs(G:Ordered()) do
+                if boss.id == want or strlower(boss.name):find(want, 1, true) then
+                    if not T:Start(boss.id) then
+                        print("|cff00ff00YippYapp|r nothing to practise for " .. boss.name)
+                    end
+                    return
+                end
+            end
+            print("|cff00ff00YippYapp|r no such boss: " .. want)
+            return
+        end
+        print("|cff00ff00=== YippYapp mechanics trainer ===|r")
+        for _, boss in ipairs(G:Ordered()) do
+            if T:HasScenario(boss.id) then
+                print(("  |cff888888%d.|r %s  |cff555555/yh train %s|r")
+                    :format(boss.order, boss.name, boss.id))
+            end
+        end
+        return
+    end
+
+    -- /yh ejdump — what the Encounter Journal calls these bosses.
+    --
+    -- Deliberately absent from /yh help. It exists to check the guide's
+    -- spelling against the client, which is a thing only a developer
+    -- needs and only from inside the game.
+    if cmd == "ejdump" then
+        if ns.RaidGuide and ns.RaidGuide.DumpJournal then
+            -- `/yh ejdump abilities` walks every section of every
+            -- encounter and names the ones our guide never mentions.
+            ns.RaidGuide:DumpJournal(arg and strlower(strtrim(arg)) or nil)
         end
         return
     end

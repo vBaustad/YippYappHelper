@@ -134,7 +134,7 @@ close:SetPoint("TOPRIGHT", -2, -2)
 -- threw on the first line that touched one, exactly as Consumables did.
 -- Same mistake, different page; a load harness finds these, reading does
 -- not.
-local overviewTab, overviewContainer
+local overviewTab, overviewContainer, guideContainer
 
 function ns:SetRaidAppMode(enabled, contentWidth, contentHeight)
     if enabled then
@@ -153,6 +153,14 @@ function ns:SetRaidAppMode(enabled, contentWidth, contentHeight)
         overviewContainer:ClearAllPoints()
         overviewContainer:SetPoint("TOPLEFT", 0, -4)
         overviewContainer:SetPoint("BOTTOMRIGHT", 0, 0)
+        -- The Guide sits in the same box. Repositioned alongside rather
+        -- than anchored TO overviewContainer, because that one is hidden
+        -- whenever the Guide is showing and a frame anchored to a hidden
+        -- frame still lays out -- but the day someone "tidies up" by
+        -- reparenting it, it would stop.
+        guideContainer:ClearAllPoints()
+        guideContainer:SetPoint("TOPLEFT", 0, -4)
+        guideContainer:SetPoint("BOTTOMRIGHT", 0, 0)
         local dw, dh = ns:GetAppFrameSize()
         raidFrame:SetSize(contentWidth or dw, contentHeight or (dh - 34))
     else
@@ -187,6 +195,15 @@ perfContainer:SetPoint("TOPLEFT", 0, -44)
 perfContainer:SetPoint("BOTTOMRIGHT", 0, 0)
 perfContainer:Hide()
 
+-- The Boss Guide's box. Built empty and filled lazily by
+-- Features\Raid\RaidGuideUI.lua the first time the sub-tab is opened --
+-- that file loads after this one, so there is nothing to call yet, and
+-- a guide nobody opened is a guide nobody should have paid to build.
+guideContainer = CreateFrame("Frame", nil, raidFrame)
+guideContainer:SetPoint("TOPLEFT", 0, -44)
+guideContainer:SetPoint("BOTTOMRIGHT", 0, 0)
+guideContainer:Hide()
+
 -- Reuse overviewContainer for groups content (merged)
 local groupsContainer = overviewContainer
 
@@ -216,6 +233,55 @@ function ns.SetRaidTab(tabName)
     currentTab = tabName
     UpdateTabStyles()
     if tabName == "overview" then
+        ns:RefreshRaidOverview()
+    end
+end
+
+------------------------------------------------------------
+-- The shell's sub-tabs: Overview and Boss Guide.
+--
+-- Separate from SetRaidTab above, which drives the standalone window's
+-- own view and predates the shell. Two switchers on one frame sounds
+-- like a mistake until you notice they answer to different owners: the
+-- shell owns the strip above the page, and the standalone window owns
+-- the tab drawn inside it. Merging them would mean the standalone
+-- window grew a Boss Guide tab it has no room to draw.
+------------------------------------------------------------
+local pageTab = "overview"
+
+function ns:SetRaidPageTab(id)
+    pageTab = id or "overview"
+    if pageTab == "guide" then
+        overviewContainer:Hide()
+        guideContainer:Show()
+        -- Built on first open, not at load. Nine pages of frames for the
+        -- eight you did not look at is the reason the shell builds
+        -- lazily, and a guide with seven bosses of wrapped text is not
+        -- the place to make an exception.
+        if ns.RaidGuideUI then
+            ns.RaidGuideUI:BuildInto(guideContainer)
+            ns.RaidGuideUI:Refresh()
+        end
+    else
+        guideContainer:Hide()
+        overviewContainer:Show()
+        ns:RefreshRaidOverview()
+    end
+end
+
+--- What the shell calls to refresh the page, whichever view is up.
+---
+--- The page was registered with refresh = "RefreshRaidOverview", which
+--- redrew the roster even while the Guide was the visible view -- so
+--- opening the Guide and resizing the window redrew the wrong thing and
+--- left the Guide stale.
+function ns:RefreshRaidPage()
+    if pageTab == "guide" then
+        if ns.RaidGuideUI then
+            ns.RaidGuideUI:BuildInto(guideContainer)
+            ns.RaidGuideUI:Refresh()
+        end
+    else
         ns:RefreshRaidOverview()
     end
 end

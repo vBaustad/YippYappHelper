@@ -184,11 +184,19 @@ Adapt({
 })
 
 Adapt({
-    id = "raid", label = "Raid Tools", order = 80,
+    id = "raid", label = "Raid", order = 80,
     accent = { 0.0, 0.67, 1.0 },
     frameKey = "RaidFrame",
     appMode = "SetRaidAppMode",
-    refresh = "RefreshRaidOverview",
+    -- Dispatches on the active sub-tab rather than always redrawing the
+    -- roster. See ns:RefreshRaidPage in Features\Raid\RaidUI.lua.
+    refresh = "RefreshRaidPage",
+    subTabs = function()
+        return ns.GetRaidPageTabs and ns:GetRaidPageTabs() or nil
+    end,
+    OnSubTab = function(id)
+        if ns.SetRaidPageTab then ns:SetRaidPageTab(id) end
+    end,
 })
 
 Adapt({

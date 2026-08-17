@@ -101,8 +101,46 @@ function Region.GetFrameLevel(self) return self._lvl or 1 end
 function Region.SetFrameLevel(self, l) self._lvl = l; return self end
 function Region.GetStringHeight(self) return 12 end
 function Region.GetStringWidth(self) return 60 end
+-- Recorded, not discarded. There are no pixels here, but "these two
+-- things were painted the same colour" is a claim about the code's
+-- own numbers and is perfectly decidable -- and it is exactly the claim
+-- a state-encoded stripe makes.
+function Region.SetColorTexture(self, r, g, b, a)
+    self._rgba = { r, g, b, a }
+    return self
+end
+function Region.SetVertexColor(self, r, g, b, a)
+    self._rgba = { r, g, b, a }
+    return self
+end
+function Region.GetColorKey(self)
+    local c = self._rgba
+    if not c then return "none" end
+    return string.format("%.3f/%.3f/%.3f", c[1] or 0, c[2] or 0, c[3] or 0)
+end
+-- Recorded, so a check can ask which of two states a label was left in.
+-- Selection is carried by brightness now as well as by the underline,
+-- and an assertion that only looked at the underline would miss half of
+-- what changed.
+function Region.SetTextColor(self, r, g, b, a)
+    self._textRGBA = { r, g, b, a }
+    return self
+end
+function Region.GetTextColor(self)
+    local c = self._textRGBA
+    if not c then return nil end
+    return c[1], c[2], c[3], c[4]
+end
 function Region.GetText(self) return self._text or "" end
 function Region.SetText(self, t) self._text = t; return self end
+-- A crude proxy for font metrics: no real glyph widths here, but code
+-- that lays out against measured text has to get SOMETHING that grows
+-- with the string, or every such branch collapses to its zero case and
+-- reads as tested. Colour escapes do not occupy space.
+function Region.GetStringWidth(self)
+    local t = (self._text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return #t * 8
+end
 function Region.GetAtlas(self) return self._atlas end
 function Region.SetAtlas(self, a) self._atlas = a; return true end
 -- Real Show/Hide state, not a no-op.
@@ -146,6 +184,12 @@ function Region.GetParent(self) return self._parent end
 function Region.GetAttribute(self) return nil end
 function Region.GetNumPoints(self) return 0 end
 function Region.GetPoint(self) return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
+-- Real numbers, because the raid trainer converts the cursor into arena
+-- coordinates and does arithmetic on the result. The CamelCase no-op
+-- would hand it the frame itself, and "attempt to perform arithmetic on
+-- a table" is not the bug anyone is looking for.
+function Region.GetCenter(self) return 0, 0 end
+function Region.GetEffectiveScale(self) return 1 end
 
 function NewRegion(kind, parent)
     local r = setmetatable({ _type = kind or "Frame", _parent = parent }, Region)
@@ -180,6 +224,20 @@ WorldFrame = NewRegion("Frame")
 GameTooltip = NewRegion("GameTooltip")
 UISpecialFrames = {}
 
+-- Seeded, and seeded FIXED.
+--
+-- Lua 5.4 and later seed math.random randomly at startup, so anything
+-- here that simulates -- the raid trainer spawns its events at random --
+-- played a different round every run. The stack-meter check failed
+-- roughly one run in seven and passed the rest, which is worse than a
+-- check that always fails: an intermittent red makes every green
+-- ambiguous and trains you to re-run until it is quiet.
+--
+-- The number itself is arbitrary. What matters is that it never moves,
+-- so a failure here is a change in the addon and not a change in the
+-- weather.
+math.randomseed(20260817)
+
 -- ── Constants the pages read ────────────────────────────────
 STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
 NUM_BAG_SLOTS = 4
@@ -196,6 +254,11 @@ end })
 function UnitClass() return "Druid", "DRUID" end
 function UnitName() return "Tester" end
 function UnitLevel() return 80 end
+-- overall, equipped, pvp. Equipped is deliberately BELOW the fixture's
+-- vault rewards (282-302) so the "not an upgrade" branch is reachable
+-- from the other side too -- a fixture where everything is an upgrade
+-- cannot tell a working comparison from one that never fires.
+function GetAverageItemLevel() return 291, 289, 289 end
 function GetRealmName() return "Realm" end
 function GetSpecialization() return 1 end
 function GetSpecializationInfo() return 102, "Balance", "", 136096, "DAMAGER" end
@@ -205,11 +268,27 @@ function GetInventoryItemID() return nil end
 function GetInventoryItemLink() return nil end
 function GetDetailedItemLevelInfo() return 0 end
 function InCombatLockdown() return false end
+-- In a guild, so the Guild tab draws its "waiting for replies" empty
+-- state rather than the "you're not in a guild" one -- the branch with
+-- something in it. Nothing had called this: that tab was unreachable
+-- until the sub-tab switch below started exercising it.
+function IsInGuild() return true end
+-- The client names its own raid difficulties. Only the ones the vault
+-- can hand back; an unknown id must come back nil so the caller's
+-- fallback is reachable.
+function GetDifficultyInfo(id)
+    local names = { [14] = "Normal", [15] = "Heroic", [16] = "Mythic", [17] = "Looking For Raid" }
+    return names[id]
+end
 function IsShiftKeyDown() return false end
 function IsControlKeyDown() return false end
 function IsModifiedClick() return false end
 function GetTime() return 0 end
-function time() return 0 end
+-- A plausible epoch, not 0. Code that stamps an expiry and compares it
+-- against `now` has to guard against a client that cannot tell the time,
+-- and at 0 every such guard trips -- so the expiry path was unreachable
+-- and read as covered. Fixed here rather than by loosening the guard.
+function time() return 1786000000 end
 function date() return "2026-08-16" end
 function print() end
 function geterrorhandler() return function() end end
@@ -276,6 +355,12 @@ function UnitAffectingCombat() return false end
 function IsInGroup() return false end
 function IsInRaid() return false end
 function GetNumGroupMembers() return 0 end
+-- Solo, and a DPS. The raid guide picks the column it opens on from
+-- this, so it needs an answer rather than a no-op -- and "no assigned
+-- role" is the honest state for a player reading the guide outside a
+-- group, which is the case worth exercising.
+function UnitGroupRolesAssigned() return "NONE" end
+function GetCursorPosition() return 0, 0 end
 function UnitGUID() return "Player-1-00000000" end
 function UnitIsPlayer() return true end
 function GetPlayerInfoByGUID() return "DRUID", "DRUID", "Balance" end
@@ -317,9 +402,30 @@ NineSliceUtil = { ApplyLayoutByName = function() end }
 -- ── C_* namespaces ──────────────────────────────────────────
 C_Timer = { After = function() end, NewTimer = function() return NewRegion() end,
             NewTicker = function() return NewRegion() end }
-C_Item = { GetItemIconByID = function() return 134400 end,
+-- Answers only for something that looks like an item; a stub that hands
+-- back an icon for nil or "" would let "every slot drew a reward" pass
+-- on nine slots that have no reward.
+C_Item = { GetItemIconByID = function(item)
+               if item == nil or item == "" then return nil end
+               return 134400
+           end,
            RequestLoadItemDataByID = function() end,
            GetItemInfoInstant = function() return nil end,
+           -- Reads the item level back out of the fake vault link below,
+           -- so the reward text exercises its item-level branch instead
+           -- of quietly taking the fallback and looking tested anyway.
+           --
+           -- THREE return values, like the real one: effective level,
+           -- isPreview, base level. Returning just the first hid a live
+           -- crash -- `tonumber(GetDetailedItemLevelInfo(link))` spills
+           -- all three into tonumber, which takes the boolean as its
+           -- base and raises. A stub that returns fewer values than the
+           -- API it stands in for cannot see that class of bug at all.
+           GetDetailedItemLevelInfo = function(link)
+               local n = tonumber(tostring(link or ""):match("ilvl(%d+)"))
+               if not n then return nil end
+               return n, false, n
+           end,
            DoesItemExistByID = function() return true end }
 C_Container = { GetContainerNumSlots = function() return 0 end,
                 GetContainerItemID = function() return nil end,
@@ -333,9 +439,18 @@ C_Texture = { GetAtlasInfo = function(a)
     -- Only the atlases this client would actually ship. Answering yes to
     -- everything would hide a bad atlas name, which is the exact failure
     -- the corner tiles were generated to avoid.
+    -- The Great Vault set is verified: EllesmereUI's vault skin and
+    -- Vaultloom both address these by name against a live client, which
+    -- is a stronger source than picking a plausible-looking string.
     local known = { ["ui-journeys-renown-divider"] = true,
                     ["ui-journeys-renown-button"] = true,
-                    ["perks-list-mask"] = true }
+                    ["perks-list-mask"] = true,
+                    ["evergreen-weeklyrewards-category-raids"] = true,
+                    ["evergreen-weeklyrewards-category-dungeons"] = true,
+                    ["evergreen-weeklyrewards-category-world"] = true,
+                    ["evergreen-weeklyrewards-reward-locked"] = true,
+                    ["evergreen-weeklyrewards-reward-unlocked"] = true,
+                    ["activities-icon-checkmark"] = true }
     return known[a] and { width = 64, height = 16 } or nil
 end }
 C_Traits = { GetSubTreeInfo = function(_, id)
@@ -345,19 +460,204 @@ end, GetConfigInfo = function() return { ID = 1 } end }
 C_ClassTalents = { GetActiveConfigID = function() return 1 end,
                    GetHeroTalentSpecsForClassSpec = function() return { 1, 2 } end,
                    GetActiveHeroTalentSpec = function() return 1 end }
-C_ChallengeMode = { GetMapUIInfo = function() return "Dungeon", 1, 30, 134400 end,
-                    GetMapTable = function() return {} end,
-                    GetOwnedKeystoneChallengeMapID = function() return nil end }
-C_MythicPlus = { GetOwnedKeystoneLevel = function() return nil end,
-                 GetRunHistory = function() return {} end,
+-- The season's eight dungeons, under the names Features/MythicPlus
+-- actually sorts and resolves teleports by.
+--
+-- GetMapTable returned an empty list, and RefreshMythicPlus opens with
+-- `if #maps == 0 then return end` -- so every "ok ns:RefreshMythicPlus"
+-- above was reporting on four lines and an early return. The icon row,
+-- the group table and both bottom columns had never executed once. A
+-- single "Dungeon" for every id would have brought back almost as
+-- little: the sort order, the teleport-by-name lookup and each tile's
+-- identity are only observable when the ids differ.
+local MPLUS_ORDER = { 2810, 2811, 2812, 2813, 2814, 2815, 2816, 2817 }
+local MPLUS_MAPS = {
+    [2810] = "Altar of Fangs",       [2811] = "Murder Row",
+    [2812] = "Den of Nalorakk",      [2813] = "The Blinding Vale",
+    [2814] = "Voidscar Arena",       [2815] = "Kings' Rest",
+    [2816] = "Ruby Life Pools",      [2817] = "Temple of Sethraliss",
+}
+-- Three, and never Tyrannical alongside Fortified: a fake week that
+-- cannot happen is a fake week whose layout proves nothing.
+local MPLUS_AFFIXES = {
+    [9]   = { "Tyrannical",
+              "Bosses have 30% more health and inflict up to 15% increased damage." },
+    [152] = { "Challenger's Peril",
+              "Each player death subtracts 15 seconds from the dungeon timer." },
+    [148] = { "Xal'atath's Guile",
+              "Xal'atath assaults the party with a barrage of shadow energy." },
+}
+
+C_ChallengeMode = { GetMapUIInfo = function(id)
+                        -- Unknown ids keep the old generic answer; other
+                        -- pages pass ids that are not this season's.
+                        return (MPLUS_MAPS[id] or "Dungeon"), id or 1, 1800, 134400
+                    end,
+                    GetMapTable = function() return MPLUS_ORDER end,
+                    GetAffixInfo = function(id)
+                        local a = MPLUS_AFFIXES[id]
+                        if not a then return nil end
+                        return a[1], a[2], 134400
+                    end,
+                    GetOverallDungeonScore = function() return 2180 end,
+                    -- 0 and 1 only, and not for lack of imagination.
+                    -- The pages write colours as string.format("%02x",
+                    -- r * 255), which Lua 5.1 -- the client's runtime --
+                    -- truncates happily. lupa gives 5.5, which rejects a
+                    -- float with no exact integer representation, and
+                    -- c * 255 is only exact for c = 0 or c = 1. A
+                    -- prettier purple aborts the render mid-page and the
+                    -- geometry below then reads half a layout. Colour is
+                    -- not decidable here regardless: no pixels.
+                    GetDungeonScoreRarityColor = function()
+                        return { r = 1, g = 0, b = 1 }
+                    end }
+-- GetOwnedKeystoneChallengeMapID sat on C_ChallengeMode here for as long
+-- as this file has existed. The addon reads it off C_MythicPlus, which
+-- was nil -- and nothing noticed, because the only caller sits past the
+-- early return that the hidden frame guaranteed.
+C_MythicPlus = { -- A key in hand, so Group Keystones renders a row and
+                 -- not only its empty state. The padding bug there was
+                 -- invisible for exactly that reason: the empty state is
+                 -- all that branch had ever drawn.
+                 GetOwnedKeystoneChallengeMapID = function() return 2815 end,
+                 GetOwnedKeystoneLevel = function() return 12 end,
+                 -- Ten, against a card that shows eight: the overflow
+                 -- line is a branch too, and a silent truncation is
+                 -- exactly the kind of thing that should not pass.
+                 GetRunHistory = function()
+                     local out = {}
+                     for i = 1, 10 do
+                         out[i] = { mapChallengeModeID = MPLUS_ORDER[((i - 1) % 8) + 1],
+                                    level = 15 - i,
+                                    completed = (i % 4 ~= 0),
+                                    runWeek = 1, thisWeek = true }
+                     end
+                     return out
+                 end,
                  GetSeasonBestAffixScoreInfoForMap = function() return nil end,
                  RequestMapInfo = function() end,
-                 GetCurrentAffixes = function() return {} end }
-C_WeeklyRewards = { GetActivities = function() return {} end,
+                 GetCurrentAffixes = function()
+                     return { { id = 9, seasonID = 1 }, { id = 152, seasonID = 1 },
+                              { id = 148, seasonID = 1 } }
+                 end }
+-- A real half-finished vault week, one activity type at a time.
+--
+-- This returned {} for everything, which meant the dashboard's nine
+-- tiles all rendered as "no data" and the Mythic+ page's vault chips
+-- returned before drawing anything. Both looked tested and neither was.
+--
+-- Mixed on purpose, and it took a failing check to get the mix right:
+-- with Raid sitting at 1 run the fixture produced only "unlocked" and
+-- "in progress", and a check that never sees a locked slot cannot tell
+-- a state encoding from one that paints everything alike. Raid is now
+-- untouched for the week, which is both the missing state and what a
+-- character who has not raided actually looks like.
+--
+-- Progress is uniform within a category on purpose too: you run N
+-- dungeons and each slot measures that same N against its own
+-- threshold. Slots of one category never disagree about it.
+local VAULT_ACTIVITIES = {
+    [1] = {   -- Activities (Mythic+)
+        -- A keystone level, so the Mythic+ qualifier renders as "+10".
+        { id = 11, index = 1, type = 1, activityTierID = 1, threshold = 1, progress = 1, level = 10 },
+        { id = 12, index = 2, type = 1, threshold = 4, progress = 1, level = 0 },
+        { id = 13, index = 3, type = 1, threshold = 8, progress = 1, level = 0 },
+    },
+    [2] = {   -- World (delves)
+        { id = 21, index = 1, type = 2, threshold = 2, progress = 2, level = 5 },
+        { id = 22, index = 2, type = 2, threshold = 4, progress = 4, level = 4 },
+        { id = 23, index = 3, type = 2, threshold = 8, progress = 7, level = 0 },
+    },
+    [3] = {   -- Raid: nothing killed this week
+        { id = 31, index = 1, type = 3, threshold = 2, progress = 0, level = 0 },
+        { id = 32, index = 2, type = 3, threshold = 4, progress = 0, level = 0 },
+        { id = 33, index = 3, type = 3, threshold = 6, progress = 0, level = 0 },
+    },
+}
+-- Item level per unlocked activity, matching the fixture above: the one
+-- Mythic+ slot and the two World slots that are actually earned.
+local VAULT_REWARD_ILVL = { [11] = 285, [21] = 292, [22] = 289 }
+
+C_WeeklyRewards = { GetActivities = function(t)
+                        return VAULT_ACTIVITIES[t or 1] or {}
+                    end,
+                    -- Only an unlocked activity offers an example
+                    -- reward. A locked one returns nothing, and code
+                    -- that assumes otherwise has to cope with that.
+                    -- hasData, nextTierID, nextLevel, nextItemLevel.
+                    -- Answers only for Mythic+; Plumber records that the
+                    -- real one returns false for Delves, and a stub that
+                    -- answered for everything would hide that branch.
+                    GetNextActivitiesIncrease = function(tierID, level)
+                        if tierID ~= 1 or not level or level <= 0 then return false end
+                        return true, tierID, level + 2, 302
+                    end,
+                    GetExampleRewardItemHyperlinks = function(id)
+                        local ilvl = VAULT_REWARD_ILVL[id]
+                        return ilvl
+                            and ("|Hitem:1::::::::80:::ilvl" .. ilvl .. "|h[Vault Reward]|h")
+                            or ""
+                    end,
                     HasAvailableRewards = function() return false end }
-C_CurrencyInfo = { GetCurrencyInfo = function()
+local CURRENCY_LIST = {
+    { isHeader = true, name = "Midnight" },
+    { name = "Field Accolade", currencyID = 3510, quantity = 483 },
+    -- One weekly-capped currency, part-earned, so the checklist's
+    -- automatic branch resolves to a real "not done yet" rather than
+    -- falling through to a manual tick and looking the same either way.
+    { name = "Restored Coffer Key", currencyID = 3512, quantity = 0,
+      weekly = { earned = 2, cap = 6 } },
+    { name = "Voidlight Marl", currencyID = 3511, quantity = 41033 },
+    -- The five crests, capped CUMULATIVELY: no weekly cap at all, a
+    -- season total in maxQuantity, and totalEarned measured against it.
+    -- That is how the live client reports them -- dumping the weekly
+    -- caps returns two currencies and no crest is either -- and a
+    -- fixture without it cannot reach the branch that reads them, so
+    -- "have you capped" answered no on a character that had.
+    { name = "Adventurer Mistcrest", currencyID = 3442, quantity = 90,
+      season = { earned = 300, cap = 300 } },
+    { name = "Veteran Mistcrest", currencyID = 3443, quantity = 120,
+      season = { earned = 300, cap = 300 } },
+    { name = "Champion Mistcrest", currencyID = 3444, quantity = 100,
+      season = { earned = 180, cap = 300 } },
+}
+C_CurrencyInfo = { GetCurrencyInfo = function(id)
+                       -- Weekly fields, which the LIST info does not
+                       -- carry: quantityEarnedThisWeek against
+                       -- maxWeeklyQuantity is how the client tracks a
+                       -- weekly allowance, and it is worth more than any
+                       -- cap copied out of a guide.
+                       for _, e in ipairs(CURRENCY_LIST) do
+                           if e.currencyID == id then
+                               return { name = e.name, quantity = e.quantity or 0,
+                                        iconFileID = 134400,
+                                        maxWeeklyQuantity =
+                                            e.weekly and e.weekly.cap or 0,
+                                        quantityEarnedThisWeek =
+                                            e.weekly and e.weekly.earned or 0,
+                                        maxQuantity =
+                                            e.season and e.season.cap or 0,
+                                        totalEarned =
+                                            e.season and e.season.earned or 0,
+                                        useTotalEarnedForMaxQty =
+                                            e.season ~= nil }
+                           end
+                       end
                        return { name = "C", quantity = 0, iconFileID = 134400 } end,
-                   GetCurrencyListSize = function() return 0 end }
+                   -- A short list with one entry the planner looks up by
+                   -- name. At length zero every name lookup answers nil,
+                   -- so the lookup and everything built on it would read
+                   -- as covered while never having matched anything.
+                   GetCurrencyListSize = function() return #CURRENCY_LIST end,
+                   GetCurrencyListInfo = function(i)
+                       local e = CURRENCY_LIST[i]
+                       if not e then return nil end
+                       return { name = e.name, currencyID = e.currencyID,
+                                quantity = e.quantity or 0,
+                                isHeader = e.isHeader or false,
+                                isTypeUnused = false, iconFileID = 134400 }
+                   end }
 C_EncounterJournal = { GetInstanceInfo = function() return "Instance" end }
 C_AddOns = { GetAddOnMetadata = function() return "3.0.6" end,
              IsAddOnLoaded = function() return true end,
@@ -365,13 +665,36 @@ C_AddOns = { GetAddOnMetadata = function() return "3.0.6" end,
 C_UnitAuras = { GetAuraDataByIndex = function() return nil end }
 C_Map = { GetBestMapForUnit = function() return 1 end }
 C_TooltipInfo = { GetItemByID = function() return nil end }
-C_PlayerInfo = { GetName = function() return "Tester" end }
+C_PlayerInfo = { GetName = function() return "Tester" end,
+                 -- Scores on every map, so the icon row, the group
+                 -- cells and the Rating Goals focus list each have
+                 -- something to lay out instead of eight dashes.
+                 GetPlayerMythicPlusRatingSummary = function()
+                     local runs = {}
+                     for i, id in ipairs(MPLUS_ORDER) do
+                         runs[i] = { challengeModeID = id,
+                                     mapScore = 180 + i * 20,
+                                     bestRunLevel = 8 + i,
+                                     finishedSuccess = true }
+                     end
+                     return { currentSeasonScore = 2180, runs = runs }
+                 end }
 C_Widget = { IsFrameWidget = function() return true end }
 C_ScriptedAnimations = {}
 C_Social = {}
 C_LFGList = {}
-Enum = setmetatable({}, { __index = function() return setmetatable({}, {
-    __index = function() return 1 end }) end })
+-- The catch-all answers 1 to every enum member, which is harmless until
+-- code uses several members of one enum to tell things APART. The vault
+-- reads three activity types out of this one; all three came back as 1,
+-- so Mythic+, Raid and World were literally the same query and the
+-- dashboard could not have shown three different rows even with data.
+local ENUM_EXACT = {
+    WeeklyRewardChestThresholdType = { Activities = 1, World = 2, Raid = 3 },
+}
+Enum = setmetatable({}, { __index = function(_, k)
+    if ENUM_EXACT[k] then return ENUM_EXACT[k] end
+    return setmetatable({}, { __index = function() return 1 end })
+end })
 Settings = { RegisterAddOnCategory = function() end,
              RegisterCanvasLayoutCategory = function() return { ID = 1 } end,
              OpenToCategory = function() end }
@@ -494,6 +817,22 @@ def main():
         end)()
     """)
 
+    # Mythic+ and Teleports both open their refresh with
+    #   if not frame:IsShown() then return end
+    # and both frames are created hidden. Every "ok" those two have ever
+    # printed was a pcall over that one line -- the check could not fail,
+    # which is worse than not having it. Show them first, so the refresh
+    # below is a render and the geometry read afterwards has something
+    # real to read.
+    L.eval("""
+        function(ns)
+            for _, key in ipairs({ "MythicPlusFrame", "TeleportFrame" }) do
+                local f = ns[key]
+                if f and f.Show then f:Show() end
+            end
+        end
+    """)(ns)
+
     # Every page whose layout this change touched, plus the ones that
     # share the widgets it changed.
     checks = [
@@ -509,8 +848,22 @@ def main():
         ("RefreshTeleports",          None, None, None),
         ("SetMythicPlusAppMode",      True, 760, 520),
         ("RefreshMythicPlus",         None, None, None),
+        # Both sub-tabs, and Home last on purpose: the tab switch redraws
+        # the page, and the geometry phase below reads whatever the final
+        # render left behind. Guild draws no section cards, so ending
+        # there would leave that check with nothing to measure.
+        ("SetMythicPlusTab",          "guild", None, None),
+        ("SetMythicPlusTab",          "home", None, None),
         ("SetLootBrowserAppMode",     True, 760, 520),
         ("SetRaidAppMode",            True, 760, 520),
+        # The Boss Guide builds lazily on its first sub-tab open, so this
+        # is the only call that constructs it. Guide last, then back to
+        # Overview: the guide's card layout is what the geometry phase
+        # below should be reading, but leaving the page on a tab the
+        # player never chose would misrepresent the default state to
+        # every check after it.
+        ("SetRaidPageTab",            "guide", None, None),
+        ("SetRaidPageTab",            "overview", None, None),
     ]
     for path, a, b, c in checks:
         err = call(ns, path, a, b, c)
@@ -635,7 +988,7 @@ def main():
             return []
         return [tuple(int(v) for v in r.split(",")) for r in blob.split(";")]
 
-    def report(label, boxes, region_w):
+    def report(label, boxes, region_w, region_h=None):
         if not boxes:
             print("  --   %s (nothing drawn)" % label)
             return
@@ -646,6 +999,13 @@ def main():
             if region_w and x1 + w1 > region_w + 1:
                 bad.append("box %d runs %dpx past the %dpx region"
                            % (i + 1, x1 + w1 - region_w, region_w))
+            # y counts downward from 0 as a negative number, so a box's
+            # bottom is -(y - h). None of these pages scroll: past the
+            # bottom edge is simply not drawn, and filling a page is
+            # precisely the change most likely to run off it.
+            if region_h and -(y1 - h1) > region_h + 1:
+                bad.append("box %d runs %dpx below the %dpx region"
+                           % (i + 1, -(y1 - h1) - region_h, region_h))
             for j, (x2, y2, w2, h2, g2) in enumerate(boxes[i + 1:], i + 1):
                 if g1 != g2:
                     continue    # different containers; only one is ever shown
@@ -714,6 +1074,187 @@ def main():
     bis_n = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cardIdx) or 0 end")(ns)
     bis_pool = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cards) or {} end")(ns)
     report("BiS stat priority cards", parse(pool_rects(bis_pool, bis_n)), None)
+
+    # The Mythic+ Home cards. Two columns that each flow their own stack,
+    # so the failure worth catching is a column cursor that does not
+    # clear the card above it.
+    #
+    # Control: what that page produces if EndCard hands back the content
+    # cursor instead of the card's bottom edge. A card's body runs
+    # SEC_PAD past its last row, so the next card in the column starts
+    # eight pixels inside the one above it -- a clean overlap, and small
+    # enough that a detector could plausibly miss it.
+    sec_title, sec_pad = 24, 8
+    bad_boxes, cy = [], 0
+    for body in (60, 90):
+        bad_boxes.append((0, cy, 300, sec_title + body + sec_pad * 2))
+        cy -= sec_title + body + sec_pad        # the card's own bottom pad, dropped
+    #
+    # Run against a deliberately small region as well, so the same
+    # control also proves the width and bottom-edge detectors fire. The
+    # bottom one is new, and a page being filled up is exactly when an
+    # overflow check has to work.
+    before = len(failures)
+    report("control (column cursor short by the card's bottom pad)",
+           bad_boxes, 200, 100)
+    caught = [b for _, b in failures[before:]]
+    del failures[before:]
+    if (any("overlap" in b for b in caught) and any("past" in b for b in caught)
+            and any("below" in b for b in caught)):
+        print("       ^ expected: overlap, past-width and below-bottom all seen")
+    else:
+        print("  FAIL control missed one of overlap/width/bottom -- check is vacuous")
+        failures.append(("mplus geometry control", "detector missed a known failure"))
+
+    mp_n = L.eval(
+        "function(ns) return (ns.MythicPlusFrame and ns.MythicPlusFrame._sectionCount) or 0 end")(ns)
+    mp_pool = L.eval(
+        "function(ns) return (ns.MythicPlusFrame and ns.MythicPlusFrame._sections) or {} end")(ns)
+    # Width from the frame; height from the budget the page itself
+    # spent, so the check measures the layout against its own stated
+    # room rather than against a second guess at what that room was.
+    mp_w = L.eval("""
+        function(ns)
+            local f = ns.MythicPlusFrame
+            local pad = (ns.Shell and ns.Shell.PAD) or 12
+            return f and math.floor((f:GetWidth() or 0) - pad * 2) or 0
+        end
+    """)(ns)
+    mp_h = L.eval(
+        "function(ns) return math.floor((ns.MythicPlusFrame or {})._contentH or 0) end")(ns)
+    report("Mythic+ Home cards", parse(pool_rects(mp_pool, mp_n)),
+           mp_w or None, mp_h or None)
+
+    # The Boss Guide. Two cards whose heights are solved from measured
+    # wrapped text -- the pinned rules, and the one phase you are reading
+    # -- laid into a scroll frame, with a pager strip between them.
+    #
+    # Every boss, both difficulties, and EVERY PAGE. The page count comes
+    # from the data, so a boss with eight phases has eight arrangements
+    # and only one of them is the default; a phase card sized around the
+    # wrong cursor would be invisible on page one.
+    #
+    # The pager itself is checked by arithmetic rather than by eye: the
+    # last page must be reachable, one past it must clamp back to it, and
+    # the Heroic page must exist exactly when the boss has heroic lines
+    # or is marked as unrecorded.
+    print("\nboss guide pages (every boss, both difficulties, every page):")
+    guide_pool = L.eval("function(ns) return (ns.RaidGuideUI and ns.RaidGuideUI._cards) or {} end")(ns)
+    pick = L.eval("""
+        function(ns, bossId, heroic, page)
+            local UI = ns.RaidGuideUI
+            if not (UI and UI.SetPage) then return "absent" end
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.raidGuide = YippYappHelperDB.raidGuide or {}
+            YippYappHelperDB.raidGuide.boss = bossId
+            YippYappHelperDB.raidGuide.heroic = heroic
+            -- Refresh first: the page resets to 1 when the boss changes,
+            -- and SetPage on the boss we are LEAVING would be measured
+            -- against the wrong data.
+            local ok, err = pcall(UI.Refresh, UI)
+            if not ok then return tostring(err) end
+            ok, err = pcall(UI.SetPage, UI, page)
+            if not ok then return tostring(err) end
+            return (UI._cardIdx or 0) .. "," .. (UI:GetPageCount() or 0)
+        end
+    """)
+    plan = L.eval("""
+        function(ns)
+            local out = {}
+            for _, b in ipairs(ns.RaidGuide and ns.RaidGuide:Ordered() or {}) do
+                local phases = b.phases and #b.phases or 0
+                local heroicLines = b.heroic and #b.heroic or 0
+                out[#out + 1] = table.concat({
+                    b.id, phases, heroicLines,
+                    b.heroicUnknown and 1 or 0,
+                }, ":")
+            end
+            return table.concat(out, ",")
+        end
+    """)(ns)
+    for spec in (plan or "").split(","):
+        if not spec:
+            continue
+        boss_id, phases, heroic_lines, unknown = spec.split(":")
+        phases, heroic_lines, unknown = int(phases), int(heroic_lines), int(unknown)
+        for heroic in (False, True):
+            want = phases + (1 if heroic and (heroic_lines or unknown) else 0)
+            label = "%s/%s" % (boss_id, "heroic" if heroic else "normal")
+            # One past the end on purpose: the clamp is the thing that
+            # stops Next walking off a shorter boss's page list.
+            for page in range(1, want + 2):
+                got = pick(ns, boss_id, heroic, page)
+                if not isinstance(got, str) or "," not in got:
+                    print("  FAIL %s page %d: %s" % (label, page, got))
+                    failures.append((label, str(got)))
+                    continue
+                n, count = (int(v) for v in got.split(","))
+                if count != want:
+                    msg = "%d pages, expected %d" % (count, want)
+                    print("  FAIL %s: %s" % (label, msg))
+                    failures.append((label, msg))
+                    break
+                # No region width: the cards live in a scroll frame whose
+                # width the stub reports as the page's, and overlap is
+                # the claim worth making here.
+                boxes = parse(pool_rects(guide_pool, n))
+                if len(boxes) < 2 and want > 0:
+                    msg = "page %d drew %d cards" % (page, len(boxes))
+                    print("  FAIL %s: %s" % (label, msg))
+                    failures.append((label, msg))
+                    break
+                bad_before = len(failures)
+                report("guide %s page %d/%d" % (label, min(page, want), want),
+                       boxes, None)
+                if len(failures) > bad_before:
+                    break
+
+    # The rail's Bloodlust block, and the button that follows it.
+    #
+    # Everything else in the rail sits at an offset decided at build
+    # time. This one block wraps to a different height per boss -- "on
+    # pull" against "the intermission, while Zul'jin takes double damage"
+    # -- so the button under it is re-anchored on every render against a
+    # measured string. That is the arrangement that silently drifts, so
+    # the claim is checked: the button must always start below the text.
+    print("\nrail reflow (Bloodlust block -> practise button):")
+    rail = L.eval("""
+        function(ns, bossId)
+            local UI = ns.RaidGuideUI
+            if not (UI and UI.Refresh) then return "absent" end
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.raidGuide = YippYappHelperDB.raidGuide or {}
+            YippYappHelperDB.raidGuide.boss = bossId
+            local ok, err = pcall(UI.Refresh, UI)
+            if not ok then return tostring(err) end
+            local boss = ns.RaidGuide:Get(bossId)
+            local h = (boss and boss.lust) and (UI._lustText:GetStringHeight() or 12) or 0
+            -- y counts downward as a negative number, so "below" is less.
+            return string.format("%d,%d,%d", UI._lustTop or 0, h, UI._railY or 0)
+        end
+    """)
+    seen_offsets = set()
+    for spec in (plan or "").split(","):
+        if not spec:
+            continue
+        boss_id = spec.split(":")[0]
+        got = rail(ns, boss_id)
+        if not isinstance(got, str) or "," not in got:
+            print("  FAIL %s: %s" % (boss_id, got))
+            failures.append(("rail reflow", str(got)))
+            continue
+        top, text_h, button_y = (int(v) for v in got.split(","))
+        floor = top - max(text_h, 20)
+        if button_y > floor:
+            msg = ("%s: button at %d, above the text's bottom at %d"
+                   % (boss_id, button_y, floor))
+            print("  FAIL %s" % msg)
+            failures.append(("rail reflow", msg))
+        else:
+            seen_offsets.add(button_y)
+    if seen_offsets:
+        print("  ok   %d bosses, button always below the text (%d distinct offsets)"
+              % (len(plan.split(",")), len(seen_offsets)))
 
     # ── Phase 5: behaviour, not appearance ──────────────────────
     #
@@ -858,6 +1399,2055 @@ def main():
     else:
         print("  FAIL card layering: %s" % layer)
         failures.append(("card layering", str(layer)))
+
+    # A cast event resolves a spell ID to a dungeon NAME, and the tile
+    # animation looks that name up in a table the render keyed off
+    # C_ChallengeMode's names. Two independently keyed tables meeting on
+    # a string: a mismatch does not error anywhere, it just quietly never
+    # animates. Walk every season map through the round trip.
+    #
+    # The negative control is built in -- a bogus spell ID has to come
+    # back nil. Without it this passes just as happily against a lookup
+    # that returns something for everything.
+    tele = L.eval("""
+        function(ns)
+            if ns:GetDungeonForTeleportSpell(2147483) then
+                return "control: a bogus spell ID resolved to a dungeon"
+            end
+            local reg = (ns.MythicPlusFrame or {})._tilesByDungeon or {}
+            local n, missing = 0, {}
+            for _, map in ipairs(ns:GetSeasonMaps()) do
+                local spellID = ns:GetDungeonTeleportSpell(map.mapID)
+                local name = spellID and ns:GetDungeonForTeleportSpell(spellID)
+                if not name then
+                    missing[#missing + 1] = map.name .. " (no teleport spell)"
+                elseif not reg[name] then
+                    missing[#missing + 1] = map.name .. " -> '" .. name .. "' has no tile"
+                else
+                    n = n + 1
+                end
+            end
+            if #missing > 0 then return table.concat(missing, "; ") end
+            return "ok:" .. n
+        end
+    """)(ns)
+    if tele and str(tele).startswith("ok:"):
+        print("  ok   teleport cast -> tile: %s dungeons round-trip spell->name->tile"
+              % str(tele)[3:])
+    else:
+        print("  FAIL teleport cast -> tile: %s" % tele)
+        failures.append(("teleport cast -> tile", str(tele)))
+
+    # Fire an actual cast at the page. Registering for an event and
+    # handling it are two different claims, and nothing offline had ever
+    # made the second one -- the toast and the tile animation were whole
+    # features that had never executed a line.
+    #
+    # Control first: a spell that is not a teleport must leave the page
+    # untouched, or "the toast appeared" proves only that it appears for
+    # everything.
+    cast = L.eval("""
+        function(ns)
+            local f = ns.MythicPlusFrame
+            local w = f._castWatch
+            if not w then return "no _castWatch published" end
+            local h = w._scripts and w._scripts.OnEvent
+            if not h then return "no OnEvent handler registered" end
+
+            local KINGS_REST = 1289778
+            local tile = f._tilesByDungeon["Kings' Rest"]
+            if not tile then return "no tile registered for Kings' Rest" end
+
+            -- Control: Fireball is not a teleport.
+            h(w, "UNIT_SPELLCAST_START", "player", "cast-0", 133)
+            if f._castToast and f._castToast:IsShown() then
+                return "control: a non-teleport spell raised the toast"
+            end
+            if tile._castSweep and tile._castSweep:IsShown() then
+                return "control: a non-teleport spell animated a tile"
+            end
+
+            h(w, "UNIT_SPELLCAST_START", "player", "cast-1", KINGS_REST)
+            if not (f._castToast and f._castToast:IsShown()) then
+                return "START did not raise the toast"
+            end
+            if not (tile._castSweep and tile._castSweep:IsShown()) then
+                return "START did not animate the Kings' Rest tile"
+            end
+
+            h(w, "UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", KINGS_REST)
+            if tile._castSweep:IsShown() then
+                return "SUCCEEDED left the cast sweep running"
+            end
+            if not (tile._castFlash and tile._castFlash:IsShown()) then
+                return "SUCCEEDED did not flash the tile"
+            end
+
+            -- The page closed, which is the normal case: a teleport is
+            -- usually cast from the Teleports page or a bar. The toast
+            -- has to survive that -- it did not, and nothing offline
+            -- noticed because every check ran with the page open.
+            f._castToast:Hide()
+            f:Hide()
+            h(w, "UNIT_SPELLCAST_START", "player", "cast-2", KINGS_REST)
+            local survived = f._castToast:IsShown()
+            f:Show()
+            if not survived then
+                return "toast did not appear while the page was hidden"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if cast == "ok":
+        print("  ok   teleport cast: START raises toast + tile sweep, "
+              "SUCCEEDED flashes and clears")
+    else:
+        print("  FAIL teleport cast: %s" % cast)
+        failures.append(("teleport cast", str(cast)))
+
+    # The character rail: section rules, and the crest track colours.
+    #
+    # Nothing built this offline before, so both were shipped unexecuted.
+    rail = L.eval("""
+        function(ns)
+            local W, Shell = ns.Widgets, ns.Shell
+            if not (Shell and Shell.BuildCharacter) then return "no BuildCharacter" end
+
+            -- Controls first: the parser has to reject what is not a
+            -- colour, or "every crest parsed" says nothing.
+            if W:HexToRGB(nil) or W:HexToRGB("zzzzzz") or W:HexToRGB("ff00") then
+                return "control: HexToRGB accepted a non-colour"
+            end
+            local r, g, b = W:HexToRGB("ff1eff00")
+            if math.abs(r - 30/255) > 0.001 or g ~= 1 or b ~= 0 then
+                return "control: HexToRGB('ff1eff00') gave " .. r .. "," .. g .. "," .. b
+            end
+
+            -- Every crest must yield a colour, and a distinct one. A
+            -- single unparseable entry silently falls back to rarity,
+            -- which is the look this replaced.
+            local seen = {}
+            for i, def in ipairs(ns.CRESTS or {}) do
+                local cr, cg, cb = W:HexToRGB(def.color)
+                if not cr then
+                    return "crest " .. i .. " (" .. tostring(def.track)
+                        .. ") has no parseable colour: " .. tostring(def.color)
+                end
+                local key = string.format("%.3f/%.3f/%.3f", cr, cg, cb)
+                if seen[key] then
+                    return "crests " .. seen[key] .. " and " .. i .. " share a colour"
+                end
+                seen[key] = i
+            end
+
+            local col = CreateFrame("Frame")
+            col:SetSize(300, 700)
+            local ok, err = pcall(Shell.BuildCharacter, Shell, col)
+            if not ok then return "rail build failed: " .. tostring(err) end
+            if #(Shell._crestTiles or {}) ~= #(ns.CRESTS or {}) then
+                return "rail drew " .. #(Shell._crestTiles or {}) .. " crest tiles"
+            end
+
+            -- The rule sits under the heading and spans its full width,
+            -- so it starts at x = 0 and below the text's line box -- and
+            -- crucially it is the same for every heading, whatever the
+            -- word above it happens to be.
+            local xs, ys = {}, {}
+            for _, key in ipairs({ "_railCrests", "_railWallet" }) do
+                local h = Shell[key]
+                local p = h and h.rule and h.rule._pts and h.rule._pts[1]
+                if not p then return key .. " has no anchored rule" end
+                if p.x ~= 0 then
+                    return key .. " rule starts at x=" .. p.x .. ", not flush left"
+                end
+                if not (p.y < 0) then
+                    return key .. " rule sits at y=" .. p.y .. ", not below the text"
+                end
+                xs[#xs + 1] = p.x
+                ys[#ys + 1] = p.y
+            end
+            if xs[1] ~= xs[2] or ys[1] ~= ys[2] then
+                return "section rules do not agree between headings"
+            end
+
+            -- The heading length must no longer move the rule at all --
+            -- that dependency was the whole defect.
+            local h = Shell._railWallet
+            local before = h.rule._pts[1].x
+            h:SetText("A Heading Far Longer Than Any Of The Others")
+            local after = h.rule._pts[1].x
+            h:SetText("Currencies")
+            if before ~= after then
+                return "heading length still moves the rule: " .. before .. " -> " .. after
+            end
+            return "ok"
+        end
+    """)(ns)
+    if rail == "ok":
+        print("  ok   rail: 5 distinct crest colours, rules full-width under "
+              "each heading and independent of it")
+    else:
+        print("  FAIL rail: %s" % rail)
+        failures.append(("rail", str(rail)))
+
+    # The dashboard's Great Vault grid. Nothing built this offline
+    # either, so the stripe encoding had never run.
+    #
+    # The invariant is the one the old code broke on screen: a row that
+    # says "2 of 3" must show exactly two tiles reading as unlocked. The
+    # category-coloured stripe made three of them look done because
+    # World's category colour happened to be the same green.
+    vault = L.eval("""
+        function(ns)
+            local Shell = ns.Shell
+            local page = Shell and Shell.GetPage and Shell:GetPage("home")
+            if not page then return "no dashboard page registered" end
+
+            local host = CreateFrame("Frame")
+            host:SetSize(700, 620)
+            local ok, err = pcall(page.Build, host)
+            if not ok then return "dashboard build failed: " .. tostring(err) end
+            if page.Refresh then
+                local ok2, err2 = pcall(page.Refresh, { content = host,
+                    width = 700, height = 620 })
+                if not ok2 then return "dashboard refresh failed: " .. tostring(err2) end
+            end
+
+            local ui = ns.ShellHomeUI
+            if not (ui and ui.rows) then return "no vault rows built" end
+
+            local VALID = { none = true, locked = true, progress = true, unlocked = true }
+            local rows, unlocked = 0, {}
+            for key, row in pairs(ui.rows) do
+                rows = rows + 1
+                unlocked[key] = 0
+                for s, tile in ipairs(row.slots or {}) do
+                    local st = tile._slotState
+                    if not VALID[st] then
+                        return key .. " slot " .. s .. " has state "
+                            .. tostring(st) .. ", which is not one of the four"
+                    end
+                    if st == "unlocked" then unlocked[key] = unlocked[key] + 1 end
+                end
+            end
+            if rows ~= 3 then return "built " .. rows .. " vault rows" end
+
+            -- The tally the row prints, against the tiles it drew.
+            for key, row in pairs(ui.rows) do
+                local said = tostring(row.tally:GetText() or ""):match("^(%d+)")
+                if said and tonumber(said) ~= unlocked[key] then
+                    return key .. " says '" .. row.tally:GetText()
+                        .. "' but " .. unlocked[key] .. " tiles read unlocked"
+                end
+            end
+
+            -- The actual fix. Two slots in the same state must be the
+            -- same colour whichever row they sit in, and two slots in
+            -- different states must not be. The old stripe failed the
+            -- first half -- an unlocked Mythic+ slot was cyan and an
+            -- unlocked World slot green -- and half-failed the second,
+            -- because World's locked slots were that same green.
+            local byState, states = {}, 0
+            for key, row in pairs(ui.rows) do
+                for s, tile in ipairs(row.slots or {}) do
+                    local st, colour = tile._slotState, tile.fill:GetColorKey()
+                    if byState[st] and byState[st] ~= colour then
+                        return "two '" .. st .. "' slots differ in colour ("
+                            .. byState[st] .. " vs " .. colour .. ")"
+                    end
+                    if not byState[st] then
+                        byState[st] = colour
+                        states = states + 1
+                    end
+                end
+            end
+            local seenColour = {}
+            for st, colour in pairs(byState) do
+                if seenColour[colour] then
+                    return "states '" .. st .. "' and '" .. seenColour[colour]
+                        .. "' share colour " .. colour
+                end
+                seenColour[colour] = st
+            end
+            if states < 3 then
+                return "only " .. states .. " distinct states drawn; the fixture "
+                    .. "cannot tell a state encoding from a flat one"
+            end
+
+            -- The bar's LENGTH is the new half of the encoding, and it
+            -- has to track progress rather than just state. Raid is
+            -- untouched (0), Mythic+ slot 2 is 1 of 4, and every
+            -- unlocked slot is full.
+            local function pctOf(key, s) return ui.rows[key].slots[s]._slotPct end
+            if pctOf("raid", 1) ~= 0 then
+                return "an untouched slot drew a bar at " .. pctOf("raid", 1)
+            end
+            if math.abs(pctOf("mplus", 2) - 0.25) > 0.001 then
+                return "1 of 4 drew a bar at " .. pctOf("mplus", 2) .. ", not 0.25"
+            end
+            if pctOf("world", 1) ~= 1 or pctOf("mplus", 1) ~= 1 then
+                return "an unlocked slot drew a bar short of full"
+            end
+
+            -- And the reward text: the item level the client offers for
+            -- that activity, not the key level. Falling back to "+N"
+            -- silently is the failure worth catching, because it looks
+            -- exactly like the old behaviour working.
+            -- The item level lives at the foot of the card, not in the
+            -- fraction on the right.
+            local got = ui.rows.world.slots[1].big:GetText() or ""
+            if not got:match("292") then
+                return "unlocked world slot reads '" .. got .. "', without its item level"
+            end
+            if (ui.rows.raid.slots[1].big:GetText() or "") ~= "" then
+                return "a locked slot claims a reward it has not earned"
+            end
+
+            -- The card carries the bare figure in the middle; the name
+            -- and the qualifier live in the hover. Both halves asserted,
+            -- because the two labels that used to share the bottom
+            -- corner overran each other the moment the text grew.
+            local wt = ui.rows.world.slots[1]
+            if got:match("Tier") or got:match("Item level") then
+                return "world card reads '" .. got
+                    .. "'; only the number belongs on the card"
+            end
+            if not (wt._ilvl or ""):match("Tier 5") then
+                return "world hover reads '" .. tostring(wt._ilvl)
+                    .. "'; tier 5 should read as a Tier"
+            end
+
+            -- activityInfo.level counts in different units per category,
+            -- and one "+%d" across all three was right only for Mythic+.
+            -- The fixture gives Mythic+ a keystone 10 and World tier 5.
+            local mp = ui.rows.mplus.slots[1]._ilvl or ""
+            if not mp:match("%+10") then
+                return "mythic+ hover reads '" .. mp .. "'; keystone 10 should read as +10"
+            end
+            -- Raid's branch (a difficulty id through GetDifficultyInfo)
+            -- is NOT exercised: raid has to stay untouched in the
+            -- fixture so a "locked" state exists at all, and an
+            -- untouched row earns nothing to label.
+
+            -- And the structural half of the overlap fix: the reward
+            -- label's right edge is pinned to the fraction's left, so it
+            -- truncates instead of running underneath whatever the text
+            -- turns out to be.
+            if wt.big:GetText() ~= "292" then
+                return "the card's item level reads '" .. tostring(wt.big:GetText())
+                    .. "'; it should be the bare number"
+            end
+
+            -- The card's art. An earned slot shows what it is holding;
+            -- an unearned one shows an empty socket. Both directions
+            -- matter: an icon on every card would mean the reward
+            -- lookup is answering for slots that have no reward.
+            -- A region anchored to one edge AND to a centre has its
+            -- height decided by those anchors, and SetHeight is ignored
+            -- -- silently. The label's backing band was BOTTOMLEFT plus
+            -- RIGHT, so it covered the whole scene instead of 34px of
+            -- it, and looked like the art had been faded on purpose.
+            for key, row in pairs(ui.rows) do
+                for _, pair in ipairs({ { "artFoot", row.artFoot },
+                                        { "artFade", row.artFade } }) do
+                    local name, tex = pair[1], pair[2]
+                    for _, pt in ipairs((tex and tex._pts) or {}) do
+                        local p = tostring(pt.p or "")
+                        if p == "LEFT" or p == "RIGHT" or p == "CENTER"
+                            or p == "TOP" or p == "BOTTOM" then
+                            return key .. " " .. name .. " is anchored by '" .. p
+                                .. "', which fixes a centre and overrides its size"
+                        end
+                    end
+                end
+            end
+
+            -- The category scenes are back, so assert what actually
+            -- went wrong with them last time: three rows must draw three
+            -- DIFFERENT scenes, and each must have one.
+            local scenes = {}
+            for key, row in pairs(ui.rows) do
+                local a = row.art and row.art:GetAtlas()
+                if not a then return key .. " row drew no category scene" end
+                if scenes[a] then
+                    return "rows " .. scenes[a] .. " and " .. key
+                        .. " drew the same scene: " .. a
+                end
+                scenes[a] = key
+
+                for s, tile in ipairs(row.slots or {}) do
+                    local earned = tile._slotState == "unlocked"
+                    -- The padlock is shown on exactly the slots that
+                    -- are not yours. There is no reward icon to check
+                    -- against it any more -- the reward is words at the
+                    -- foot of the card and the item on hover.
+                    if tile.lock:IsShown() ~= (not earned) then
+                        return key .. " slot " .. s .. " lock does not match its state"
+                    end
+                    -- The hover has to have something to say either way,
+                    -- or a card is dead to the mouse.
+                    if not (tile._need and tile._progress) then
+                        return key .. " slot " .. s .. " has no tooltip content"
+                    end
+                    -- And it must never carry an item link. The reward
+                    -- is random until claimed; the example the API
+                    -- returns is only good for its item level, and a
+                    -- tooltip built from it would promise a drop the
+                    -- vault has not chosen.
+                    if tile._link then
+                        return key .. " slot " .. s .. " stashed an item link for its tooltip"
+                    end
+                    if earned ~= (tile._ilvl ~= nil) then
+                        return key .. " slot " .. s .. " state and reward text disagree"
+                    end
+                    -- The caption has to clear the checkmark.
+                    local capX = tile.caption._pts and tile.caption._pts[1]
+                        and tile.caption._pts[1].x
+                    if tile.check:IsShown() and (capX or 0) < 20 then
+                        return key .. " slot " .. s
+                            .. " caption starts at " .. tostring(capX) .. ", under its checkmark"
+                    end
+                end
+            end
+            return "ok"
+        end
+    """)(ns)
+    if vault == "ok":
+        print("  ok   vault grid: tallies, state colours, bar lengths and "
+              "banked item levels agree; three distinct scenes")
+    else:
+        print("  FAIL vault grid: %s" % vault)
+        failures.append(("vault grid", str(vault)))
+
+    # The plan has to talk about improving a reward, not only unlocking
+    # one. Those are different jobs and it only ever spoke about the
+    # second -- once a slot is yours the count stops mattering and the
+    # level starts.
+    plan = L.eval("""
+        function(ns)
+            local P = ns.Planner
+            if not (P and P.BuildPlan) then return "no planner" end
+            local ok, built = pcall(P.BuildPlan, P)
+            if not ok then return "BuildPlan failed: " .. tostring(built) end
+            local items = (built and built.items) or {}
+            if #items == 0 then return "the plan came back empty" end
+
+            local upgrade
+            for _, it in ipairs(items) do
+                if tostring(it.title or ""):match("reward %d+ to %d+") then upgrade = it end
+            end
+            if not upgrade then
+                return "nothing in the plan offers to improve a reward"
+            end
+            -- A currency threshold the client cannot be asked about, so
+            -- the number is written down and the currency is found by
+            -- NAME -- a guessed id reads zero rather than erroring, and
+            -- would turn this into a confidently wrong suggestion.
+            local accolade
+            for _, it in ipairs(items) do
+                if tostring(it.title or ""):match("Field Accolade") then accolade = it end
+            end
+            if not accolade then
+                return "nothing in the plan mentions Field Accolades"
+            end
+            -- 483 banked against 750 in the fixture: 267 short.
+            if not accolade.title:match("267") then
+                return "accolades read '" .. accolade.title .. "'; expected 267 short"
+            end
+            if not (ns.FindCurrencyByName and ns:FindCurrencyByName("Field Accolade")) then
+                return "the currency lookup found nothing to build that on"
+            end
+            if ns:FindCurrencyByName("No Such Currency") then
+                return "control: the currency lookup matched a name that does not exist"
+            end
+
+            -- Plan titles have to fit one line of a half-width card.
+            -- Wrapping pushed them through the detail line underneath,
+            -- and the cards are half the width they were built for.
+            -- 46 characters is roughly what a ~347px card holds at
+            -- GameFontNormal; the margin is deliberate, not measured to
+            -- the pixel.
+            for _, it in ipairs(items) do
+                local t = tostring(it.title or "")
+                if #t > 46 then
+                    return "a plan title is " .. #t .. " characters and will not fit: '" .. t .. "'"
+                end
+            end
+
+            -- The fixture's Mythic+ slot qualified at +10 and the stub
+            -- offers +12 for item level 302.
+            if not upgrade.title:match("%+12") then
+                return "upgrade reads '" .. upgrade.title .. "'; expected the next key level"
+            end
+            if not upgrade.title:match("302") then
+                return "upgrade reads '" .. upgrade.title .. "'; expected the item level it buys"
+            end
+            -- Delves must stay silent: the client returns no data for
+            -- them, and a made-up rung would be worse than nothing.
+            for _, it in ipairs(items) do
+                if it.category == "world" and tostring(it.title):match("reward %d+ to %d+") then
+                    return "a delve upgrade was invented; the client has no data for it"
+                end
+            end
+
+            -- A reward you would not wear is not urgent, whatever it
+            -- fills. The fixture wears 289 and the upgrade pays 302, so
+            -- that one must NOT be demoted...
+            if upgrade.notUpgrade then
+                return "a 302 reward was called worthless to a character wearing 289"
+            end
+            -- ...and the same call on a reward at or below what is worn
+            -- must be, or the comparison never fires and every plan
+            -- looks identical on a geared character.
+            local probe = { priority = 1, detail = "x" }
+            local ranked = P._RankByReward and P._RankByReward(probe, 285)
+            if not ranked then return "no reward ranking to test" end
+            if not ranked.notUpgrade then
+                return "a 285 reward was called an upgrade to a character wearing 289"
+            end
+            if ranked.priority <= 1 then
+                return "a non-upgrade kept its place at the top of the plan"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if plan == "ok":
+        print("  ok   plan: offers the next key level and what it raises the reward to")
+    else:
+        print("  FAIL plan: %s" % plan)
+        failures.append(("plan", str(plan)))
+
+    # Which raids the Loot Browser calls current.
+    #
+    # The Encounter Journal lists a tier's raids oldest first, so the one
+    # anyone is running came LAST and the page opened on retired loot.
+    # The split is decidable here: it reads a name out of the progression
+    # data file and cuts the journal's list on it. Worth pinning, because
+    # both halves of it are silent when they go wrong -- a name that
+    # stopped matching leaves the whole list "current", and an off-by-one
+    # on the cut folds the season's raid away behind the disclosure.
+    tiers = L.eval("""
+        function(ns)
+            if not ns.SplitRaidsByTier then return "no SplitRaidsByTier" end
+            local season = ns.PROGRESSION and ns.PROGRESSION.RAID_NAME
+            if not season then return "no season raid named in PROGRESSION" end
+
+            local lair = ns.PROGRESSION.LAIRS and ns.PROGRESSION.LAIRS.name
+            if not lair then return "no Lair named in PROGRESSION" end
+
+            -- The journal's order for the two current instances is not
+            -- ours: the Lair is one boss filling the same vault row, so
+            -- it goes under the raid whichever way round they arrive.
+            local list = {
+                { name = "Two Tiers Ago" },
+                { name = lair },
+                { name = "Last Tier" },
+                { name = season },
+            }
+            local cur, prev = ns:SplitRaidsByTier(list)
+            if #cur ~= 2 then
+                return "expected the raid and the Lair to be current, got " .. #cur
+            end
+            if cur[1].name ~= season or cur[2].name ~= lair then
+                return "current order is '" .. tostring(cur[1].name) .. "' then '" ..
+                    tostring(cur[2].name) .. "', wanted the raid then the Lair"
+            end
+            -- Newest of the retired raids on top, or the fold opens on
+            -- the oldest content in the game.
+            if #prev ~= 2 or prev[1].name ~= "Last Tier" then
+                return "retired raids came back in the wrong order"
+            end
+
+            -- A raid the journal knows and the data file does not is
+            -- newer than ours, not older: it must not be folded away.
+            local ahead = {
+                { name = "Last Tier" },
+                { name = season },
+                { name = "Whatever Comes Next" },
+            }
+            local cur2, prev2 = ns:SplitRaidsByTier(ahead)
+            if #cur2 ~= 2 or #prev2 ~= 1 then
+                return "a raid listed after the season's was folded away"
+            end
+
+            -- No match at all: the journal's own ordering still says the
+            -- last one is current. Falling through to "all previous"
+            -- would hide every raid on the page.
+            local stale = { { name = "A" }, { name = "B" } }
+            local cur3, prev3 = ns:SplitRaidsByTier(stale)
+            if #cur3 ~= 1 or cur3[1].name ~= "B" or #prev3 ~= 1 then
+                return "an unrecognised raid list left nothing current"
+            end
+
+            -- The journal's string is the one that has to match, and
+            -- ours came off patch notes. A leading "The" must not be
+            -- what decides whether the Lair is current.
+            local article = {
+                { name = (lair:gsub("^The%s+", "")) },
+                { name = "The " .. (season:gsub("^The%s+", "")) },
+            }
+            local cur4 = ns:SplitRaidsByTier(article)
+            if #cur4 ~= 2 then
+                return "a leading 'The' decided whether an instance was current"
+            end
+
+            local none, nonePrev = ns:SplitRaidsByTier({})
+            if #none ~= 0 or #nonePrev ~= 0 then return "empty list not handled" end
+            return "ok:" .. season .. " + " .. lair
+        end
+    """)(ns)
+    if tiers and str(tiers).startswith("ok:"):
+        print("  ok   raid tiers: %s lead, older raids fold behind the disclosure"
+              % str(tiers)[3:])
+    else:
+        print("  FAIL raid tiers: %s" % tiers)
+        failures.append(("raid tiers", str(tiers)))
+
+    # Glyphs the client's font cannot draw.
+    #
+    # U+2192 shipped to screen as an empty box in the middle of a vault
+    # suggestion, and a grep found the identical mistake already sitting
+    # in Recommend.lua -- written independently, months apart. That is a
+    # trap rather than a slip, so it gets a check.
+    #
+    # A blocklist, not an allowlist: the font's real coverage is not
+    # knowable from here, and guessing at it would either ban half the
+    # em dashes the addon already relies on or wave everything through.
+    # These are the ones observed or strongly suspected to fail.
+    BANNED = {
+        0x2192: "RIGHTWARDS ARROW (seen as an empty box in game)",
+        0x2190: "LEFTWARDS ARROW",
+        0x21D2: "RIGHTWARDS DOUBLE ARROW",
+        0x2713: "CHECK MARK",
+        0x2714: "HEAVY CHECK MARK",
+        0x2718: "HEAVY BALLOT X",
+    }
+    print("\nglyphs:")
+    lua_files = toc_files()   # already only .lua, relative to ROOT
+    offenders = []
+    for path in lua_files:
+        try:
+            text = open(os.path.join(ROOT, path), encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(text.split("\n"), 1):
+            if line.lstrip().startswith("--"):
+                continue        # commentary, never drawn
+            for ch in line:
+                if ord(ch) in BANNED:
+                    offenders.append("%s:%d %s"
+                                     % (path, lineno, BANNED[ord(ch)]))
+    # Control: the detector has to see one when it is there.
+    if not any(ord(c) in BANNED for c in "a→b"):
+        print("  FAIL control: the glyph detector cannot see U+2192")
+        failures.append(("glyphs", "detector is vacuous"))
+    else:
+        print("       ^ control: the detector sees U+2192 in a test string")
+    if offenders:
+        for o in offenders[:8]:
+            print("  FAIL glyph the client cannot draw: %s" % o)
+        failures.extend(("glyphs", o) for o in offenders)
+    else:
+        print("  ok   no un-drawable glyphs in %d drawn strings" % len(lua_files))
+
+    # The Best in Slot doll's two columns must be inset by the same
+    # amount. They were positioned from PAD and DOLL_W separately while
+    # the panel around them starts at PAD-6 and is DOLL_W+4 wide -- so
+    # the arithmetic agreed with nothing and the doll sat 10px in on the
+    # left and 2px in on the right. Two numbers that have to match are
+    # worth asserting rather than hoping.
+    doll = L.eval("""
+        function(ns)
+            local ins = ns.BisUI and ns.BisUI._dollInsets
+            if not ins then return "the doll never published its insets" end
+            if not (ins.left and ins.right) then return "insets incomplete" end
+            if math.abs(ins.left - ins.right) > 0.5 then
+                return string.format("left inset %.0f, right inset %.0f",
+                    ins.left, ins.right)
+            end
+            if ins.left < 4 then
+                return string.format("both insets are only %.0f; the doll is against its edges",
+                    ins.left)
+            end
+            return "ok:" .. tostring(math.floor(ins.left))
+        end
+    """)(ns)
+    if doll and str(doll).startswith("ok:"):
+        print("  ok   BiS doll: both columns inset %spx from the panel" % str(doll)[3:])
+    else:
+        print("  FAIL BiS doll: %s" % doll)
+        failures.append(("BiS doll", str(doll)))
+
+    # Tabs. Every strip in the addon goes through these three functions,
+    # so the contract is worth stating: a tab reads as selected by TWO
+    # signals, and it sits on a rail whether or not its container drew
+    # one. Underline alone was the old design and the complaint.
+    tabs = L.eval("""
+        function(ns)
+            if not ns.CreateUnderlineTab then return "no tab constructor" end
+            local strip = CreateFrame("Frame")
+            strip:SetSize(300, 28)
+            local accent = { 0, 0.67, 1 }
+            local a = ns.CreateUnderlineTab(strip, "Overview", accent)
+            local b = ns.CreateUnderlineTab(strip, "Boss Guide", accent)
+
+            -- The rail, on every tab, always.
+            for name, t in pairs({ a = a, b = b }) do
+                if not t.baseLine then
+                    return "tab " .. name .. " has no baseline to sit on"
+                end
+                if not t.baseLine:IsShown() then
+                    return "tab " .. name .. "'s baseline is hidden"
+                end
+            end
+
+            ns.SetTabActive(a)
+            ns.SetTabInactive(b)
+
+            if not a.selectedBar:IsShown() then return "the active tab has no marker" end
+            if b.selectedBar:IsShown() then return "an inactive tab is marked" end
+
+            -- And brightness, which is the half a marker-only check
+            -- would miss. The active label must be lighter than the
+            -- inactive one, not merely a different hue -- colour alone
+            -- was what the old design relied on.
+            local ar = select(1, a.label:GetTextColor())
+            local br = select(1, b.label:GetTextColor())
+            if not (ar and br) then return "tab labels never set a colour" end
+            if ar <= br then
+                return string.format(
+                    "the active label (%.2f) is no brighter than the inactive one (%.2f)",
+                    ar, br)
+            end
+
+            -- The strip's own continuous rule, and only one of it.
+            if not ns.TabBaseline then return "no strip baseline helper" end
+            local one = ns.TabBaseline(strip)
+            local two = ns.TabBaseline(strip)
+            if not one then return "the strip got no rule" end
+            if one ~= two then return "a second call drew a second rule over the first" end
+            return "ok"
+        end
+    """)(ns)
+    if tabs == "ok":
+        print("  ok   tabs: rail on every tab, marker and brightness both move, "
+              "one rule per strip")
+    else:
+        print("  FAIL tabs: %s" % tabs)
+        failures.append(("tabs", str(tabs)))
+
+    # The weekly checklist. Two things worth pinning: the client's answer
+    # is not the player's to override, and a manual tick expires on its
+    # own -- a checklist you have to clear by hand reads as "all done"
+    # forever, which is the failure that makes one useless.
+    weekly = L.eval("""
+        function(ns)
+            local Wk = ns.Weekly
+            if not (Wk and Wk.GetList) then return "no weekly checklist" end
+            YippYappHelperDB = {}
+
+            local rows = Wk:GetList()
+            if #rows == 0 then return "the checklist is empty" end
+
+            -- The page has to fit the room the shell gives it at the
+            -- default window size. It scrolls, so overflowing is no
+            -- longer invisible -- but needing to scroll a dashboard to
+            -- see half of it is still the thing that was wrong, and the
+            -- budget is worth keeping.
+            local Sh = ns.Shell
+            local budget = 760 - ((Sh.TITLE_H or 28) + (Sh.GAP or 14)) - (Sh.PAD or 16)
+            local ui = ns.ShellHomeUI
+            if not (ui and ui._pageH) then return "the page never measured itself" end
+            if ui._pageH > budget then
+                return string.format(
+                    "the page is %dpx in a %dpx region; it needs scrolling to read",
+                    ui._pageH, budget)
+            end
+
+            -- Nothing may hang off a hidden frame. Hiding does not free
+            -- the space: the anchors still resolve, so a section chained
+            -- to a plan card that has no content starts a card-height
+            -- below the last visible thing -- and on a short plan that
+            -- was enough to push this whole section off the page.
+            -- Everything that lost its build-time RIGHT anchor when the
+            -- two sections went side by side must be given a width on
+            -- refresh instead. A frame at zero width draws nothing at
+            -- all -- no text, no rule, no card -- and that is not an
+            -- error, it is just an absence. The plan's heading was
+            -- missed and took the whole lower half of the page with it.
+            for _, pair in ipairs({ { "planTitle", ui and ui.planTitle },
+                                    { "weekTitle", ui and ui.weekTitle },
+                                    { "plan card", ui and ui.plan and ui.plan[1] } }) do
+                local name, f = pair[1], pair[2]
+                if not f then return "no " .. name .. " built" end
+                -- _w, not GetWidth(). GetWidth falls back to 700 for a
+                -- frame it cannot resolve, which is a reasonable default
+                -- for the harness and exactly wrong here: it reports a
+                -- comfortable width for the frame that has none, hiding
+                -- the bug this check exists for.
+                local w = f._w or 0
+                local twoSided = false
+                for _, pt in ipairs(f._pts or {}) do
+                    local p = tostring(pt.p or "")
+                    if p:find("RIGHT") then twoSided = true end
+                end
+                if w <= 1 and not twoSided then
+                    return name .. " has neither a width nor a right anchor, so it draws nothing"
+                end
+            end
+
+            local anchor = ui and ui.weekTitle and ui.weekTitle._pts
+                and ui.weekTitle._pts[1] and ui.weekTitle._pts[1].rel
+            if not anchor then return "the weekly section is not anchored" end
+            if anchor.IsShown and not anchor:IsShown() then
+                return "the weekly section hangs off a hidden frame"
+            end
+
+            local manual, auto
+            for _, r in ipairs(rows) do
+                if r.manual then manual = manual or r else auto = auto or r end
+            end
+            if not manual then return "no manual item; nothing is tickable" end
+            if not auto then return "no automatic item; everything asks the player" end
+
+            -- Coffer keys are detected from the client's own weekly
+            -- counter, not asked about and not measured against a number
+            -- copied from a guide. The fixture has 2 of 6 earned, so
+            -- this must come back automatic AND outstanding: automatic
+            -- but "done" would pass just as happily on a lookup that
+            -- silently found nothing.
+            local keys
+            for _, r in ipairs(rows) do
+                if r.id == "cur:3512" then keys = r end
+            end
+            if not keys then
+                return "a weekly-capped currency did not become a checklist row"
+            end
+            -- Discovery finds what the client caps, which is not the
+            -- same as what is worth doing. A row the player hides must
+            -- stay hidden, and hiding must refuse the fixed items -- a
+            -- filter that could delete deliberate content is a settings
+            -- screen, not a nuisance filter.
+            if Wk:Hide("crests") then
+                return "a fixed checklist item could be hidden"
+            end
+            if not Wk:Hide("cur:3512") then
+                return "a discovered row refused to be hidden"
+            end
+            local stillThere = false
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == "cur:3512" then stillThere = true end
+            end
+            if stillThere then return "a hidden row came back" end
+            Wk:UnhideAll()
+            -- Crests are capped for the SEASON, not the week, so
+            -- reading only the weekly fields gave every crest a cap of
+            -- zero -- and "have you capped this week" could then never
+            -- answer yes on a character that had.
+            local wk = ns:GetCrestWeeklyInfo("Adventurer")
+            if not (wk and (wk.weeklyMax or 0) > 0) then
+                return "a crest reports no cap at all; the cumulative one was not read"
+            end
+            if (wk.weeklyRemaining or 1) ~= 0 then
+                return "a crest at 300 of 300 still reports "
+                    .. tostring(wk.weeklyRemaining) .. " remaining"
+            end
+            if not wk.cumulative then
+                return "a season cap was reported as a weekly one"
+            end
+            -- And a crest that is NOT capped must still say so, or the
+            -- fallback is just answering yes to everything.
+            local part = ns:GetCrestWeeklyInfo("Champion")
+            if (part.weeklyRemaining or 0) ~= 120 then
+                return "a crest at 180 of 300 reports "
+                    .. tostring(part.weeklyRemaining) .. " remaining, not 120"
+            end
+
+            if not tostring(keys.label):match("Restored Coffer Key") then
+                return "the discovered row reads '" .. tostring(keys.label)
+                    .. "'; it should carry the name the client gave it"
+            end
+            if keys.manual then
+                return "coffer keys fell back to a manual tick; the weekly counter was not read"
+            end
+            if keys.done then
+                return "coffer keys read as done at 2 of 6 earned"
+            end
+
+            -- Ticking a manual item sticks, and unticking undoes it.
+            if manual.done then return "a fresh character starts with something ticked" end
+            Wk:Toggle(manual.item)
+            if not (Wk:IsDone(manual.item)) then return "a manual tick did not stick" end
+            Wk:Toggle(manual.item)
+            if (Wk:IsDone(manual.item)) then return "a manual tick could not be undone" end
+
+            -- An automatic item ignores the player entirely: the answer
+            -- does not change, AND nothing is written down. The second
+            -- half matters on its own -- IsDone prefers the client's
+            -- answer regardless, so a Toggle that wrote anyway would
+            -- leave a tick in the store that silently becomes the answer
+            -- the day the client stops being able to tell.
+            local before = Wk:IsDone(auto.item)
+            Wk:Toggle(auto.item)
+            if Wk:IsDone(auto.item) ~= before then
+                return "an automatic item was overridden by a click"
+            end
+            for _, rec in pairs(YippYappHelperDB.weekly or {}) do
+                if (rec.done or {})[auto.id] then
+                    return "clicking an automatic item wrote a tick to the store"
+                end
+            end
+
+            -- And last week's ticks are gone this week. resetAt is set
+            -- when the tick is made, so backdating it is exactly what a
+            -- reset looks like from the store's point of view.
+            Wk:Toggle(manual.item)
+            local key
+            for k in pairs(YippYappHelperDB.weekly) do key = k end
+            if not key then return "a tick was not written to the store" end
+            YippYappHelperDB.weekly[key].resetAt = 1
+            if Wk:IsDone(manual.item) then
+                return "a tick from a previous week survived the reset"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if weekly == "ok":
+        print("  ok   weekly: manual ticks stick, expire at reset, and cannot "
+              "override what the client knows")
+    else:
+        print("  FAIL weekly: %s" % weekly)
+        failures.append(("weekly", str(weekly)))
+
+    # ── The raid trainer, actually played ───────────────────────
+    #
+    # Every other check in this file inspects a page after one render.
+    # The trainer is not a page -- it is sixty seconds of a loop whose
+    # branches are chosen by where a dot happens to be, and none of that
+    # executes at load. A scenario with a misspelled `kind`, a mechanic
+    # whose Resolve divides by a nil radius, or an event list left out of
+    # time order would all sail through every check above.
+    #
+    # So: run all seven scenarios, on both difficulties, at a fixed step,
+    # for longer than their own duration. The player never moves, which
+    # is deliberate -- a stationary dot fails almost everything, and the
+    # failure paths are the ones with the arithmetic in them.
+    #
+    # The claims are then: nothing errored, every event in every timeline
+    # actually spawned, and the scoring reached a verdict.
+    trainer = L.eval("""
+        function(ns)
+            local T = ns.RaidTrainer
+            if not (T and T.Start) then return "RaidTrainer absent" end
+            local S = T.state
+            local f = ns.RaidTrainerFrame
+            local update = f and f._scripts and f._scripts.OnUpdate
+            if not update then return "no OnUpdate handler registered" end
+
+            local played, problems = 0, {}
+            local totalFailed = 0
+            for _, boss in ipairs(ns.RaidGuide:Ordered()) do
+                local sc = ns.RaidTrainerScenarios[boss.id]
+                if not sc then
+                    problems[#problems + 1] = boss.id .. ": no scenario"
+                else
+                    -- Timelines are walked with a cursor that stops at the
+                    -- first event not yet due, so an unsorted list silently
+                    -- drops everything after the first late entry. Checked
+                    -- per phase, because each phase owns its own clock.
+                    local phases = sc.phases or { { name = "-", events = sc.events } }
+                    local totalEvents = 0
+                    for pi, ph in ipairs(phases) do
+                        if not ph.events or #ph.events == 0 then
+                            problems[#problems + 1] = string.format(
+                                "%s phase %d (%s) has no events", boss.id, pi,
+                                tostring(ph.name))
+                        end
+                        local prev = -1
+                        for i, ev in ipairs(ph.events or {}) do
+                            totalEvents = totalEvents + 1
+                            if ev.at < prev then
+                                problems[#problems + 1] = string.format(
+                                    "%s phase %d: event %d at %.1fs follows %.1fs",
+                                    boss.id, pi, i, ev.at, prev)
+                            end
+                            if not ev.kind then
+                                problems[#problems + 1] = string.format(
+                                    "%s phase %d: event %d has no kind", boss.id, pi, i)
+                            end
+                            prev = ev.at
+                        end
+                        -- A phase with no way to end would strand the round.
+                        if not (ph.duration or ph.untilPct or ph.untilClear) then
+                            problems[#problems + 1] = string.format(
+                                "%s phase %d (%s) has no end condition", boss.id, pi,
+                                tostring(ph.name))
+                        end
+                    end
+                    if totalEvents == 0 then
+                        problems[#problems + 1] = boss.id .. ": no events at all"
+                    end
+
+                    for _, heroic in ipairs({ false, true }) do
+                        if not T:Start(boss.id, heroic) then
+                            problems[#problems + 1] = boss.id .. ": Start refused"
+                        else
+                            S.countdown = 0  -- skip the 3-2-1
+                            local budget = 0
+                            for _, ph in ipairs(sc.phases or {}) do
+                                budget = budget + (ph.duration or 45)
+                            end
+                            if budget == 0 then budget = sc.duration or 60 end
+                            local steps = math.ceil((budget + 60) / 0.05)
+                            for _ = 1, steps do
+                                -- Topped up every step, and this is the
+                                -- point of the run rather than a fudge.
+                                -- A dot that never moves is dead about
+                                -- twenty seconds in, and a dead player
+                                -- correctly stops the timeline -- so
+                                -- without a healer the back half of
+                                -- every scenario would never execute and
+                                -- this check would only ever have tested
+                                -- the opening. Damage is still computed;
+                                -- only the death is undone.
+                                S.hp = 100
+                                -- And the poison meter, for the same
+                                -- reason: Twin Fangs kills on stacks
+                                -- rather than on damage, so a health
+                                -- top-up alone still ends that round
+                                -- early. The stack death is worth
+                                -- testing and is tested on its own,
+                                -- below, rather than being allowed to
+                                -- cut this sweep short.
+                                S.stacks = 0
+                                S.energy = 0
+                                -- Trigger held down for the whole run,
+                                -- so the projectile spawn, travel and
+                                -- hit-scan actually execute. Left off,
+                                -- the entire combat half of the trainer
+                                -- would be unreached by every check in
+                                -- this file.
+                                S.firing = true
+                                -- And the boss kept alive, for the same
+                                -- reason the health and the poison meter
+                                -- are: shots fly straight at it from the
+                                -- spawn point, so an un-topped boss dies
+                                -- in the first few seconds and takes the
+                                -- rest of the timeline with it.
+                                if S.bossActor then
+                                    S.bossActor.hp = S.bossActor.maxHp
+                                end
+                                local ok, err = pcall(update, f, 0.05)
+                                if not ok then
+                                    problems[#problems + 1] = string.format(
+                                        "%s (%s): %s", boss.id,
+                                        heroic and "heroic" or "normal", tostring(err))
+                                    break
+                                end
+                                -- Revived AFTER the frame as well as
+                                -- topped up before it. Death is judged
+                                -- at the end of an update, so a pre-emptive
+                                -- top-up cannot stop a lethal mechanic --
+                                -- Twin Fangs' Stonebreaker deals more than
+                                -- the whole health pool by design -- and
+                                -- one unlucky landing would end the round
+                                -- and silently skip the rest of the
+                                -- timeline. Which is exactly the flake this
+                                -- check would otherwise have shipped with.
+                                if not S.running and S.phaseIndex < #(S.phases or {}) then
+                                    S.running, S.hp = true, 100
+                                end
+                            end
+                            -- A round that neither killed the player nor ran
+                            -- its timeline out has stalled somewhere.
+                            if S.running then
+                                problems[#problems + 1] = boss.id .. ": never finished"
+                            end
+                            if S.passed + S.failed == 0 then
+                                problems[#problems + 1] = boss.id .. ": scored nothing"
+                            end
+                            totalFailed = totalFailed + S.failed
+                            -- The phase-shaped version of "everything ran":
+                            -- the round has to have reached the last phase
+                            -- and exhausted its timeline.
+                            local nPhases = #(S.phases or {})
+                            if S.phaseIndex < nPhases then
+                                problems[#problems + 1] = string.format(
+                                    "%s stalled in phase %d of %d (%s)", boss.id,
+                                    S.phaseIndex, nPhases,
+                                    tostring((S.phases[S.phaseIndex] or {}).name))
+                            end
+                            played = played + 1
+                        end
+                        T:Stop()
+                    end
+                end
+            end
+            -- See the note above: aggregate, not per boss.
+            if totalFailed == 0 then
+                problems[#problems + 1] =
+                    "a motionless player missed nothing across every round"
+            end
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return "ok:" .. played
+        end
+    """)(ns)
+    if trainer and str(trainer).startswith("ok:"):
+        print("  ok   trainer: %s rounds played to a verdict, every event spawned"
+              % str(trainer)[3:])
+    else:
+        print("  FAIL trainer: %s" % trainer)
+        failures.append(("trainer", str(trainer)))
+
+    # Twin Fangs kills on the poison meter rather than on damage, which
+    # is the one mechanic in the trainer that can end a round while the
+    # player is at full health. The sweep above holds the meter at zero
+    # so the rest of that timeline gets to run, so this is the only place
+    # the stack death is exercised at all.
+    #
+    # Health is topped up here too: the claim under test is specifically
+    # that STACKS kill, and a round that ended because a motionless dot
+    # stood in a puddle would prove nothing.
+    stacks = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local sc = ns.RaidTrainerScenarios.twinfangs
+            if not (sc and sc.stacks) then return "twinfangs has no stack meter" end
+
+            -- Several rounds, and the claim is that the meter CAN fill.
+            --
+            -- The trainer spawns its casts at random, so a single round
+            -- may legitimately not throw enough poison -- roughly one in
+            -- seven did not. Asserting a lucky round made this fail
+            -- intermittently, which is worse than failing always: an
+            -- occasional red makes every green ambiguous and teaches you
+            -- to re-run until it goes quiet. The seed is fixed as well,
+            -- so this is reproducible rather than merely likely.
+            local best, killed = 0, false
+            for _ = 1, 5 do
+                T:Start("twinfangs", false)
+                S.countdown = 0
+                local peak = 0
+                local budget = 0
+                for _, ph in ipairs(sc.phases or {}) do
+                    budget = budget + (ph.duration or 45)
+                end
+                for _ = 1, math.ceil((budget + 60) / 0.05) do
+                    S.hp = 100
+                    update(f, 0.05)
+                    if S.stacks > peak then peak = S.stacks end
+                    if not S.running and S.phaseIndex < #(S.phases or {}) then
+                        S.running, S.hp = true, 100
+                    end
+                    if not S.running then break end
+                end
+                if peak >= sc.stacks.max and S.hp <= 0 then killed = true end
+                if peak > best then best = peak end
+                T:Stop()
+                if killed then break end
+            end
+
+            if best < sc.stacks.max then
+                return string.format(
+                    "over five rounds the meter only reached %d of %d, so it can never kill",
+                    best, sc.stacks.max)
+            end
+            if not killed then
+                return "the meter filled but no round ended"
+            end
+            return "ok:" .. best
+        end
+    """)(ns)
+    if stacks and str(stacks).startswith("ok:"):
+        print("  ok   trainer: Twin Fangs' poison meter fills to %s and kills"
+              % str(stacks)[3:])
+    else:
+        print("  FAIL trainer stacks: %s" % stacks)
+        failures.append(("trainer stacks", str(stacks)))
+
+    # Shooting, end to end. The sweep above holds the boss at full health
+    # so the rest of each timeline gets to run, which means nothing there
+    # ever proves a bullet can actually finish something -- only that the
+    # code runs without erroring.
+    #
+    # A control comes first: with the trigger released, the boss must
+    # take no damage at all. Without it, "the boss died" would be
+    # consistent with the boss dying of something else entirely.
+    guns = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            -- Control: trigger up AND the raid silenced -- nothing at all
+            -- is shooting, so the boss must be untouched. The raid has to
+            -- be silenced explicitly now that it fires on its own; without
+            -- that, "the boss lost health" would be true no matter what
+            -- the player did and the control would prove nothing.
+            local function silenceRaid()
+                for _, ally in ipairs(S.allies) do ally.stagger = 999 end
+            end
+
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            for _ = 1, 400 do
+                S.hp, S.firing = 100, false
+                silenceRaid()
+                update(f, 0.05)
+            end
+            if S.bossActor.hp < S.bossActor.maxHp then
+                T:Stop()
+                return "control: the boss lost health with nothing shooting"
+            end
+            T:Stop()
+
+            -- The raid alone must land damage, or "allies attack the
+            -- boss" is a claim nothing in this file checks.
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            for _ = 1, 400 do
+                S.hp, S.firing = 100, false
+                update(f, 0.05)
+            end
+            local raidOnly = S.bossActor.maxHp - S.bossActor.hp
+            T:Stop()
+            if raidOnly <= 0 then
+                return "the raid never damaged the boss"
+            end
+
+            -- Held fire, aimed at the centre where the boss stands.
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            local killed, adds = false, 0
+            for _ = 1, 3000 do
+                S.hp, S.firing = 100, true
+                update(f, 0.05)
+                if S.bossActor.hp <= 0 then killed = true end
+                if not S.running then break end
+            end
+            for _ = 1, #S.actors do adds = adds + 1 end
+            T:Stop()
+
+            if not killed then return "sustained fire never killed the boss" end
+            return "ok:" .. math.floor(raidOnly)
+        end
+    """)(ns)
+    # The raid AI, which had shipped once looking like scenery: six
+    # allies parked in a ring, not moving and not reacting, because the
+    # only group mechanic on that boss was a spread and they had no
+    # response to one. "They look busy" is not testable, but the three
+    # things underneath it are, and all three are checked with the
+    # player's trigger RELEASED so nothing here can be the player's doing.
+    raid = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            -- Vashnik on purpose: adds plus a spread, and no soak on
+            -- normal. It is the scenario the idle-raid bug showed up on.
+            T:Start("vashnik", false)
+            S.countdown = 0
+
+            local moved, addDamage, spreadSeen = 0, 0, false
+            local mostOut, tankOut, tankStray = 0, false, 0
+            local meleeOut, runOutFar = 0, 0
+            local worstGap, spreadNeed = nil, 0
+            local prev = {}
+            for i, a in ipairs(S.allies) do prev[i] = { a.x, a.y } end
+
+            for _ = 1, 1200 do
+                S.hp, S.firing = 100, false
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                update(f, 0.05)
+
+                local out = 0
+                for i, a in ipairs(S.allies) do
+                    moved = moved + math.sqrt((a.x-prev[i][1])^2 + (a.y-prev[i][2])^2)
+                    prev[i][1], prev[i][2] = a.x, a.y
+                    if a.runOut then
+                        out = out + 1
+                        if a.role == "TANK" then tankOut = true end
+                        if a.role == "MELEE" then meleeOut = meleeOut + 1 end
+                        -- How far from the middle a run-out actually
+                        -- reaches. The complaint was that a spread sent
+                        -- people to the wall; the arena's radius is 100.
+                        local far = math.sqrt(a.x * a.x + a.y * a.y)
+                        if far > runOutFar then runOutFar = far end
+                    end
+                    if a.role == "TANK" and S.bossActor then
+                        local d = math.sqrt((a.x-S.bossActor.x)^2 + (a.y-S.bossActor.y)^2)
+                        if d > tankStray then tankStray = d end
+                    end
+                end
+                if out > mostOut then mostOut = out end
+
+                for _, act in ipairs(S.actors) do
+                    if act.kind == "spread" and not act.resolved then
+                        spreadSeen = true
+                        -- The point of a spread is that everybody
+                        -- carrying it ends up apart. Measured over the
+                        -- player AND every ally who has it, because the
+                        -- reported bug was three circles sitting on top
+                        -- of each other while the mechanic reported
+                        -- itself handled.
+                        spreadNeed = act.minDist or 24
+                        local pts = { { S.px, S.py } }
+                        for _, a in ipairs(S.allies) do
+                            if a.runOut and a.runOutTag == act.name then
+                                pts[#pts + 1] = { a.x, a.y }
+                            end
+                        end
+                        -- Only once they have had time to get there.
+                        if S.time - act.born > (act.cast or 3) * 0.9 then
+                            for i = 1, #pts do
+                                for j = i + 1, #pts do
+                                    local g = math.sqrt((pts[i][1]-pts[j][1])^2
+                                                      + (pts[i][2]-pts[j][2])^2)
+                                    if not worstGap or g < worstGap then worstGap = g end
+                                end
+                            end
+                        end
+                    end
+                    if act.enemy and act.maxHp and act.hp < act.maxHp then
+                        addDamage = addDamage + 1
+                    end
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if moved < 200 then
+                return string.format("the raid barely moved (%.0f units over a round)", moved)
+            end
+            if addDamage == 0 then
+                return "the raid never damaged an add"
+            end
+            if not spreadSeen then
+                return "no spread happened, so the reaction to one was never tested"
+            end
+            -- The reported bug: a spread landed and the ENTIRE raid
+            -- sprinted for the wall. A couple of them going is the
+            -- mechanic; all of them going is not, and both look like
+            -- "the raid reacted" unless the count is checked.
+            if mostOut == 0 then
+                return "nobody in the raid ever took a spread"
+            end
+            if mostOut > 3 then
+                return string.format("%d allies ran out at once -- the whole raid is reacting", mostOut)
+            end
+            if tankOut then
+                return "the tank abandoned the boss for a raid mechanic"
+            end
+            -- The tank holds the boss, so it should never be found out
+            -- near the wall. Generous bound: this is checking that it
+            -- stays tanking, not that it stands perfectly still.
+            if tankStray > 45 then
+                return string.format("the tank wandered %.0f units from the boss", tankStray)
+            end
+            -- The arena's radius is 100. A spread wants separation, not
+            -- an evacuation, and the reported bug was melee crossing the
+            -- whole room and back for a mechanic that needed a few steps.
+            if runOutFar > 78 then
+                return string.format("a run-out reached %.0f of the 100-unit radius -- that is the wall", runOutFar)
+            end
+            -- Ranged step aside and step back; melee would have to leave
+            -- the boss entirely. With three ranged free, no melee should
+            -- ever be picked.
+            if meleeOut > 0 then
+                return "melee were sent out while ranged were available"
+            end
+            -- Circles are drawn at a diameter of minDist, so "not
+            -- touching" and "correctly spread" are the same statement.
+            -- Anything under minDist is overlapping circles on screen.
+            if not worstGap then
+                return "never measured a spread at resolution time"
+            end
+            if worstGap < spreadNeed then
+                return string.format(
+                    "spread left two of them %.0f apart, inside the %d they needed -- the circles overlap",
+                    worstGap, spreadNeed)
+            end
+            return string.format(
+                "ok:%.0f units moved, at most %d out at once (none melee), spread gap %.0f >= %d, tank held within %.0f",
+                moved, mostOut, worstGap, spreadNeed, tankStray)
+        end
+    """)(ns)
+    if raid and str(raid).startswith("ok:"):
+        print("  ok   trainer raid: %s; adds take fire" % str(raid)[3:])
+    else:
+        print("  FAIL trainer raid: %s" % raid)
+        failures.append(("trainer raid", str(raid)))
+
+    # Boss one, end to end.
+    #
+    # Nek'zali is the test case for the rebuild: it exercises the raid AI
+    # in every mode that matters -- a formation with one of each role,
+    # adds walked to the well, a targeted personal mechanic that goes to
+    # the wall, an intermission that ends when the field is clear, and a
+    # boss that turns so the frontal has somewhere new to point.
+    #
+    # Named checks rather than a sweep, because when this one fails the
+    # useful output is WHICH of those stopped working.
+    bossone = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local sc = ns.RaidTrainerScenarios.soulcoiler
+            local problems = {}
+
+            T:Start("soulcoiler", false)
+
+            -- The formation: one of each role, and a healer at all.
+            local seen = {}
+            for _, a in ipairs(S.allies) do
+                seen[a.role] = (seen[a.role] or 0) + 1
+            end
+            for _, role in ipairs({ "TANK", "HEALER", "MELEE", "RANGED" }) do
+                if not seen[role] then
+                    problems[#problems + 1] = "no " .. role .. " in the raid"
+                end
+            end
+            if seen.TANK ~= 1 then
+                problems[#problems + 1] = "expected exactly one tank"
+            end
+
+            S.countdown = 0
+            local fired, reached, facings = {}, 1, {}
+            local budget = 0
+            for _, ph in ipairs(sc.phases) do budget = budget + (ph.duration or 45) end
+
+            for _ = 1, math.ceil((budget + 90) / 0.05) do
+                S.hp, S.firing = 100, true
+                update(f, 0.05)
+                if S.phaseIndex > reached then reached = S.phaseIndex end
+                for _, a in ipairs(S.actors) do
+                    fired[tostring(a.name)] = true
+                end
+                if S.bossActor then
+                    -- Rounded, so a turning boss produces several buckets
+                    -- and a stuck one produces exactly one.
+                    facings[math.floor((S.bossActor.facing or 0) * 2)] = true
+                end
+                if not S.running and S.phaseIndex < #S.phases then
+                    S.running, S.hp = true, 100
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if reached < #sc.phases then
+                problems[#problems + 1] = string.format(
+                    "only reached phase %d of %d", reached, #sc.phases)
+            end
+            for _, want in ipairs({
+                "Restless Amani", "Possession Barrage", "Essence Rend",
+                "Echo of Nek'zali", "Hungering Pyre",
+            }) do
+                if not fired[want] then
+                    problems[#problems + 1] = want .. " never fired"
+                end
+            end
+
+            local turns = 0
+            for _ in pairs(facings) do turns = turns + 1 end
+            if turns < 3 then
+                problems[#problems + 1] =
+                    "the boss barely turned, so the frontal never moved"
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format("ok:%d phases, %d facings, one of each role", reached, turns)
+        end
+    """)(ns)
+    if bossone and str(bossone).startswith("ok:"):
+        print("  ok   trainer boss one: %s" % str(bossone)[3:])
+    else:
+        print("  FAIL trainer boss one: %s" % bossone)
+        failures.append(("trainer boss one", str(bossone)))
+
+    # Phases.
+    #
+    # The whole point of the rebuild, and the one claim nothing else here
+    # makes: a fight has to actually MOVE through its phases. A scenario
+    # that stalls in phase one still plays -- mechanics spawn, the score
+    # ticks up, the round ends on the clock -- and looks entirely normal
+    # while teaching a third of the encounter.
+    #
+    # Also checks that an intermission's immunity really holds, because
+    # "the boss cannot be damaged here" is the thing that makes an
+    # intermission a phase rather than a lull.
+    phases = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems, checked = {}, 0
+
+            for _, boss in ipairs(ns.RaidGuide:Ordered()) do
+                local sc = ns.RaidTrainerScenarios[boss.id]
+                if sc and sc.phases and #sc.phases > 1 then
+                    T:Start(boss.id, false)
+                    S.countdown = 0
+                    local reached, immuneTested, immuneLeak = 1, false, false
+                    local budget = 0
+                    for _, ph in ipairs(sc.phases) do budget = budget + (ph.duration or 45) end
+
+                    for _ = 1, math.ceil((budget + 60) / 0.05) do
+                        S.hp, S.firing, S.energy = 100, true, 0
+                        local ph = S.phases[S.phaseIndex]
+                        local before = S.bossActor and S.bossActor.hp
+                        update(f, 0.05)
+                        if S.phaseIndex > reached then reached = S.phaseIndex end
+                        if ph and ph.bossImmune and S.bossActor then
+                            immuneTested = true
+                            if S.bossActor.hp < (before or 0) then immuneLeak = true end
+                        end
+                        -- Kept alive so the round is not cut short by the
+                        -- player dying in phase one.
+                        if S.bossActor then
+                            S.bossActor.hp = math.max(S.bossActor.hp, 1)
+                        end
+                        if not S.running then break end
+                    end
+                    T:Stop()
+
+                    if reached < #sc.phases then
+                        problems[#problems + 1] = string.format(
+                            "%s only reached phase %d of %d", boss.id, reached, #sc.phases)
+                    end
+                    if immuneLeak then
+                        problems[#problems + 1] = boss.id ..
+                            ": the boss took damage during an immune phase"
+                    end
+                    checked = checked + 1
+                end
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            if checked == 0 then return "no multi-phase fights to check" end
+            return "ok:" .. checked
+        end
+    """)(ns)
+    if phases and str(phases).startswith("ok:"):
+        print("  ok   trainer phases: %s fights run end to end, immunity holds"
+              % str(phases)[3:])
+    else:
+        print("  FAIL trainer phases: %s" % phases)
+        failures.append(("trainer phases", str(phases)))
+
+    # Sszorak's two-stage mechanic actually gates.
+    #
+    # Placing cysts and riding the wind are a minute apart, and the whole
+    # point is that the second is impossible if you skipped the first.
+    # A version where the wind was survivable anyway would look identical
+    # on screen and teach nothing, so this plays the fight twice -- once
+    # doing the preparation, once ignoring it -- and requires the scores
+    # to differ.
+    twostage = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local sc = ns.RaidTrainerScenarios.sisterrag
+            if not sc.tunnels then return "Sszorak has no tunnels" end
+
+            local budget = 0
+            for _, ph in ipairs(sc.phases) do budget = budget + (ph.duration or 45) end
+            local steps = math.ceil((budget + 60) / 0.05)
+
+            --- Play a round. `follow` walks to whatever the mechanic
+            --- currently wants; otherwise the player never moves.
+            local function play(follow)
+                T:Start("sisterrag", false)
+                S.countdown = 0
+                local orders = {}
+                for _, t in ipairs(S.tunnels or {}) do
+                    orders[t.order] = (orders[t.order] or 0) + 1
+                end
+                for step = 1, 3 do
+                    if orders[step] ~= 1 then
+                        T:Stop()
+                        return nil, "tunnel orders are not 1/2/3 exactly once"
+                    end
+                end
+
+                for _ = 1, steps do
+                    S.hp = 100
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    if follow then
+                        for _, a in ipairs(S.actors) do
+                            if (a.kind == "place" or a.kind == "wind") and a.tunnel then
+                                S.px, S.py = a.tunnel.cx, a.tunnel.cy
+                            end
+                        end
+                    end
+                    update(f, 0.05)
+                    if not S.running and S.phaseIndex < #(S.phases or {}) then
+                        S.running, S.hp = true, 100
+                    end
+                    if not S.running then break end
+                end
+                local placed = 0
+                for _, t in ipairs(S.tunnels or {}) do
+                    if t.cyst then placed = placed + 1 end
+                end
+                local missed = S.failed
+                T:Stop()
+                return { placed = placed, missed = missed }
+            end
+
+            local good, err = play(true)
+            if err then return err end
+            local bad = play(false)
+
+            if good.placed == 0 then
+                return "playing the mechanic correctly placed no cysts at all"
+            end
+            if bad.placed > 0 then
+                return "cysts appeared without anybody placing them"
+            end
+            if good.missed >= bad.missed then
+                return string.format(
+                    "doing the preparation missed %d and ignoring it missed %d -- it changes nothing",
+                    good.missed, bad.missed)
+            end
+            return string.format("ok:%d cysts placed, %d misses against %d",
+                good.placed, good.missed, bad.missed)
+        end
+    """)(ns)
+    if twostage and str(twostage).startswith("ok:"):
+        print("  ok   trainer cysts: placing them is what makes the wind survivable (%s)"
+              % str(twostage)[3:])
+    else:
+        print("  FAIL trainer cysts: %s" % twostage)
+        failures.append(("trainer cysts", str(twostage)))
+
+    # The raid plays to the assignment, not to instinct.
+    #
+    # The guides split soaks into groups and are explicit about why:
+    # soaking Ravenous Feast leaves +800% damage from the NEXT pop, so
+    # everybody piling into all three is the wipe rather than the safe
+    # play. The raid AI was doing exactly that, and it looked fine --
+    # circles full of allies always look right.
+    #
+    # An UNGROUPED soak is a whole-raid soak and everybody should still
+    # go, so both halves of the rule are checked.
+    tactics = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            local function inSoak(act)
+                local n = 0
+                for _, a in ipairs(S.allies) do
+                    local dx, dy = a.x - act.x, a.y - act.y
+                    if math.sqrt(dx * dx + dy * dy) <= act.r then n = n + 1 end
+                end
+                return n
+            end
+
+            local mostInGrouped, mostInOpen = 0, 0
+            for _, id in ipairs({ "twinfangs", "sisterrag" }) do
+                T:Start(id, false)
+                S.countdown = 0
+                local budget = 0
+                for _, ph in ipairs(ns.RaidTrainerScenarios[id].phases) do
+                    budget = budget + (ph.duration or 45)
+                end
+                for _ = 1, math.ceil((budget + 40) / 0.05) do
+                    S.hp, S.stacks, S.energy = 100, 0, 0
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    update(f, 0.05)
+                    for _, act in ipairs(S.actors) do
+                        -- Sampled just BEFORE it lands, not after. A soak
+                        -- resolves and dies in the same frame, so by the
+                        -- time this loop runs there is nothing left to
+                        -- count -- which is why the first version of this
+                        -- check reported that nobody ever soaked anything.
+                        if act.kind == "soak" and not act.resolved
+                            and (S.time - act.born) > (act.cast or 1) * 0.75 then
+                            local n = inSoak(act)
+                            if act.group then
+                                if n > mostInGrouped then mostInGrouped = n end
+                            else
+                                if n > mostInOpen then mostInOpen = n end
+                            end
+                        end
+                    end
+                    if not S.running and S.phaseIndex < #(S.phases or {}) then
+                        S.running, S.hp = true, 100
+                    end
+                    if not S.running then break end
+                end
+                T:Stop()
+            end
+
+            -- Compared against an UNGROUPED soak rather than judged
+            -- against a fixed number.
+            --
+            -- Counting bodies inside a circle cannot tell an assignment
+            -- from a coincidence: Ravenous Feast is sixteen units across
+            -- and lands on the raid, so allies are sometimes simply
+            -- standing where it appeared. What is decidable is the
+            -- comparison -- if grouping a soak does not draw fewer
+            -- people than not grouping one, the groups are doing nothing.
+            if mostInGrouped == 0 then
+                return "no ally ever took an assigned soak"
+            end
+            if mostInOpen == 0 then
+                return "no ungrouped soak was seen, so there is nothing to compare against"
+            end
+            if mostInGrouped >= mostInOpen then
+                return string.format(
+                    "an assigned soak drew %d and an open one %d -- grouping changed nothing",
+                    mostInGrouped, mostInOpen)
+            end
+            return string.format("ok:%d in an assigned soak against %d in an open one",
+                mostInGrouped, mostInOpen)
+        end
+    """)(ns)
+    if tactics and str(tactics).startswith("ok:"):
+        print("  ok   trainer tactics: soak groups are respected (%s)" % str(tactics)[3:])
+    else:
+        print("  FAIL trainer tactics: %s" % tactics)
+        failures.append(("trainer tactics", str(tactics)))
+
+    # Every mechanic introduces itself.
+    #
+    # A wave has no cast bar and no telegraph -- it simply slides in from
+    # off-screen -- so without a line of text it is an anonymous wall and
+    # the player has no way to learn what it was. The complaint from the
+    # client was exactly that. Checked for every instant mechanic that
+    # can take health off you.
+    named = L.eval("""
+        function(ns)
+            local anon = {}
+            for _, boss in ipairs(ns.RaidGuide:Ordered()) do
+                local sc = ns.RaidTrainerScenarios[boss.id]
+                for pi, ph in ipairs((sc or {}).phases or {}) do
+                    for _, ev in ipairs(ph.events or {}) do
+                        local instant = (ev.cast or 0) <= 0
+                        local hurts = (ev.damage or 0) > 0 or ev.dps or ev.stack
+                        -- Orbs and carries draw their own countdown ring,
+                        -- and adds are self-evidently things to shoot.
+                        local selfEvident = ev.kind == "orb" or ev.kind == "carry"
+                            or ev.kind == "chaser" or ev.kind == "stalker"
+                            or ev.kind == "caster" or ev.kind == "puddle"
+                            or ev.kind == "tax" or ev.kind == "imbibe"
+                        if instant and hurts and not selfEvident and not ev.call then
+                            anon[#anon + 1] = string.format("%s phase %d: %s (%s)",
+                                boss.id, pi, tostring(ev.name), tostring(ev.kind))
+                        end
+                    end
+                end
+            end
+            if #anon > 0 then return table.concat(anon, "; ") end
+            return "ok"
+        end
+    """)(ns)
+    if named == "ok":
+        print("  ok   trainer call-outs: every instant mechanic names itself")
+    else:
+        print("  FAIL trainer call-outs: %s" % named)
+        failures.append(("trainer call-outs", str(named)))
+
+    # Nothing is drawn off the floor.
+    #
+    # Every frontal defaulted to a length of ARENA_R * 2 -- the arena's
+    # DIAMETER, measured from wherever the cast started. From the boss in
+    # the middle that is twice as far as the wall, so the bars ran out
+    # across the corners of the frame, drawn over scenery they could
+    # never reach. It looked like a rendering fault rather than a number.
+    #
+    # Checked by playing every scenario and measuring the far end of each
+    # directional mechanic against the arena's radius.
+    onfloor = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local R, worst, worstName, checked = 100, 0, nil, 0
+
+            for _, boss in ipairs(ns.RaidGuide:Ordered()) do
+                local sc = ns.RaidTrainerScenarios[boss.id]
+                if sc then
+                    T:Start(boss.id, true)
+                    S.countdown = 0
+                    local budget = 0
+                    for _, ph in ipairs(sc.phases or {}) do
+                        budget = budget + (ph.duration or 45)
+                    end
+                    for _ = 1, math.ceil((budget + 60) / 0.05) do
+                        S.hp, S.stacks, S.energy = 100, 0, 0
+                        if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                        update(f, 0.05)
+                        for _, a in ipairs(S.actors) do
+                            if (a.kind == "line" or a.kind == "beam") and a.len and a.dir then
+                                checked = checked + 1
+                                local ex = a.x + math.cos(a.dir) * a.len
+                                local ey = a.y + math.sin(a.dir) * a.len
+                                local d = math.sqrt(ex * ex + ey * ey)
+                                if d > worst then worst, worstName = d, a.name end
+                            end
+                        end
+                        if not S.running and S.phaseIndex < #(S.phases or {}) then
+                            S.running, S.hp = true, 100
+                        end
+                        if not S.running then break end
+                    end
+                    T:Stop()
+                end
+            end
+
+            if checked == 0 then return "no directional mechanics were seen" end
+            -- A couple of units of slack for the rounding in the ray
+            -- solve; anything real overshoots by tens.
+            if worst > R + 3 then
+                return string.format("%s reached %.0f units out, past the %d-unit wall",
+                    tostring(worstName), worst, R)
+            end
+            return string.format("ok:%d checked, furthest end %.0f of %d", checked, worst, R)
+        end
+    """)(ns)
+    if onfloor and str(onfloor).startswith("ok:"):
+        print("  ok   trainer geometry: %s" % str(onfloor)[3:])
+    else:
+        print("  FAIL trainer geometry: %s" % onfloor)
+        failures.append(("trainer geometry", str(onfloor)))
+
+    # The countdown.
+    #
+    # Every other trainer check sets S.countdown = 0 to get to the
+    # interesting part, so until now nothing exercised the three seconds
+    # before a pull at all -- which is exactly where the raid was found
+    # opening fire early. Worse, those shots were spawned by a path that
+    # runs before UpdateShots, so they were created and shown but never
+    # positioned: art on the field before the round existed.
+    countdown = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            T:Start("soulcoiler", false)
+            if S.countdown <= 0 then T:Stop(); return "no countdown to test" end
+            local full = S.bossActor.maxHp
+
+            -- Most of the countdown, but not past it.
+            local frames = math.floor((S.countdown - 0.4) / 0.05)
+            for _ = 1, frames do
+                S.firing = true          -- trigger held down through it
+                update(f, 0.05)
+            end
+
+            if S.countdown <= 0 then T:Stop(); return "the countdown ran out early" end
+            if #S.shots > 0 then
+                T:Stop()
+                return string.format("%d shots were fired during the countdown", #S.shots)
+            end
+            if S.bossActor.hp < full then
+                T:Stop()
+                return "the boss took damage before the round started"
+            end
+            if #S.actors > 0 then
+                T:Stop()
+                return string.format("%d mechanics spawned during the countdown", #S.actors)
+            end
+
+            -- And it does start once the countdown clears.
+            for _ = 1, 200 do
+                S.hp, S.firing = 100, true
+                update(f, 0.05)
+            end
+            local fired = (#S.shots > 0) or (S.bossActor.hp < full)
+            T:Stop()
+            if not fired then return "nothing fired after the countdown either" end
+            return "ok"
+        end
+    """)(ns)
+    if countdown == "ok":
+        print("  ok   trainer countdown: nothing fires or spawns until GO")
+    else:
+        print("  FAIL trainer countdown: %s" % countdown)
+        failures.append(("trainer countdown", str(countdown)))
+
+    # "Try again" on a round that already finished.
+    #
+    # Every other trainer check starts from a fresh Start on a frame that
+    # was never played, which is the one path that is always clean. The
+    # bug reported from the client was the other path: finish a round,
+    # press the button, and the new fight comes up wearing the last one's
+    # leftovers -- a stuck red overlay, sprites still lit where they died,
+    # and shots that no longer register. All three are state that Start
+    # has to actively clear rather than merely overwrite, and nothing here
+    # was exercising it.
+    restart = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            -- Round one, played to a real finish rather than stopped.
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            for _ = 1, 3000 do
+                S.firing = true
+                update(f, 0.05)
+                if not S.running then break end
+            end
+            if S.running then T:Stop(); return "round one never finished" end
+
+            local leftShots = #S.shots
+            local leftActors = #S.actors
+
+            -- Round two, from the button's own code path.
+            T:Start("soulcoiler", false)
+            if #S.shots > 0 then
+                T:Stop()
+                return string.format("%d shots carried into the new round", #S.shots)
+            end
+            if #S.actors > 0 then
+                T:Stop()
+                return string.format("%d mechanics carried into the new round", #S.actors)
+            end
+            if S.firing then T:Stop(); return "the trigger was still held" end
+            if S.hp ~= 100 then T:Stop(); return "health did not reset" end
+            if not S.bossActor or S.bossActor.hp ~= S.bossActor.maxHp then
+                T:Stop()
+                return "the boss came back already damaged, or absent"
+            end
+
+            -- And the thing the report was actually about: do attacks
+            -- still land in round two?
+            S.countdown = 0
+            local before = S.bossActor.hp
+            for _ = 1, 300 do
+                S.hp, S.firing = 100, true
+                update(f, 0.05)
+                if not S.running then break end
+            end
+            local dealt = before - S.bossActor.hp
+            T:Stop()
+            if dealt <= 0 then
+                return "shots did no damage at all in the round after a restart"
+            end
+            return string.format("ok:%d/%d left behind, %d damage dealt after restart",
+                leftShots, leftActors, dealt)
+        end
+    """)(ns)
+    if restart and str(restart).startswith("ok:"):
+        print("  ok   trainer restart: clean state and attacks land again (%s)"
+              % str(restart)[3:])
+    else:
+        print("  FAIL trainer restart: %s" % restart)
+        failures.append(("trainer restart", str(restart)))
+
+    # Vashnik's altars. The claim is that WHERE THE PLAYER STANDS decides
+    # which two altars empower, via a raid that follows them -- so the
+    # test walks the player to one altar, checks it lit, walks them to
+    # another, and checks the empowerment actually moved. A system that
+    # ranked altars but never changed its answer would look identical on
+    # screen until someone tried to steer it.
+    altars = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            T:Start("vashnik", false)
+            S.countdown = 0
+            if not S.altars or #S.altars ~= 3 then
+                T:Stop(); return "vashnik has no altars"
+            end
+
+            local function settle(target, frames)
+                for _ = 1, frames do
+                    S.hp, S.firing = 100, false
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    -- Parked on the altar; the raid should lean after us.
+                    S.px, S.py = target.x * 0.75, target.y * 0.75
+                    update(f, 0.05)
+                end
+            end
+            local function stacksOf(alt) return alt.stacks end
+            -- Exactly one empowered, one half, one dormant -- always,
+            -- wherever the raid is standing.
+            local function shapeIsWrong()
+                local counts = { [0] = 0, [1] = 0, [2] = 0 }
+                for _, alt in ipairs(S.altars) do
+                    counts[alt.stacks] = (counts[alt.stacks] or 0) + 1
+                end
+                if counts[2] ~= 1 or counts[1] ~= 1 or counts[0] ~= 1 then
+                    return string.format("altar stacks came out %d at +2, %d at +1, %d dormant",
+                        counts[2], counts[1], counts[0])
+                end
+                return nil
+            end
+
+            settle(S.altars[1], 220)
+            if stacksOf(S.altars[1]) ~= 2 then
+                T:Stop()
+                return string.format("stood at the %s altar and it took %d stacks, not 2",
+                    S.altars[1].name, stacksOf(S.altars[1]))
+            end
+            local bad = shapeIsWrong()
+            if bad then T:Stop(); return "at the first altar: " .. bad end
+
+            settle(S.altars[2], 220)
+            if stacksOf(S.altars[2]) ~= 2 then
+                T:Stop()
+                return string.format("walked to the %s altar but %s still held the empowerment",
+                    S.altars[2].name, S.altars[1].name)
+            end
+
+            bad = shapeIsWrong()
+            if bad then T:Stop(); return "at the second altar: " .. bad end
+
+            -- And Imbibe must actually pay out, in the schools that are lit.
+            local lit = {}
+            for _, alt in ipairs(S.altars) do
+                if alt.stacks > 0 then lit[alt.school] = true end
+            end
+            local spawned, wrongSchool = 0, nil
+            for _ = 1, 700 do
+                S.hp, S.firing = 100, false
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                S.px, S.py = S.altars[2].x * 0.75, S.altars[2].y * 0.75
+                update(f, 0.05)
+                for _, act in ipairs(S.actors) do
+                    if act.school and (act.kind == "chaser" or act.kind == "dodge") then
+                        spawned = spawned + 1
+                        if not lit[act.school] then wrongSchool = act.school end
+                    end
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if spawned == 0 then return "Imbibe never spawned anything" end
+            if wrongSchool then
+                return "a dormant altar's " .. wrongSchool .. " mechanic spawned anyway"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if altars == "ok":
+        print("  ok   trainer altars: empowerment follows the raid, and only lit altars spawn")
+    else:
+        print("  FAIL trainer altars: %s" % altars)
+        failures.append(("trainer altars", str(altars)))
+
+    if guns and str(guns).startswith("ok:"):
+        print("  ok   trainer: raid alone lands %s damage; held fire finishes the boss"
+              % str(guns)[3:])
+    else:
+        print("  FAIL trainer shooting: %s" % guns)
+        failures.append(("trainer shooting", str(guns)))
 
     return failures
 

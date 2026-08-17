@@ -70,6 +70,18 @@ Features\Raid\ReadyCheck.lua
 Features\Raid\BattleResTimer.lua
 Features\Raid\RaidUI.lua
 
+# The Boss Guide, and the arena that tests whether you read it.
+#
+# Data first, then the Encounter Journal pass that corrects the names in
+# it, then the trainer, then the view -- RaidGuideUI reads all three.
+# RaidUI.lua above only reaches for ns.RaidGuideUI when a player opens
+# the sub-tab, so it does not need any of this at its own load time.
+Features\Raid\RaidGuideData.lua
+Features\Raid\RaidGuideEJ.lua
+Features\Raid\RaidTrainerScenarios.lua
+Features\Raid\RaidTrainer.lua
+Features\Raid\RaidGuideUI.lua
+
 Features\Progression\ProgressionData.lua
 Features\Progression\ProgressionUI.lua
 
@@ -114,6 +126,7 @@ Features\Fun\Snark.lua
 Features\Fun\Advisor.lua
 Features\Fun\WhatsNew.lua
 
+Features\Planner\WeeklyChecklist.lua
 Features\Planner\PlannerData.lua
 Core\AppFrame.lua
 
