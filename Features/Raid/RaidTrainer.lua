@@ -616,10 +616,6 @@ bossSkull:SetTexture(ART.skull)
 local bossFace = arena:CreateTexture(nil, "OVERLAY", nil, 5)
 bossFace:SetTexture(ART.dart)
 
--- A dim stub of the cone's axis, so the arrow reads as "it is looking
--- THAT way down the room" rather than as a decoration stuck to its chin.
-local bossGaze = arena:CreateTexture(nil, "ARTWORK", nil, 3)
-bossGaze:SetTexture(WHITE)
 
 -- The ward it hides behind while a phase says it cannot be hurt.
 local bossWard = arena:CreateTexture(nil, "ARTWORK", nil, 4)
@@ -876,6 +872,9 @@ local function ResetAllies()
             aim = spot.angle + math.pi,
             fireCd = math.random() * ALLY_FIRE_CD,
             stagger = 0,
+            -- Where ranged and healers stand. Held rather than derived,
+            -- so the tank turning the boss does not move them.
+            camp = nil,
             label = nil, marked = false, hold = false,
         }
     end
@@ -973,7 +972,17 @@ local function DangerPush(x, y)
         elseif a.kind == "dodge" and not a.resolved then
             repel(a.x, a.y, a.r + 7)
         elseif a.kind == "puddle" then
-            repel(a.x, a.y, a.r + 5)
+            -- Only what you are actually standing in, or all but.
+            --
+            -- At r + 5 a puddle pushed from twenty units away, and
+            -- Nek'zali's Essence Rend zones are PERMANENT -- so by the
+            -- middle of a phase the floor held eight overlapping
+            -- repulsion fields and the danger vector was never zero.
+            -- Nobody could stand still because there was always
+            -- somewhere very slightly better to be. Ground already
+            -- underfoot is worth moving off; ground twenty units away
+            -- is scenery.
+            repel(a.x, a.y, a.r + 2)
         elseif a.kind == "chaser" and a.intercept then
             -- Deliberately no repulsion. You are meant to be in its way.
         elseif a.kind == "chaser" or a.kind == "stalker" then
@@ -1072,7 +1081,19 @@ local function UpdateBossPosition(dt)
             local cost = ConeCost(b.x, b.y, cand, rx, ry)
             if not bestCost or cost < bestCost then best, bestCost = cand, cost end
         end
-        b.facingGoal = best or b.facing
+        -- Only turn if where it is looking has actually gone bad, and
+        -- only to something clearly better.
+        --
+        -- Re-aiming on the timer regardless was a feedback loop: the
+        -- facing is chosen to point away from the raid, the raid steps
+        -- out of the cone, the centroid moves, the next re-aim picks a
+        -- different angle, and the ranged camp is swept again. The boss
+        -- was turning because the raid had moved, and the raid was
+        -- moving because the boss had turned.
+        local nowCost = ConeCost(b.x, b.y, b.facing, rx, ry)
+        if nowCost > 6 and bestCost and bestCost < nowCost - 6 then
+            b.facingGoal = best
+        end
         b.reaimAt = S.time + BOSS_REAIM_EVERY
     end
 
@@ -1192,6 +1213,66 @@ local function AssignOrbs()
     end
 end
 
+--- Keep a ranged camp, and re-site it only when it stops working.
+---
+--- Held rather than derived: the tank turning the boss must not move the
+--- back of the raid. It is abandoned when it goes out of range, ends up
+--- in the cone, or has something growing on it -- and then it steps to
+--- the NEAREST workable spot rather than the best one anywhere, because
+--- a camp that teleported to the theoretical optimum would churn as
+--- badly as no camp at all.
+local function AllyCamp(ally, t)
+    local c = ally.camp
+    local bad = not c
+    if c and t then
+        local d = dist(c.x, c.y, t.x, t.y)
+        if d > 66 or d < 28 then bad = true end
+        local off = math.abs(((atan2(c.y - t.y, c.x - t.x)
+            - (t.facing or 0) + math.pi) % (math.pi * 2)) - math.pi)
+        -- Matched to the cone the raid is actually pushed out of: a camp
+        -- abandoned for a cone it was never in is pure churn.
+        if off < 0.62 then bad = true end
+        if not bad then
+            for _, act in ipairs(S.actors) do
+                if not act.dead and (act.kind == "puddle"
+                    or (act.kind == "dodge" and not act.resolved))
+                    and dist(c.x, c.y, act.x, act.y) <= (act.r or 10) + 4 then
+                    bad = true
+                    break
+                end
+            end
+        end
+    end
+
+    if bad and t then
+        local bestX, bestY, bestScore
+        for k = 0, 15 do
+            local ang = (t.facing or 0) + math.pi + (k - 8) * 0.20
+            local cx2 = t.x + math.cos(ang) * ALLY_STANDOFF
+            local cy2 = t.y + math.sin(ang) * ALLY_STANDOFF
+            cx2, cy2 = clampToArena(cx2, cy2, ALLY_WALL_PAD)
+            local score = (c and dist(cx2, cy2, c.x, c.y) or 0)
+            for _, act in ipairs(S.actors) do
+                if not act.dead and (act.kind == "puddle"
+                    or (act.kind == "dodge" and not act.resolved))
+                    and dist(cx2, cy2, act.x, act.y) <= (act.r or 10) + 6 then
+                    score = score + 400
+                end
+            end
+            if S.scenario and S.scenario.well
+                and math.sqrt(cx2 * cx2 + cy2 * cy2) < 30 then
+                score = score + 400
+            end
+            if not bestScore or score < bestScore then
+                bestScore, bestX, bestY = score, cx2, cy2
+            end
+        end
+        ally.camp = { x = bestX or ally.x, y = bestY or ally.y }
+    end
+    return (ally.camp and ally.camp.x) or ally.x,
+           (ally.camp and ally.camp.y) or ally.y
+end
+
 --- Where an ally wants to be standing, before danger is considered.
 ---
 --- Ordered by priority, and the order is the raid's: a mechanic on YOU
@@ -1272,8 +1353,41 @@ local function AllyGoal(ally, index)
     local t = ally.target
     if not t then return ally.x, ally.y end
 
+    -- Ranged and healers hold a CAMP and shoot from it, whatever they
+    -- are shooting.
+    --
+    -- This used to apply only while they were targeting the BOSS, so on
+    -- a fight with a near-constant stream of adds they spent almost all
+    -- their time walking to a standoff ring around each one in turn --
+    -- which is why they never stopped moving even though the camp
+    -- itself was re-sited only twelve times in two minutes. Having
+    -- range means not having to walk to the thing.
+    if ally.role == "RANGED" or ally.role == "HEALER" then
+        local anchor = S.bossActor or t
+        local c = ally.camp
+        -- Only close in when the target is genuinely out of reach.
+        if c and t and t ~= S.bossActor and dist(c.x, c.y, t.x, t.y) > 78 then
+            local dx2, dy2 = t.x - c.x, t.y - c.y
+            local dd = math.sqrt(dx2 * dx2 + dy2 * dy2)
+            return t.x - dx2 / dd * 60, t.y - dy2 / dd * 60
+        end
+        return AllyCamp(ally, anchor)
+    end
+
     if t == S.bossActor then
         local rot = (t.facing or TANK_ANGLE) - TANK_ANGLE
+        --
+        -- Rotating the whole formation with the facing was geometrically
+        -- unfair: melee sit fifteen units out and barely shift when the
+        -- boss turns, while ranged sit at forty-six and swing seventy
+        -- units for the same turn. They were sprinting laps every time
+        -- the tank repositioned, which is not what a ranged camp does --
+        -- ranged stand where they stand and only move when the spot
+        -- stops working.
+        --
+        -- So the camp is kept until it is untenable: out of range, in the
+        -- cone, or standing in something. Then it steps to the nearest
+        -- spot that is none of those.
         local reach = ally.formDist
         if ally.role == "TANK" then
             -- Barrage hits harder the closer you are, so the tank walks
@@ -1350,9 +1464,19 @@ local function UpdateAllies(dt)
         dx, dy = dx + px * weight, dy + py * weight
 
         local len = math.sqrt(dx * dx + dy * dy)
-        -- A small dead zone so an ally standing on its mark does not
-        -- vibrate against it.
-        if len > 0.05 and (d > 2 or px ~= 0 or py ~= 0) then
+        -- A dead zone, and a wider one for the back of the raid.
+        --
+        -- Holding a camp fixed the big swings but not the twitching:
+        -- repulsion is recomputed every frame and ANY of it moved them,
+        -- so a puddle forty units away kept nudging the whole ranged
+        -- camp back and forth. Melee are genuinely tied to the boss and
+        -- should chase it; ranged should ignore a shove they could just
+        -- as well stand through.
+        local push = math.sqrt(px * px + py * py)
+        local back = (ally.role == "RANGED" or ally.role == "HEALER")
+        local slack = back and 7 or 2
+        local floor = back and 0.35 or 0.0
+        if len > 0.05 and (d > slack or push > floor) then
             ally.x = ally.x + dx / len * ALLY_SPEED * dt
             ally.y = ally.y + dy / len * ALLY_SPEED * dt
             ally.x, ally.y = clampToArena(ally.x, ally.y, ALLY_WALL_PAD)
@@ -2975,19 +3099,12 @@ end
 local function DrawBoss(s)
     local b = S.bossActor
     if not b then
-        bossSkull:Hide(); bossFace:Hide(); bossGaze:Hide()
+        bossSkull:Hide(); bossFace:Hide()
         return
     end
     local f = b.facing or 0
     local phase = CurrentPhase()
     local immune = phase and phase.bossImmune
-
-    -- The gaze first, so the skull and the arrow both sit on top of it.
-    -- Short and faint: it says which way, not how far -- the cone's real
-    -- length is the frontal's business and drawing it here would be a
-    -- permanent telegraph for a mechanic that is not casting.
-    local reach = 34
-    putBar(bossGaze, b.x, b.y, f, reach, 7, s, C.boss, 0.16)
 
     if immune then
         -- Greyed and behind a turning ward, because "your damage is
@@ -2999,13 +3116,15 @@ local function DrawBoss(s)
             0.75, S.time * 1.4)
         put(bossWardRing, "ring", b.x, b.y, b.r * 3.4, s, { 0.55, 0.75, 1.0 }, 0.85)
         bossFace:Hide()
-        bossGaze:Hide()
     else
         bossWard:Hide()
         bossWardRing:Hide()
         put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 1, 0.93, 0.90 }, 1)
-        put(bossFace, "dart", b.x + math.cos(f) * (b.r + 6),
-            b.y + math.sin(f) * (b.r + 6), 12, s, C.boss, 1, f + SPRITE_FACING)
+        -- Small, and tucked against the skull. Far enough out it reads
+        -- as a separate object floating nearby; this way it is plainly
+        -- part of the boss and plainly points somewhere.
+        put(bossFace, "dart", b.x + math.cos(f) * (b.r + 1),
+            b.y + math.sin(f) * (b.r + 1), 8, s, C.boss, 1, f + SPRITE_FACING)
     end
 end
 

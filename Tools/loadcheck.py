@@ -3132,6 +3132,94 @@ def main():
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
 
+    # Ranged and healers hold still.
+    #
+    # The formation used to rotate wholesale with the boss's facing,
+    # which is geometrically unfair: melee sit fifteen units out and
+    # barely shift on a turn, while ranged sit at forty-six and swing
+    # seventy units for the same turn. They were sprinting laps every
+    # time the tank repositioned.
+    #
+    # Compared per ally rather than in total, since there are more of
+    # them -- and against melee rather than a fixed number, because what
+    # is wrong is the RATIO: the people furthest out were moving most.
+    camps = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            local os_diag = false
+            local moved, count, prev = {}, {}, {}
+            local frames, backMoveFrames, resites = 0, 0, 0
+            local lastCamp = {}
+            for i, a in ipairs(S.allies) do prev[i] = { a.x, a.y } end
+
+            for _ = 1, 2200 do
+                S.hp, S.firing = 100, false
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                update(f, 0.05)
+                frames = frames + 1
+                for i, a in ipairs(S.allies) do
+                    local d = math.sqrt((a.x - prev[i][1])^2 + (a.y - prev[i][2])^2)
+                    moved[a.role] = (moved[a.role] or 0) + d
+                    if (a.role == "RANGED" or a.role == "HEALER") then
+                        if d > 0.01 then backMoveFrames = backMoveFrames + 1 end
+                        if a.camp then
+                            local key = math.floor(a.camp.x) .. "," .. math.floor(a.camp.y)
+                            if lastCamp[i] and lastCamp[i] ~= key then
+                                resites = resites + 1
+                            end
+                            lastCamp[i] = key
+                        end
+                    end
+                    prev[i][1], prev[i][2] = a.x, a.y
+                end
+                if not S.running and S.phaseIndex < #(S.phases or {}) then
+                    S.running, S.hp = true, 100
+                end
+                if not S.running then break end
+            end
+            for _, a in ipairs(S.allies) do
+                count[a.role] = (count[a.role] or 0) + 1
+            end
+            T:Stop()
+            if os_diag then
+                return string.format("DIAG frames=%d backMoveFrames=%d resites=%d",
+                    frames, backMoveFrames, resites)
+            end
+
+            local function per(role)
+                if not count[role] or count[role] == 0 then return nil end
+                return (moved[role] or 0) / count[role]
+            end
+            local melee = per("MELEE")
+            local ranged = per("RANGED")
+            local healer = per("HEALER")
+            if not (melee and ranged and healer) then
+                return "a role was missing from the raid"
+            end
+            local back = math.max(ranged, healer)
+            -- A real margin, not a hair. The first version of this
+            -- passed at 2606 against 2701, which is not "holding
+            -- station" by any reading -- it is the same churn with a
+            -- rounding error on top.
+            if back >= melee * 0.75 then
+                return string.format(
+                    "ranged/healers moved %.0f each against melee %.0f -- the back is still churning",
+                    back, melee)
+            end
+            return string.format("ok:%.0f per ranged against %.0f per melee", back, melee)
+        end
+    """)(ns)
+    if camps and str(camps).startswith("ok:"):
+        print("  ok   trainer camps: ranged hold station (%s)" % str(camps)[3:])
+    else:
+        print("  FAIL trainer camps: %s" % camps)
+        failures.append(("trainer camps", str(camps)))
+
     # Phases.
     #
     # The whole point of the rebuild, and the one claim nothing else here
