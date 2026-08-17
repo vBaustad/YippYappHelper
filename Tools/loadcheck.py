@@ -3573,6 +3573,129 @@ def main():
         print("  FAIL trainer frostfire: %s" % volley)
         failures.append(("trainer frostfire", str(volley)))
 
+    # Alternating soaks.
+    #
+    # Sszorak's Mutilate and the Twin Fangs' Ravenous Feast both leave a
+    # debuff that makes the NEXT one lethal, and both were plain soaks --
+    # so standing in every circle scored perfectly, and on Ravenous Feast
+    # it also cleared six stacks, which made the most dangerous play in
+    # the fight the highest-scoring one.
+    #
+    # The check drives two players through the same rounds: one who soaks
+    # everything, one who sits out whatever they are marked for. The
+    # second has to come out ahead, or the mark is decoration.
+    alt = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+
+            local function run(id, mark, obeyMark)
+                math.randomseed(3421)
+                T:Start(id, false)
+                S.countdown = 0
+                local soaked, satOut = 0, 0
+                local passed, failed = 0, 0
+                for _ = 1, 2400 do
+                    S.firing = false
+                    -- Health and the poison meter both pinned: the
+                    -- subject here is the mark, and a Twin Fangs driver
+                    -- that never shoots hits eleven stacks in phase one
+                    -- and dies before Ravenous Feast exists -- which
+                    -- reported nought against nought and passed nothing.
+                    S.hp, S.stacks = 100, 0
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    for _, bi in ipairs(S.bossActors) do bi.hp = bi.maxHp end
+                    -- The nearest soak circle that is currently casting.
+                    local best, bd
+                    for _, a in ipairs(S.actors) do
+                        if a.kind == "soak" and not a.dead then
+                            local d = math.sqrt((a.x - S.px) ^ 2 + (a.y - S.py) ^ 2)
+                            if not bd or d < bd then best, bd = a, d end
+                        end
+                    end
+                    local marked = (S.debuffs[mark] or 0) > S.time
+                    if best then
+                        if obeyMark and marked then
+                            -- Walk out of it, and stay out.
+                            local dx, dy = S.px - best.x, S.py - best.y
+                            local d = math.sqrt(dx * dx + dy * dy)
+                            if d < 0.001 then dx, dy, d = 1, 0, 1 end
+                            S.px = best.x + dx / d * (best.r + 22)
+                            S.py = best.y + dy / d * (best.r + 22)
+                            satOut = satOut + 1
+                        else
+                            S.px, S.py = best.x, best.y
+                            soaked = soaked + 1
+                        end
+                    end
+                    -- Attributed to the SOAK, not to the round.
+                    --
+                    -- The driver walks the player in and out of circles,
+                    -- so the two runs stand in different places and eat
+                    -- different amounts of everything else on the floor.
+                    -- Totalling the round's misses measured that, and
+                    -- reported the alternating player as worse while the
+                    -- mark was working perfectly.
+                    local live = {}
+                    for _, a in ipairs(S.actors) do
+                        if a.kind == "soak" then live[a] = true end
+                    end
+                    local p, m = S.passed, S.failed
+                    update(f, 0.05)
+                    local still = {}
+                    for _, a in ipairs(S.actors) do
+                        if a.kind == "soak" then still[a] = true end
+                    end
+                    local resolved = false
+                    for a in pairs(live) do
+                        if not still[a] then resolved = true end
+                    end
+                    if resolved then
+                        passed = passed + (S.passed - p)
+                        failed = failed + (S.failed - m)
+                    end
+                    if not S.running then break end
+                end
+                T:Stop()
+                return passed, failed
+            end
+
+            local told = {}
+            for _, case in ipairs({
+                { id = "sisterrag", mark = "Mutilated", label = "Mutilate" },
+                { id = "twinfangs", mark = "Gorged",    label = "Ravenous Feast" },
+            }) do
+                local greedyPass, greedyFail = run(case.id, case.mark, false)
+                local smartPass, smartFail = run(case.id, case.mark, true)
+                told[#told + 1] = string.format("%s %d->%d missed",
+                    case.label, greedyFail, smartFail)
+                if greedyFail == 0 then
+                    problems[#problems + 1] = case.label ..
+                        ": soaking every circle was never punished at all"
+                end
+                -- Judged on MISSES, not on passes. Sitting one out is
+                -- itself credited, so both players accumulate passes;
+                -- what separates them is that the greedy one is punished
+                -- for soaking while marked, and that is the whole claim.
+                if smartFail >= greedyFail then
+                    problems[#problems + 1] = string.format(
+                        "%s: soaking everything missed %d and alternating missed %d",
+                        case.label, greedyFail, smartFail)
+                end
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return "ok:" .. table.concat(told, ", ")
+        end
+    """)(ns)
+    if alt and str(alt).startswith("ok:"):
+        print("  ok   trainer alternating soaks: %s" % str(alt)[3:])
+    else:
+        print("  FAIL trainer alternating soaks: %s" % alt)
+        failures.append(("trainer alternating soaks", str(alt)))
+
     # Ranged and healers hold still.
     #
     # The formation used to rotate wholesale with the boss's facing,
@@ -3863,7 +3986,16 @@ def main():
             end
 
             local mostInGrouped, mostInOpen = 0, 0
-            for _, id in ipairs({ "twinfangs", "sisterrag" }) do
+            -- The Sentinels and the Coiled Altar are in this list for
+            -- the CONTROL half of it.
+            --
+            -- Debilitating Miasma and Guillotine are the only plain
+            -- whole-raid soaks left in the raid: once Mutilate and
+            -- Ravenous Feast gained their marks, every soak on the two
+            -- fights this check used to sample was either grouped or
+            -- split, and "everybody still goes to an ungrouped one" had
+            -- nothing left to be true of.
+            for _, id in ipairs({ "twinfangs", "sisterrag", "sentinels", "alteredfangs" }) do
                 T:Start(id, false)
                 S.countdown = 0
                 local budget = 0
@@ -3883,9 +4015,22 @@ def main():
                         if act.kind == "soak" and not act.resolved
                             and (S.time - act.born) > (act.cast or 1) * 0.75 then
                             local n = inSoak(act)
+                            -- A grouped soak counts however else it is
+                            -- tagged -- grouping is what is being
+                            -- measured, and Mutilate is both grouped and
+                            -- split.
+                            --
+                            -- The OPEN sample is the fussy one. It is
+                            -- the control, and it only means anything
+                            -- for a soak the whole raid should go to, so
+                            -- a split soak (whoever just took one stays
+                            -- out) and a tank soak (one body by
+                            -- definition) are both disqualified. Letting
+                            -- a marked one in measured the mark working
+                            -- and reported it as grouping failing.
                             if act.group then
                                 if n > mostInGrouped then mostInGrouped = n end
-                            else
+                            elseif not act.marks and not act.soakBy then
                                 if n > mostInOpen then mostInOpen = n end
                             end
                         end

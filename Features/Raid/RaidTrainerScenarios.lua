@@ -658,10 +658,30 @@ local function SszorakPhase(dur, floor)
                 where = "boss", cast = 2, width = 34, damage = 26,
                 call = "Ravage -- out of the cone",
             }),
-            Every(8, 16, 3, {
+            -- Mutilate ALTERNATES, and until now nothing said so.
+            --
+            -- "It splits between soakers and leaves +500% from the NEXT
+            -- one for 22 seconds -- which is the whole reason for two
+            -- groups." That sentence IS the mechanic, and this was a
+            -- plain soak on a sixteen-second loop: soaking every single
+            -- one of them scored perfectly, which is the play that kills
+            -- you on the real boss.
+            --
+            -- `marks` is the machinery Hungering Pyre already uses. The
+            -- duration sits just past the cadence, so being marked costs
+            -- exactly the next cast and no more -- that is the
+            -- alternation, expressed as something one player can feel.
+            Every(8, 32, 2, {
                 kind = "soak", name = "Mutilate", school = "physical",
                 group = 1, cast = 3, r = 15, damage = 24,
-                call = "Mutilate -- your group's turn",
+                marks = "Mutilated", marksFor = 17,
+                call = "Mutilate -- first group soaks",
+            }),
+            Every(24, 32, 1, {
+                kind = "soak", name = "Mutilate", school = "physical",
+                group = 2, cast = 3, r = 15, damage = 24,
+                marks = "Mutilated", marksFor = 17,
+                call = "Mutilate -- second group's turn",
             }),
             Every(11, 16, 3, {
                 kind = "line", name = "Ravage", school = "physical",
@@ -815,12 +835,24 @@ SC.twinfangs = {
             name = "Ravenous Feast", duration = 18, hpFloor = 58,
             call = "Three pops -- soak ONE of them",
             events = Timeline(
+                -- "Soaking leaves +800% damage from it for 8 seconds, so
+                -- you take ONE pop and get out."
+                --
+                -- Without the mark this was three free stack-clears in a
+                -- row: standing still through all of them cleared six
+                -- stacks and scored three passes, which is the single
+                -- most lethal thing a player can do on this boss and the
+                -- trainer rewarded it. The mark runs past the third pop,
+                -- so soaking any one of them sits you out of the rest.
                 { at = 2,  kind = "soak", name = "Ravenous Feast 1", school = "blood", group = 1,
-                  cast = 3, r = 16, damage = 20, clears = 2, call = "First pop" },
+                  cast = 3, r = 16, damage = 20, clears = 2,
+                  marks = "Gorged", marksFor = 9, call = "First pop -- soak ONE of the three" },
                 { at = 6,  kind = "soak", name = "Ravenous Feast 2", school = "blood", group = 2,
-                  cast = 3, r = 16, damage = 20, clears = 2, call = "Second pop" },
+                  cast = 3, r = 16, damage = 20, clears = 2,
+                  marks = "Gorged", marksFor = 9, call = "Second pop" },
                 { at = 10, kind = "soak", name = "Ravenous Feast 3", school = "blood", group = 3,
-                  cast = 3, r = 16, damage = 20, clears = 2, call = "Third pop" },
+                  cast = 3, r = 16, damage = 20, clears = 2,
+                  marks = "Gorged", marksFor = 9, call = "Third pop" },
                 -- The stacks you cleared come back as a slime add.
                 { at = 13, kind = "chaser", name = "Reclaimed Slime", school = "nature",
                   goal = "player", speed = 10, hp = 130, art = "blob", r = 6.5,
@@ -842,6 +874,7 @@ SC.twinfangs = {
                 Every(20, 5, 3, {
                     kind = "soak", name = "Ravenous Feast", school = "blood",
                     cast = 3, r = 16, damage = 20, clears = 2,
+                    marks = "Gorged", marksFor = 9,
                 }),
                 Every(8, 8, 3, {
                     kind = "orb", name = "Caustic Globule", school = "nature",
