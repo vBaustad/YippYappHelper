@@ -2659,6 +2659,15 @@ def main():
             -- occasional red makes every green ambiguous and teaches you
             -- to re-run until it goes quiet. The seed is fixed as well,
             -- so this is reproducible rather than merely likely.
+            -- Reseeded HERE, not only at startup.
+            --
+            -- A seed fixed once makes a run reproducible but leaves
+            -- this outcome hostage to how many random numbers every
+            -- file loaded before it happened to consume. An edit in
+            -- an unrelated page shifted the sequence and turned this
+            -- red. Seeding at the point of use makes these rounds
+            -- depend on the trainer and on nothing else.
+            math.randomseed(20260817)
             local best, killed = 0, false
             for _ = 1, 5 do
                 T:Start("twinfangs", false)
@@ -3528,6 +3537,104 @@ def main():
     else:
         print("  FAIL trainer redraw: %s" % reshow)
         failures.append(("trainer redraw", str(reshow)))
+
+    # The raid SPLITS on a two-boss fight, and stays split.
+    #
+    # Every ally used to hold formation on S.bossActor, which is the
+    # PLAYER's boss -- so the whole raid moved to whichever golem you
+    # were standing on and the far one was left alone. That is the exact
+    # thing the Sentinels forbid.
+    split = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            math.randomseed(3445)
+
+            local function census()
+                local near = { 0, 0 }
+                for _, a in ipairs(S.allies) do
+                    local best, bd
+                    for i, b in ipairs(S.bossActors) do
+                        local d = math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2)
+                        if not bd or d < bd then best, bd = i, d end
+                    end
+                    if best then near[best] = near[best] + 1 end
+                end
+                return near[1], near[2]
+            end
+
+            T:Start("sentinels", false)
+            S.countdown = 0
+            -- Sit on ONE golem the whole time. If the raid follows the
+            -- player, everybody ends up on that side.
+            local sideOne, sideTwo
+            for _ = 1, 600 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = S.bossActors[1].x, S.bossActors[1].y
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+            end
+            sideOne, sideTwo = census()
+            local phaseAt = S.phaseIndex
+            T:Stop()
+
+            if sideOne == 0 or sideTwo == 0 then
+                return string.format(
+                    "the raid piled %d/%d onto the two golems -- it is not split",
+                    sideOne, sideTwo)
+            end
+            -- Each ally keeps the side it was given, MOST of the time.
+            --
+            -- Sampled across the round rather than snapshotted at the
+            -- end: a whole-raid soak or a stack legitimately pulls
+            -- everybody across the room for a few seconds, and catching
+            -- one of those moments says nothing about where the raid
+            -- lives. What matters is that they go back.
+            local onSide, samples = 0, 0
+            T:Start("sentinels", false)
+            S.countdown = 0
+            for _ = 1, 600 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -80
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+                -- Not during Vitriolic Stasis. The pairing sends the raid
+                -- to spots that have nothing to do with either golem --
+                -- that IS the mechanic -- so counting those frames
+                -- measures the number game and calls it drift. Two
+                -- stasis phases in a round is a fifth of it.
+                local pairing = false
+                for _, a in ipairs(S.allies) do
+                    if a.meetSpot then pairing = true break end
+                end
+                if not pairing then
+                    for _, a in ipairs(S.allies) do
+                        local own, other = S.bossActors[a.side], S.bossActors[3 - a.side]
+                        if own and other then
+                            samples = samples + 1
+                            local dOwn = math.sqrt((a.x - own.x) ^ 2 + (a.y - own.y) ^ 2)
+                            local dOther = math.sqrt((a.x - other.x) ^ 2 + (a.y - other.y) ^ 2)
+                            if dOwn <= dOther then onSide = onSide + 1 end
+                        end
+                    end
+                end
+            end
+            T:Stop()
+            local held = samples > 0 and (onSide / samples) or 0
+            if held < 0.75 then
+                return string.format(
+                    "allies were on their own golem only %.0f%% of the time", held * 100)
+            end
+            return string.format("ok:%d/%d across the two golems, on-side %.0f%% (phase %d)",
+                sideOne, sideTwo, held * 100, phaseAt)
+        end
+    """)(ns)
+    if split and str(split).startswith("ok:"):
+        print("  ok   trainer raid split: %s" % str(split)[3:])
+    else:
+        print("  FAIL trainer raid split: %s" % split)
+        failures.append(("trainer raid split", str(split)))
 
     # The Sentinels' number game has to be PLAYABLE.
     #
@@ -4839,7 +4946,8 @@ def main():
             -- fights this check used to sample was either grouped or
             -- split, and "everybody still goes to an ungrouped one" had
             -- nothing left to be true of.
-            for _, id in ipairs({ "twinfangs", "sisterrag", "sentinels", "alteredfangs" }) do
+            for _, id in ipairs({ "twinfangs", "sisterrag", "sentinels",
+                                  "alteredfangs", "vashnik", "explorers" }) do
                 T:Start(id, false)
                 S.countdown = 0
                 local budget = 0
@@ -4872,9 +4980,19 @@ def main():
                             -- definition) are both disqualified. Letting
                             -- a marked one in measured the mark working
                             -- and reported it as grouping failing.
-                            if act.group then
+                            -- Grouping measured WITHOUT marks in the way.
+                            --
+                            -- A grouped soak that also marks conflates
+                            -- two rules: on the Twin Fangs both group-one
+                            -- allies were legitimately still Gorged when
+                            -- their pop came round, so the group drew
+                            -- nobody and the check read that as grouping
+                            -- being broken. Vashnik's Catalyst and the
+                            -- Explorers' Mighty Thud are grouped and
+                            -- unmarked, which is what this wants.
+                            if act.group and not act.marks then
                                 if n > mostInGrouped then mostInGrouped = n end
-                            elseif not act.marks and not act.soakBy then
+                            elseif not act.group and not act.marks and not act.soakBy then
                                 if n > mostInOpen then mostInOpen = n end
                             end
                         end

@@ -541,6 +541,67 @@ local function OvAcquire(parent, font)
     return fs
 end
 
+------------------------------------------------------------
+-- The empty state.
+--
+-- This page reads a group, and most of the time you open it there is
+-- not one -- so the no-group case is not an edge case, it is the
+-- common one. It was four words in the top-left corner of an
+-- otherwise blank page, which reads as something failing to load
+-- rather than as a page waiting for a group.
+--
+-- Built once and cached on the container: the pool above holds font
+-- strings only, so a ring texture made on every refresh would leak
+-- one per refresh.
+------------------------------------------------------------
+local function OverviewEmptyState()
+    if overviewContainer._empty then return overviewContainer._empty end
+
+    local W = ns.Widgets
+    local e = CreateFrame("Frame", nil, overviewContainer)
+    e:SetPoint("TOP", overviewContainer, "TOP", 0, -70)
+    e:SetPoint("LEFT", overviewContainer, "LEFT", 0, 0)
+    e:SetPoint("RIGHT", overviewContainer, "RIGHT", 0, 0)
+    e:SetHeight(190)
+
+    -- One of the addon own shapes rather than a game icon: a file we
+    -- ship cannot be missing, and a ring is how this UI draws a group
+    -- everywhere else.
+    e.ring = e:CreateTexture(nil, "ARTWORK")
+    e.ring:SetSize(54, 54)
+    e.ring:SetPoint("TOP", e, "TOP", 0, 0)
+    e.ring:SetTexture([[Interface\AddOns\YippYappHelper\Media\CircleRing]])
+    e.ring:SetVertexColor(W:Color("faint"))
+    e.ring:SetAlpha(0.7)
+
+    e.title = W:Label(e, "GameFontNormalLarge", "CENTER")
+    e.title:SetPoint("TOP", e.ring, "BOTTOM", 0, -12)
+    e.title:SetPoint("LEFT", e, "LEFT", 0, 0)
+    e.title:SetPoint("RIGHT", e, "RIGHT", 0, 0)
+    e.title:SetText("Not in a group")
+
+    -- What the page WILL show, not only what it cannot. An empty state
+    -- that reports the absence teaches nothing, and this is the one
+    -- moment the page gets to explain itself.
+    e.body = W:Label(e, "GameFontNormal", "CENTER")
+    e.body:SetPoint("TOP", e.title, "BOTTOM", 0, -10)
+    e.body:SetPoint("LEFT", e, "LEFT", 24, 0)
+    e.body:SetPoint("RIGHT", e, "RIGHT", -24, 0)
+    e.body:SetTextColor(W:Color("muted"))
+    e.body:SetText("Join a party or raid and this fills in with your roster and "
+        .. "roles, the group composition, which raid buffs nobody is bringing, "
+        .. "and who still has no food or flask.")
+
+    e.hint = W:Label(e, "GameFontNormalSmall", "CENTER")
+    e.hint:SetPoint("TOP", e.body, "BOTTOM", 0, -14)
+    e.hint:SetPoint("LEFT", e, "LEFT", 24, 0)
+    e.hint:SetPoint("RIGHT", e, "RIGHT", -24, 0)
+    e.hint:SetTextColor(W:Color("faint"))
+    e.hint:SetText("The Boss Guide tab works on your own.")
+
+    overviewContainer._empty = e
+    return e
+end
 function ns:RefreshRaidOverview()
     for i = 1, ovPoolIdx do ovPool[i]:Hide() end
     ovPoolIdx = 0
@@ -548,11 +609,10 @@ function ns:RefreshRaidOverview()
     local roster = GetRaidRoster()
 
     if #roster == 0 then
-        local fs = OvAcquire(overviewContainer, "GameFontNormal")
-        fs:SetPoint("TOPLEFT", SECTION_PAD, -8)
-        fs:SetText(ns.Widgets:Tint("muted", "Not in a group"))
+        OverviewEmptyState():Show()
         return
     end
+    if overviewContainer._empty then overviewContainer._empty:Hide() end
 
     local tanks, healers, dps = 0, 0, 0
     local classCounts = {}

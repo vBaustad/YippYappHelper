@@ -893,7 +893,19 @@ SC.twinfangs = {
             name = "Vexil and Itras", duration = 46, hpFloor = 58,
             call = "Watch the stack count, not your health",
             events = Timeline(
-                Every(4, 11, 5, { kind = "tax", name = "Venomous Emergence", stack = 1 }),
+                -- Six, not five.
+                --
+                -- The raid now clears its globules properly -- allies
+                -- used to get stuck on a target that had been wiped at a
+                -- phase boundary and stopped collecting for the rest of
+                -- the fight -- so far fewer are left to expire into a
+                -- raid-wide stack. Good behaviour, but it left the
+                -- meter one short of its cap, and a soft enrage that
+                -- cannot actually reach the cap is not a timer.
+                --
+                -- Raised on the mechanic the guide says is unavoidable
+                -- rather than by making the raid worse at its job.
+                Every(4, 9, 6, { kind = "tax", name = "Venomous Emergence", stack = 1 }),
                 -- The three serpents that spawn with it, firing Corrosive
                 -- Spit lines at random players.
                 Every(5, 12, 4, {

@@ -1052,6 +1052,20 @@ local function TickBothDots(dt)
         bothDotsText:Hide()
         return
     end
+    -- Not while they are warded.
+    --
+    -- Vitriolic Stasis takes both Sentinels out of the fight, and their
+    -- auras go with them -- so the middle of the room is safe for
+    -- exactly as long as the number game lasts, which is the whole
+    -- reason you can walk across it to find your partner. Punishing the
+    -- crossing made the one phase that asks you to move the one phase
+    -- that charged you for it.
+    local phase = CurrentPhase()
+    if phase and phase.bossImmune then
+        bothDotsText:Hide()
+        S.bothDotsSince = nil
+        return
+    end
     local n = 0
     for _, b in ipairs(S.bossActors) do
         if b.hp > 0 and dist(S.px, S.py, b.x, b.y) <= (rule.range or 46) then
@@ -1171,6 +1185,23 @@ local function ResetAllies()
     for i = 1, ALLY_COUNT do
         local spot = FORMATION[i] or FORMATION[#FORMATION]
         S.allies[i] = {
+            -- Which boss this ally is standing on, for the fights that
+            -- have two. Half and half, fixed for the round.
+            --
+            -- The Entombed Sentinels' first rule is that the raid splits
+            -- and each half stays on its own boss -- so a raid that all
+            -- held formation on whichever golem the PLAYER was standing
+            -- on was showing the one thing the encounter forbids, and
+            -- the far golem stood alone with nobody on it.
+            -- INTERLEAVED, not cut down the middle.
+            --
+            -- The formation is ordered tank, melee, melee, ranged,
+            -- ranged, healer, so halving the list put the tank and both
+            -- melee on one golem and both ranged and the healer on the
+            -- other. Alternating gives each side a tank or a melee, a
+            -- ranged, and something else -- which is what a raid
+            -- splitting for this fight actually does.
+            side = ((i - 1) % 2) + 1,
             role = spot.role,
             formAngle = spot.angle,
             formDist = spot.dist,
@@ -1546,14 +1577,38 @@ end
 -- AllyTarget, which runs per ally per frame.
 local ALLY_RANK = { caster = 3, chaser = 2, stalker = 1 }
 
+--- The boss this ally is stationed on.
+---
+--- `S.bossActor` is the PLAYER's boss -- on the Sentinels it follows
+--- whichever side the current phase puts you on. Using it for the whole
+--- raid moved everybody to your golem whenever you swapped, which is the
+--- opposite of the rule the fight is built on.
+local function AllyBoss(ally)
+    return S.bossActors[ally.side or 1] or S.bossActor
+end
+
 local function AllyTarget(ally)
     -- The tank holds the boss and does not chase adds. One fewer body on
     -- the pack, and it keeps the formation legible.
-    if ally.role == "TANK" then return S.bossActor end
+    if ally.role == "TANK" then return AllyBoss(ally) end
     local RANK = ALLY_RANK
     local best, bestD, bestRank
+    -- On a two-boss fight, only what is on YOUR side.
+    --
+    -- Without this an ally would cross the room for a nearer add and
+    -- simply stay there, because the formation it holds afterwards is
+    -- built around whatever it is shooting. Half the raid ended up on
+    -- the wrong golem one add at a time, which is the rule the fight is
+    -- built on being broken slowly instead of all at once.
+    local mine = (#S.bossActors > 1) and AllyBoss(ally) or nil
+    local theirs = mine and S.bossActors[3 - (ally.side or 1)] or nil
     for _, a in ipairs(S.actors) do
-        if a.enemy and not a.dead and a.hp and a.hp > 0 then
+        local onMySide = true
+        if theirs then
+            onMySide = dist(a.x, a.y, mine.x, mine.y)
+                <= dist(a.x, a.y, theirs.x, theirs.y)
+        end
+        if onMySide and a.enemy and not a.dead and a.hp and a.hp > 0 then
             local rank = RANK[a.kind] or 1
             local d = dist(ally.x, ally.y, a.x, a.y)
             if not bestRank or rank > bestRank or (rank == bestRank and d < bestD) then
@@ -1561,7 +1616,7 @@ local function AllyTarget(ally)
             end
         end
     end
-    return best or NearestBoss(ally.x, ally.y)
+    return best or AllyBoss(ally)
 end
 
 --- Put a couple of allies on collection duty.
@@ -1641,6 +1696,18 @@ local function AllyCamp(ally, t)
             end
             if S.scenario and S.scenario.well
                 and math.sqrt(cx2 * cx2 + cy2 * cy2) < 30 then
+                score = score + 400
+            end
+            -- Stay on your own boss.
+            --
+            -- A camp sits forty-four units behind its boss and the two
+            -- Sentinels are eighty apart, so "behind mine" is routinely
+            -- closer to THEIRS -- the ranged half of the raid drifted
+            -- across the midline without ever choosing to, which is the
+            -- split coming undone by geometry rather than by decision.
+            local other = (#S.bossActors > 1)
+                and S.bossActors[3 - (ally.side or 1)] or nil
+            if other and dist(cx2, cy2, other.x, other.y) < dist(cx2, cy2, t.x, t.y) then
                 score = score + 400
             end
             if not bestScore or score < bestScore then
@@ -1748,10 +1815,10 @@ local function AllyGoal(ally, index)
     -- itself was re-sited only twelve times in two minutes. Having
     -- range means not having to walk to the thing.
     if ally.role == "RANGED" or ally.role == "HEALER" then
-        local anchor = S.bossActor or t
+        local anchor = AllyBoss(ally) or t
         local c = ally.camp
         -- Only close in when the target is genuinely out of reach.
-        if c and t and t ~= S.bossActor and dist(c.x, c.y, t.x, t.y) > 78 then
+        if c and t and t ~= AllyBoss(ally) and dist(c.x, c.y, t.x, t.y) > 78 then
             local dx2, dy2 = t.x - c.x, t.y - c.y
             local dd = math.sqrt(dx2 * dx2 + dy2 * dy2)
             return t.x - dx2 / dd * 60, t.y - dy2 / dd * 60
@@ -1759,7 +1826,7 @@ local function AllyGoal(ally, index)
         return AllyCamp(ally, anchor)
     end
 
-    if t == S.bossActor then
+    if t == AllyBoss(ally) then
         local rot = (t.facing or TANK_ANGLE) - TANK_ANGLE
         --
         -- Rotating the whole formation with the facing was geometrically
@@ -1817,6 +1884,15 @@ local function UpdateAllies(dt)
         if d > 0.001 then dx, dy = dx / d, dy / d else dx, dy = 0, 0 end
 
         local px, py = DangerPush(ally.x, ally.y)
+        -- An ally under pairing orders ignores the danger field.
+        --
+        -- It is being sent to an exact spot, and the repulsion fought it
+        -- the whole way: with two golems on the floor the middle sits
+        -- inside somebody's cone, so the partner told to wait there was
+        -- pushed off it every frame and never arrived. During Vitriolic
+        -- Stasis both bosses are warded and casting nothing anyway,
+        -- which is precisely when the raid can afford to stand still.
+        if ally.meetSpot then px, py = 0, 0 end
         local weight = (ally.role == "TANK") and (DANGER_WEIGHT * 0.35) or DANGER_WEIGHT
         if ally.role == "TANK" then
             -- The tank does not dodge frontals at all. It is the one the
@@ -4777,6 +4853,18 @@ function ClearActors()
     end
     wipe(S.actors)
     ClearShots()
+    -- Every ally reference INTO that list has to go with it.
+    --
+    -- The actors are wiped without being marked dead, so an ally still
+    -- holding one kept walking to something that no longer existed --
+    -- and box duty sits above soaks in the goal ladder, so those allies
+    -- never took another assignment for the rest of the fight. On the
+    -- Twin Fangs that meant nobody soaked a single Ravenous Feast after
+    -- phase one, while the raid looked busy the whole time.
+    for _, ally in ipairs(S.allies) do
+        ally.orbTarget = nil
+        ally.goalSoak = nil
+    end
     floorTex:SetVertexColor(0.07, 0.07, 0.09, 1)
 end
 
