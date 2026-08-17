@@ -18,20 +18,42 @@ local _, ns = ...
 ------------------------------------------------------------
 -- SOURCES, and what each one is good for.
 --
--- 1. Per-boss guides (Method, via transcript) for Nek'zali, the
---    Sentinels, the Explorers, Vashnik, Sszorak and the Twin Fangs.
---    These are the authority for MECHANICS: they name the abilities,
---    give the numbers, and say what the raid does about each one. Where
---    they disagreed with the earlier all-boss preview, they won.
+-- 1. PRIMARY, and the one that overrules the rest: Automatic Jack's
+--    "Venomous Abyss Raid Boss Guide" (youtu.be/ktdXrfmJYZg), a full
+--    PTR walkthrough of every boss that was tested. Supplied 2026-08-17.
 --
--- 2. An all-boss preview covering the whole raid, which is the only
---    source for The Coiled Altar until a full guide exists.
+--    This replaced an earlier pass built from a much worse transcript,
+--    and it corrected a lot -- some of it embarrassing. Kept as a list
+--    rather than quietly fixed, because every one of these was written
+--    down confidently and was wrong:
+--      * the Sentinels are the BLOOD and the BREATH of Ula'tek. They
+--        were recorded here as a "green golem" and a "red golem".
+--      * Vitriolic Stasis IS the intermission -- the venom-orb maths and
+--        the healing of the weaker boss are one event, not two -- and
+--        the orbs are a single count summing to FOUR, not two colours.
+--      * Trader Gebbo should die LAST. This file said first.
+--      * Frostfire Volley's Elemental Explosion is caused BY clearing,
+--        so the clears are staggered. This file had it as a punishment
+--        for failing to clear, which is close to backwards.
+--      * Mutilate is a frontal cone aimed AT the raid, not a circle.
+--      * Ravenous Feast removes ONE stack per cast, not one per soak.
+--      * the kill-them-together enrage belongs to the Coiled Altar.
+--      * "Zul'jin is resurrected where he died" appears in no source
+--        that survived, and is gone.
 --
--- Both are PTR footage. Tuning numbers may have moved, and the Twin
--- Fangs was reworked after the footage was taken -- flagged on that
--- boss rather than left as a general disclaimer nobody reads.
+-- 2. NorthernSkyRaidTools' saved variables, read by Tools/extract_nsrt.py.
+--    The structural half: which phase an ability belongs to, and
+--    seconds-from-pull timers. It independently corroborates the guide
+--    above -- the Sentinels' events are named BloodSoak / PoisonAdd (not
+--    green and red), their intermission is labelled "Number Game", and
+--    Sszorak and the Twin Fangs are single-phase fights with a Damage
+--    Amp / Watch Side window rather than true intermissions.
 --
 -- 3. Names come from the client, not from any video -- see below.
+--
+-- All of the above is PTR footage. Tuning numbers may have moved, and
+-- the Twin Fangs was reworked after the footage was taken -- flagged on
+-- that boss rather than left as a general disclaimer nobody reads.
 --
 ------------------------------------------------------------
 -- A NOTE ON NAMES.
@@ -129,12 +151,12 @@ G.bosses = {
         shape   = "2 phases + intermission",
 
         rules = {
-            "Kill the Restless Amani adds before they walk into the well. Magic "
-                .. "damage strips their shield, then they die like normal adds.",
-            "Every add that reaches the well feeds the boss 5 energy and dots the "
-                .. "raid. At 100 energy she enrages and the pull is over.",
-            "Essence Rend leaves a PERMANENT puddle where it ends. Walk to the "
-                .. "side of the room first -- never leave one in the middle.",
+            "Never stand in the well in the middle. It hurts enormously AND feeds "
+                .. "her energy, which is the one bar that ends the pull.",
+            "Kill the Restless Amani before they reach the well. Breaking their "
+                .. "shield stops them fixating on it and lets a tank pick them up.",
+            "Essence Rend leaves a PERMANENT void zone where it ends. Get knocked to "
+                .. "the edge and drop it there -- never in the middle.",
         },
 
         phases = {
@@ -144,86 +166,92 @@ G.bosses = {
                 lines = {
                     "Tank her at the entrance, facing away. The raid stands behind "
                         .. "her, and nobody stands in the well.",
-                    "Restless Amani spawn from the sides of the room and walk at the "
-                        .. "well for as long as their shield holds. Magic damage is "
-                        .. "what strips it.",
-                    "Possession Barrage sends four spirits out at the tank. Each one "
-                        .. "hits the whole raid harder the closer you are, and pops on "
-                        .. "the first player it touches -- so the tank stands 30 yards "
-                        .. "out and nobody else stands in the line.",
-                    "Haunting Strikes cuts the tank's incoming healing. Taunt swap at "
-                        .. "30-40% before the healers start shouting.",
-                    "Essence Rend tugs you toward the middle for a moment, then ticks "
-                        .. "for 15 seconds. It is dispellable, and it drops that "
-                        .. "permanent puddle wherever you are when it ends.",
-                    "Soul Coil Ignition is four raid hits back to back, on her own "
-                        .. "timer. Healing cooldown.",
+                    "Soul Coil Ignition opens the fight: a big raid hit that also "
+                        .. "spawns void zones which knock you back. Healing cooldown.",
+                    "Essence Rend puts a ghost on several players. It drags you for a "
+                        .. "moment, then attaches and knocks you back along the line it "
+                        .. "came from.",
+                    "Ride that knockback to the EDGE. Then dispel -- personals or mass "
+                        .. "dispel -- and the latent cultist void zone lands out there "
+                        .. "instead of in the raid.",
+                    "Restless Amani spawn at the edges and walk at the well. Grip and "
+                        .. "knock them into PILES, because where they die matters later.",
+                    "Break their shields as fast as you can. A shieldless Amani stops "
+                        .. "fixating on the well and can simply be tanked.",
+                    "Possession Barrage fires souls out at the tank. They hurt more the "
+                        .. "closer you are to where they land, and nobody but the tank "
+                        .. "should meet them.",
+                    "Hollowing Strikes cuts the tank's healing and absorbs by 5% a "
+                        .. "stack. Swap somewhere around 8 to 10.",
                 },
             },
             {
                 name = "Intermission",
-                tag  = "at 50% -- cleanup duty",
+                tag  = "at 50% -- burn the piles",
                 lines = {
-                    "She goes to the middle and turns immune. Soul Transfer channels "
-                        .. "into one side of the room for 15 seconds and spawns an "
-                        .. "Echo. Do not be standing in the beam when it lands.",
-                    "Two Echoes, one after the other. Kill both and the intermission "
-                        .. "ends.",
-                    "Hungering Pyre drops a big circle on the current tank. Soak it as "
-                        .. "a group to split the damage -- melee are the ones to send.",
-                    "Everybody who does not soak gets a Slithering Flame circle "
-                        .. "instead.",
-                    "Both of those BURN CORPSES, and that is the real job here: dead "
-                        .. "Amani come back as empowered adds through Vessel of "
-                        .. "Awakening.",
-                    "So park the Pyre on the biggest pile of bodies and walk your own "
-                        .. "circle over the leftovers.",
+                    "She hides in the well and turns immune. A second caster appears "
+                        .. "and starts producing Echoes at the edges of the room.",
+                    "Two Echoes, one after the other, each channelling Soul Transfer. "
+                        .. "Kill both and the intermission ends.",
+                    "Reposition the raid ON TOP of the Amani piles you made in phase "
+                        .. "one. That is the whole job here.",
+                    "Hungering Pyre splits fire damage between everyone soaking it, so "
+                        .. "melee stack for it -- on a pile of bodies.",
+                    "Everybody who does NOT soak gets Slithering Flame instead. Ranged "
+                        .. "spread out and walk theirs over the other piles.",
+                    "Either flame touching a corpse cremates it. You get two rounds of "
+                        .. "Pyre and two Echoes, and that is all the cleanup you ever "
+                        .. "get.",
                 },
             },
             {
                 name = "Phase two",
                 tag  = "50% to 0%, and the clock is her energy",
                 lines = {
-                    "Uncoiling is raid damage every second from here to the end. "
-                        .. "Healers are working.",
-                    "Invoke picks up every puddle from phase one and sets them "
-                        .. "travelling around the well. Watch them move.",
-                    "Everything from phase one keeps happening, adds included.",
-                    "Hero here, and kill her before she reaches 100 energy.",
+                    "Uncoiling stacks a permanent raid-wide dot that runs until she "
+                        .. "dies. The damage only goes up from here.",
+                    "Invoke wakes the latent cultist void zones you dropped at the "
+                        .. "edges and sends them moving across the room.",
+                    "Only SOME of them empower on each cast, so keep watching -- do "
+                        .. "not assume the whole floor is moving.",
+                    "Everything from phase one keeps happening, adds included, and "
+                        .. "there is no way left to burn a corpse.",
+                    "If she caps her energy she gains 500% damage, moves 150% faster "
+                        .. "and cannot be taunted. Hero here and race it.",
                 },
             },
         },
 
         heroic = {
-            "Every add that reaches the well also stacks Ritual Burn on the boss, so "
-                .. "each raid hit after it lands harder. One add is a mistake; three "
-                .. "in a row is a wipe.",
-            "Get to Soul Coil Ignition with zero Ritual Burn stacks. That is the "
-                .. "difference between a heal check and a reset.",
+            "Amani corpses LINGER on heroic, and can be reawakened later if you never "
+                .. "burned them. On normal they simply die.",
+            "That is why phase one is about making two or three tidy piles rather than "
+                .. "killing adds wherever they happen to be.",
         },
 
         roles = {
             DAMAGER = {
-                "Magic damage strips the add shields. If you have any, that is your "
-                    .. "job on every spawn.",
-                "Stuns, slows, roots and grips all work on them. One that is held is "
-                    .. "one that is not walking.",
-                "In the intermission, cleave the Echo and the adds together.",
+                "Break the Amani shields first. A held or tanked add is one that is "
+                    .. "not walking at the well.",
+                "Stuns, slows, roots and grips all work -- use them to build piles, "
+                    .. "not just to stop one add.",
+                "In the intermission, cleave the Echo and whatever is standing on the "
+                    .. "corpses together.",
             },
             HEALER = {
-                "Essence Rend is a magic dispel, but the puddle lands wherever that "
-                    .. "player is standing when it ends. Let them walk out first.",
-                "Stacking the raid and mass dispelling works -- as long as you do it "
-                    .. "away from the middle.",
-                "Phase two is constant passive damage on top of everything else. Save "
-                    .. "a cooldown for it.",
+                "Essence Rend is a dispel, but the void zone lands where that player "
+                    .. "is standing. Let the knockback finish first.",
+                "Mass dispel works beautifully here as long as the group is at the "
+                    .. "edge when you do it.",
+                "Phase two adds a permanent stacking dot on top of everything else. "
+                    .. "Save a cooldown for it.",
             },
             TANK = {
-                "Possession Barrage: stand 30 yards out, pointed away. Its spirits "
-                    .. "hurt by distance and pop on the first body they touch.",
-                "Swap on Haunting Strikes at 30-40% healing reduction.",
-                "Hungering Pyre lands on you in the intermission. Put it on the "
-                    .. "corpses.",
+                "Possession Barrage: stand well out and pointed away. The souls hurt "
+                    .. "by proximity to where they land.",
+                "Hollowing Strikes is 5% less healing per stack -- swap at 8 to 10.",
+                "Hungering Pyre lands on you in the intermission. Stand on the biggest "
+                    .. "pile of bodies for it.",
             },
         },
 
@@ -238,115 +266,103 @@ G.bosses = {
         ejID    = 2874,
         encounterID = 3445,
         accent  = { 0.45, 0.90, 0.40 },
-        oneLiner = "Two golems, 40 yards apart -- and then the raid does maths.",
-        shape   = "1 phase + the maths",
+        oneLiner = "Two bosses, one health bar between them -- and then the raid does maths.",
+        shape   = "2 sides, swapped at each intermission",
+        bring   = "poison and magic dispels",
 
         rules = {
-            "Keep the two golems at least 40 yards apart or they take 99% reduced "
-                .. "damage. One team left, one team right.",
-            "Keep their health even. At 100 energy Vitriolic Stasis heals the lower "
-                .. "one up to the higher, so a side that races ahead did that damage "
-                .. "for nothing.",
-            "In the intermission you get four orbs, red and green. Touch the player "
-                .. "whose GREEN orbs plus yours make exactly four.",
+            "Two bosses: the Blood of Ula'tek and the Breath of Ula'tek. Half the raid "
+                .. "on each, and they must die together.",
+            "Each one stacks its own 40-second dot on anyone within 40 yards. Standing "
+                .. "between them to hit both gives you both.",
+            "At maximum energy they go into Vitriolic Stasis. Your venom orbs plus one "
+                .. "other player's must add up to exactly FOUR.",
         },
 
         phases = {
             {
-                name = "The green golem",
-                tag  = "droplets and the blob",
+                name = "The Blood side",
+                tag  = "soak, then get to the edge",
                 lines = {
-                    "Toxic Droplets scatters orbs across the floor. Run over each one "
-                        .. "-- it hurts a little and leaves a small dot.",
-                    "One left alone for 60 seconds is a massive raid hit instead, so "
-                        .. "this is a real assignment and not a chore.",
-                    "Venom Coagulation spawns a blob that pulses raid damage until it "
-                        .. "dies. Priority target, every time.",
-                    "Blightburn fires green lines out and then back to the boss. Dodge "
-                        .. "them both ways.",
-                    "Empowering Slam is the tank hit. It ramps on whoever it keeps "
-                        .. "hitting and only resets when it lands on somebody else.",
+                    "Blood Venom Injection is the tank hit and it stacks. You swap "
+                        .. "bosses at maximum energy, so expect three or four.",
+                    "Soak the Toxic Droplet puddles on your side as soon as they land.",
+                    "Unstable Miasma drops a pool of blood and the whole side has to "
+                        .. "soak it together.",
+                    "Then get to the EDGE and stack with your allies, because what you "
+                        .. "just soaked comes back as puddles under all of you.",
+                    "Blighted Blood is a magic debuff on random players. Healers "
+                        .. "dispel it promptly.",
                 },
             },
             {
-                name = "The red golem",
-                tag  = "the harder side",
+                name = "The Breath side",
+                tag  = "the droplets travel",
                 lines = {
-                    "Start this side in a corner. Everything here leaves a puddle, and "
-                        .. "you will want the clean floor later.",
-                    "Blood Venom drops a puddle when it expires OR when it is "
-                        .. "dispelled. You get it from Blighted Blood, and from "
-                        .. "soaking.",
-                    "Debilitating Miasma lands on one player and has to be split by "
-                        .. "the whole side. Everybody soaks, together.",
-                    "Then walk somewhere useless before the puddles fall, because they "
-                        .. "land under every soaker a few seconds later.",
-                    "Injecting Strike is the tank hit -- the same ramp as the green "
-                        .. "side, plus a large puddle when the debuff expires.",
-                },
-            },
-            {
-                name = "The dots",
-                tag  = "why you swap sides at all",
-                lines = {
-                    "Each golem stacks its own dot on everyone in range, running 40 "
-                        .. "seconds.",
-                    "Swapping sides in the intermission is what lets those stacks fall "
-                        .. "off. It is not a positioning gimmick.",
-                    "Standing in the middle to hit both bosses gives you both dots. "
-                        .. "Multi-dot classes: briefly, not for the whole phase.",
+                    "This side sends Toxic Droplets out across the room, and tanks "
+                        .. "should soak as many as they can reach.",
+                    "DPS and healers help, with a personal up -- soaking these quickly "
+                        .. "is the difference between a chore and a wipe.",
+                    "Venom Coagulation spawns an add that radiates damage the whole "
+                        .. "time it lives. It arrives about once a minute and can hold "
+                        .. "on for 20 to 30 seconds.",
+                    "That add is the highest damage in the fight. Priority target, "
+                        .. "every time, and healers cycle a cooldown through it.",
+                    "Empowering Slam is this side's tank hit: heavy physical, and it "
+                        .. "ramps his follow-up attacks.",
                 },
             },
             {
                 name = "Intermission",
-                tag  = "Helical Toxins -- the maths bit",
+                tag  = "Vitriolic Stasis -- make four",
                 lines = {
-                    "Both bosses go immune. There is far more time than it feels like "
-                        .. "-- look around, and do not panic.",
-                    "Four orbs over every head, split between red and green.",
-                    "Find a player whose GREEN orbs added to yours make exactly four. "
-                        .. "One green looks for three green.",
-                    "Touch them and both debuffs clear.",
-                    "Get it wrong, or run out of time, and you get Cultivated Burst: "
-                        .. "little damage, big puddle. Take it to a corner nobody "
-                        .. "needs.",
-                    "When everyone is clear the bosses swap sides and the fight "
-                        .. "repeats. The red team starts in the corner without "
-                        .. "puddles.",
+                    "Both bosses take 99% reduced damage AND heal the weaker of the "
+                        .. "two, so a side that raced ahead just gave that damage back.",
+                    "Damage is worthless here. Getting everyone clear quickly is the "
+                        .. "only thing that shortens it.",
+                    "Look at how many venom orbs are circling your character.",
+                    "Find one player whose count plus yours makes exactly four. Three "
+                        .. "looks for one, two looks for two, one looks for three.",
+                    "You get 30 seconds. That is a lot of time -- look around, walk, "
+                        .. "and do not panic.",
+                    "Fail a combine and Cultivated Burst hits you hard and leaves a dot "
+                        .. "running for the next minute.",
+                    "When it ends the tanks swap bosses and everybody returns to their "
+                        .. "original side.",
                 },
             },
         },
 
         heroic = {
-            "Popped droplets leave spikes that fire from where you popped them toward "
-                .. "the boss. Clear them where that line will not cross the raid.",
-            "A few seconds after Debilitating Miasma, every soaker drops blood that "
-                .. "expands outward -- which is why that soak happens near the edge.",
-            "Puddles everywhere means the raid slowly rotates around the room instead "
-                .. "of standing still like it can on normal.",
+            "After soaking Unstable Miasma you keep Clinging Murk. When it fades it "
+                .. "drops blood pools, which is why that soak happens at the edge with "
+                .. "the side stacked.",
+            "Toxic Droplets from the Blood side travel back to the Breath of Ula'tek "
+                .. "and crash into it. Keep a clear lane through the middle so no "
+                .. "player intercepts one.",
         },
 
         roles = {
             DAMAGER = {
                 "Venom Coagulation first, every time, no exceptions.",
-                "Pop the droplets. They are a raid hit on a 60-second fuse.",
-                "Watch your side's health against the other side -- Vitriolic Stasis "
-                    .. "refunds the difference, so racing is wasted damage.",
+                "Soak the droplets on your side, and keep out of the lane the far "
+                    .. "side's droplets travel down.",
+                "Watch your side's health against the other -- Vitriolic Stasis heals "
+                    .. "the weaker boss, so racing is wasted damage.",
             },
             HEALER = {
-                "Blood Venom is dispellable, and dispelling it drops the puddle there "
-                    .. "and then. Time it; do not just clear it.",
-                "Debilitating Miasma is a whole-side soak. If your side is late, the "
+                "Blighted Blood is a magic dispel and it goes out constantly.",
+                "Unstable Miasma is a whole-side soak. If your side is late, the "
                     .. "target dies.",
-                "Both golems' dots sit on everyone in range and only fall off after "
-                    .. "the swap.",
+                "Both bosses' dots sit on everyone in range for 40 seconds and only "
+                    .. "fall off after you swap sides.",
             },
             TANK = {
-                "40 yards between the bosses at all times. That is the fight.",
-                "Your slam ramps until it hits somebody else, so the tanks swap sides "
-                    .. "in the intermission too.",
-                "Coming off the red golem, walk somewhere safe before Injecting Strike "
-                    .. "expires -- it leaves a large puddle.",
+                "Keep the two bosses apart. Half the raid goes with each of you.",
+                "Swap bosses at maximum energy -- the Blood side's injection is "
+                    .. "stacking on you until you do.",
+                "On the Breath side, soak as many travelling droplets as you can "
+                    .. "reach. That is genuinely your job.",
             },
         },
 
@@ -366,51 +382,60 @@ G.bosses = {
         bring   = "heavy cleave and multi-dot",
 
         rules = {
-            "Never let all three turtles stack together -- United Defense makes them "
-                .. "immune. Two in cleave range is fine.",
-            "Break Gebbo's boxes. One holds the fish, and any box left 25 seconds is "
-                .. "Rallying Roar, a heavy raid-wide hit.",
-            "Feed the fish to a turtle before Mor'zaki fills his energy bar. Final "
-                .. "Ascension is a wipe.",
+            "Never let all three tortollans stack together -- they take 99% reduced "
+                .. "damage. Two in cleave range is fine.",
+            "Break Gebbo's crates. One hides the rotting fish, and a crate nobody "
+                .. "soaks explodes for heavy damage.",
+            "Feed the fish to a tortollan to break Mor'zai's control. You can only "
+                .. "feed each one once, so you get three.",
         },
 
         phases = {
             {
-                name = "Mor'zaki",
+                name = "Mor'zai",
                 tag  = "the one you never fight",
                 unsure = true,
                 lines = {
-                    "He cannot be touched. Malevolent Presence is permanent raid "
-                        .. "damage, and his energy bar is the fight timer.",
-                    "Feeding the fish to a turtle resets that bar to zero and hits the "
-                        .. "raid with Fishy Feedback.",
-                    "His Command then empowers the turtle you fed, permanently. You "
-                        .. "cannot feed the same one twice, so you get three resets.",
-                    "The fourth time he fills there is no fish left. That is the "
-                        .. "enrage, and it is your real kill timer.",
+                    "He cannot be touched. The three tortollans are mind-controlled by "
+                        .. "him, and breaking that control is the whole loop.",
+                    "Gebbo drops crates around the room. Walk over one to break it -- "
+                        .. "you pick up a small bleed -- and eventually one uncovers the "
+                        .. "rotting fish.",
+                    "A crate nobody soaks explodes for heavy raid damage, so crate duty "
+                        .. "is a real assignment.",
+                    "Feed the fish to a tortollan and it breaks free and turns friendly "
+                        .. "for a moment.",
+                    "Then Mor'zai seizes it back. Fishy Feedback radiates damage for "
+                        .. "about 12 seconds, and that tortollan comes out EMPOWERED.",
+                    "One feed each, so you will empower all three before this is over. "
+                        .. "The order is your choice.",
                 },
             },
             {
                 name = "Scrollsage Iku",
                 tag  = "the caster",
                 lines = {
-                    "Blink Nova teleports her to a random player and hits the raid "
-                        .. "reduced by distance. Be 30 yards from the group and it is "
-                        .. "nothing.",
-                    "Icebound Flames is heavy damage and a 50% slow, and it CAN be "
+                    "Blink Nova marks one player, teleports to them and hits the raid "
+                        .. "reduced by distance. If it is you, run out; if it is not, "
+                        .. "get away from them.",
+                    "Icebound Flames is heavy damage and a slow, and it CAN be "
                         .. "interrupted. Set a kick order and keep it covered.",
-                    "Shredding Shards stacks +50% damage from itself on her tank. Swap "
-                        .. "with Nama's tank once it bites.",
+                    "Shredding Shards fires a volley of shards into her tank -- around "
+                        .. "seven of them -- each stacking +50% damage taken from the "
+                        .. "next.",
+                    "Tanks swap after a volley lands. Holding for a second volley means "
+                        .. "fourteen stacks and an unhealable dot.",
                 },
             },
             {
                 name = "First Mate Nama",
                 tag  = "the shells",
                 lines = {
-                    "He fires shells in the direction he is FACING. Getting hit is "
-                        .. "damage and a 4-second stun, so move out of the line "
-                        .. "wherever you happen to be standing.",
-                    "His melee adds 4% physical damage taken to his tank with every "
+                    "Shell Spin hurls three spinning shells across the room, and being "
+                        .. "hit STUNS you as well as hurting.",
+                    "That is worse than it sounds, because a stun can hold you under a "
+                        .. "crate that is about to land on your head.",
+                    "Her melee adds 4% physical damage taken to her tank with every "
                         .. "hit.",
                 },
             },
@@ -418,73 +443,77 @@ G.bosses = {
                 name = "Trader Gebbo",
                 tag  = "the one walking in circles",
                 lines = {
-                    "Not tanked, and not tankable. He wanders the room dropping boxes "
+                    "Not tanked, and not tankable. He wanders the room dropping crates "
                         .. "near players.",
-                    "Stepping on a box is a stacking bleed for 8 seconds. Break them "
-                        .. "anyway.",
-                    "Put two or three players on box duty, ideally ones who can shed a "
-                        .. "bleed or tank one.",
+                    "Walking over a crate breaks it and gives you a small bleed. One of "
+                        .. "them is hiding the fish.",
+                    "Put two or three players on crate duty, ideally ones who can shed "
+                        .. "a bleed or tank one.",
                 },
             },
             {
                 name = "Iku empowered",
-                tag  = "Frostfire Volley, three sets",
+                tag  = "Frostfire Volley -- the scary one",
                 lines = {
-                    "Fire missiles on some players, ice on others. Each leaves a large "
-                        .. "puddle and a one-minute dot.",
-                    "Clear your dot by walking into the OPPOSITE puddle. That removes "
-                        .. "the debuff and the puddle together.",
-                    "Do it before the next set lands. If the other element hits you "
-                        .. "while you still carry the first, Elemental Explosion very "
-                        .. "likely wipes the raid.",
-                    "This is the one to be scared of. Clear early, every time.",
+                    "Fire lands on some players and frost on others, each dropping a "
+                        .. "patch of its element and a dot that runs a full minute.",
+                    "The frost one also slows you. The fire one just burns.",
+                    "You clear your dot by walking into the OPPOSITE patch -- fire "
+                        .. "walks into frost, frost walks into fire.",
+                    "But clearing it TRIGGERS an Elemental Explosion. That is what "
+                        .. "wiped the PTR raids, over and over.",
+                    "So do not all clear at once. Stagger them, and have raid cooldowns "
+                        .. "running while you do.",
+                    "This was the highest damage in the whole raid on test. Personals "
+                        .. "as well as raid cooldowns.",
                 },
             },
             {
                 name = "Nama empowered",
                 tag  = "Mighty Thud",
                 lines = {
-                    "Three players get marked, and he leaps to them CLOSEST FIRST.",
-                    "The marked player takes the damage, split with everybody standing "
-                        .. "in it. Three soak groups, one per mark.",
-                    "There is no soak debuff, so the same people could technically "
-                        .. "take all three -- but each landing knocks back and the next "
-                        .. "follows fast, so three groups is the safe setup.",
-                    "Each landing leaves an aftershock puddle for 30 seconds. Soak, "
-                        .. "then get out of it.",
+                    "Three players get marked and she leaps to each of them.",
+                    "Huge physical damage at the landing, split with anyone standing "
+                        .. "within about six yards. So it needs bodies in it.",
+                    "Each landing knocks players back. Watch where you are standing, "
+                        .. "because being knocked off the platform ends your evening.",
                 },
             },
             {
                 name = "Gebbo empowered",
                 tag  = "mushrooms and a bomb",
                 lines = {
-                    "Explosive Surprise hands one player a bomb to place. Put it at "
-                        .. "the edge -- it leaves a big shrinking puddle behind.",
-                    "Mushroom Toss drops a mushroom wherever a player is standing.",
-                    "The bomb sends out a blast wave. Step onto a mushroom as it "
-                        .. "arrives and you bounce over it; a blink, leap or teleport "
-                        .. "does the same job.",
-                    "Do not touch a mushroom early. The first person to touch it sets "
-                        .. "it off, and it expires seconds later.",
+                    "Mushroom Toss comes first, scattering bouncy mushrooms around the "
+                        .. "room.",
+                    "Then a bomb lands on one player and sends out a wave of fire.",
+                    "Get onto a mushroom to bounce over the wave. A blink, leap or "
+                        .. "teleport does the same job.",
                 },
             },
             {
                 name = "Feed order, and the kill",
                 tag  = "decide this before you pull",
                 lines = {
-                    "Recommended: Iku first, then Nama, then Gebbo. The hardest "
-                        .. "ultimate then runs for the shortest part of the fight.",
-                    "All three turtles enrage the moment any ONE of them dies, so "
-                        .. "bring the three health bars down together.",
-                    "If you are forced to stagger: Gebbo, then Nama, then Iku.",
-                    "Iku is by far the worst -- she explodes for raid-wide damage that "
-                        .. "grows with every cast. Nama gains 100% damage a second. "
-                        .. "Gebbo just ping-pongs the raid.",
+                    "Feeding Gebbo EARLY is the comfortable opener -- mushrooms and a "
+                        .. "bomb is the gentlest of the three ultimates to carry for "
+                        .. "the rest of the fight.",
+                    "Iku's Frostfire Volley is the one to schedule. Try to take it "
+                        .. "where your healing cooldowns will be back up.",
+                    "All three must die at close to the same time, because each has an "
+                        .. "ultimate that can wipe you if it is left alone.",
+                    "If one has to die LAST, make it Gebbo. His is a shovel: single "
+                        .. "target into the tank plus a knockback.",
+                    "The other two are far worse alone. Iku throws a cataclysmic bomb "
+                        .. "that wipes the raid, and Nama gains 100% damage every "
+                        .. "second.",
                 },
             },
         },
 
-        heroicUnknown = true,
+        heroic = {
+            "All three tortollans stacked together take 99% reduced damage, so spread "
+                .. "them -- two in cleave range is fine, three is not.",
+        },
 
         roles = {
             DAMAGER = {
@@ -526,91 +555,86 @@ G.bosses = {
         shape   = "1 phase, 3 fountains",
 
         rules = {
-            "At 100 energy Imbibe drinks from the TWO NEAREST fountains. Where the "
+            "At maximum energy Imbibe drinks from the TWO NEAREST fountains. Where the "
                 .. "raid stands is what picks them, so move as a group.",
-            "Every add walks for the green pool in the middle. One arriving dots the "
-                .. "whole raid; two arriving is a wipe.",
-            "Rotation: blood + shadow, then shadow + fire, then fire + blood, repeat. "
-                .. "Always pick up a fountain you did not just use.",
+            "Every add walks for the venomous cavity in the middle. If one reaches it, "
+                .. "it explodes and wipes you.",
+            "Each empowerment lasts two minutes. To drop a stack you have to empower "
+                .. "the OTHER two fountains twice in a row.",
         },
 
         phases = {
             {
                 name = "The three fountains",
-                tag  = "blood at the back, shadow right, fire left",
+                tag  = "and the cavity in the middle",
                 lines = {
-                    "Each drink hits the raid, empowers those two fountains for 90 "
-                        .. "seconds, and stacks Toxic Vapor on the boss.",
-                    "Empowered means 200% explosion damage and adds with 50% more "
-                        .. "health. There is always at least one empowered fountain "
-                        .. "live, so the real choice is which one you would rather "
-                        .. "handle.",
-                    "Toxic Vapor is raid damage every two seconds and it grows with "
-                        .. "every drink. That is the fight timer.",
+                    "Each Imbibe hits the raid hard, once per fountain he drinks from.",
+                    "Every stack a fountain holds increases the damage of future "
+                        .. "Imbibes AND the health of the adds that fountain spawns.",
+                    "So the useful trick is deliberate: empower the same two fountains "
+                        .. "back to back to let the third one's stack fall off.",
+                    "Most raids do that to the blood fountain, because blood adds "
+                        .. "cannot be crowd controlled and extra health on those is the "
+                        .. "worst kind.",
                 },
             },
             {
-                name = "Blood",
-                tag  = "the splitting add, and the leech",
+                name = "The adds",
+                tag  = "what each fountain sends at the cavity",
                 lines = {
-                    "Clotting Venom cannot be crowd controlled, and splits into "
-                        .. "smaller pieces when killed. Keep killing until the floor "
-                        .. "is clear.",
-                    "Siphoning Infection is a huge absorb with 100% healing reduction. "
-                        .. "No amount of healing removes it.",
-                    "It comes off by LEECHING: other players have to stand in that "
-                        .. "player's circle.",
-                    "So keep a melee camp and a ranged camp, and infected players walk "
-                        .. "into the nearest one.",
+                    "Clotting Venom carries Sanguine Fortitude and cannot be crowd "
+                        .. "controlled at all. It splits when killed, so keep killing "
+                        .. "until the floor is clear.",
+                    "Shrouded Venom can be held, and drops a shadow void zone where it "
+                        .. "dies. Kill them somewhere you do not need to stand.",
+                    "Burning Venom radiates damage the whole time it lives, and casts "
+                        .. "Caustic Surge when it dies -- a short dot that STACKS with "
+                        .. "other adds dying near it.",
+                    "So do not kill two Burning Venoms together. Hold one, or line the "
+                        .. "kills up so the first dot falls off before the second lands.",
+                    "Everything except the clotting venoms hurts the raid on death. "
+                        .. "Those death windows are where the healing cooldowns go.",
                 },
             },
             {
-                name = "Shadow",
-                tag  = "the easy adds",
+                name = "The infections",
+                tag  = "which ones you get depends on the fountains",
                 lines = {
-                    "Shrouded Venom adds can be crowd controlled, and drop circles all "
-                        .. "over the floor when they die. Kill them where you are not "
-                        .. "standing.",
-                    "Stygian Infection is a heal absorb with no healing reduction. "
-                        .. "Heal it normally.",
-                    "When the Stygian Burst circles appear around those players, they "
-                        .. "walk away from everybody else.",
+                    "Siphoning Infection puts a big red circle on a player, and they "
+                        .. "heal themselves by LEECHING off everyone else.",
+                    "If it is you, run into melee and stand in the group. If it is not "
+                        .. "you, stay where they can reach you.",
+                    "Stygian Infection is a large healing absorb plus a dot on one "
+                        .. "player. Top them off fast, and pop a defensive if it is "
+                        .. "you.",
+                    "Exploding Infection marks a player as a bomb. It was supposed to "
+                        .. "be dispellable and was not on the PTR, so treat it as "
+                        .. "something to spread out for.",
                 },
             },
             {
-                name = "Fire",
-                tag  = "do not kill them together",
-                lines = {
-                    "Two Burning Venom adds pulse raid damage while they live and "
-                        .. "stack a fire dot on the raid.",
-                    "Killing both at once is a big raid hit plus dots on everyone. "
-                        .. "Crowd control one and nuke the other, or line the kills up "
-                        .. "so the second dies as the first debuff falls off.",
-                    "Exploding Infection is a heavy dot that EXPLODES on the raid when "
-                        .. "dispelled. Stagger the dispels, and never dispel into a "
-                        .. "low raid.",
-                },
-            },
-            {
-                name = "Whatever is empowered",
+                name = "Everything else",
                 tag  = "the casts that never stop",
                 lines = {
-                    "Fire and shadow adds can be held -- for 60 seconds. Hardened "
-                        .. "Venom then makes them immune and 50% faster, so do not "
-                        .. "park them forever.",
-                    "Malignant Catalyst is the orb above the pool: raid damage, then "
-                        .. "soak circles. At least one player in each, or the raid eats "
-                        .. "it instead.",
-                    "Plague Rot turns several players into sprinklers hitting anything "
-                        .. "within 5 yards, then fires waves in four directions after 8 "
-                        .. "seconds. Walk out, then dodge.",
-                    "Dripping Fangs is the tank hit: +100% physical damage taken for "
-                        .. "32 seconds, so it is a swap every cast.",
+                    "Plague Froth marks several players and sends venomous waves out "
+                        .. "from where they stand. Walk out of the group first, and "
+                        .. "never point one through melee.",
+                    "Dripping Fangs is the tank hit: very heavy physical, a nature dot "
+                        .. "for 32 seconds, and +100% physical damage taken. Swap every "
+                        .. "cast.",
+                    "Imbibe itself is a large predictable raid hit and a good place for "
+                        .. "a personal or a raid damage reduction.",
                 },
             },
         },
 
-        heroicUnknown = true,
+        heroic = {
+            "Malignant Catalyst is the orb of venom above the cavity. It explodes and "
+                .. "launches Catalytic Bile, which must land on at least one player -- "
+                .. "if it hits nobody the whole raid eats it.",
+            "This did not reliably show on the PTR, so watch for a soak appearing here "
+                .. "on live.",
+        },
 
         roles = {
             DAMAGER = {
@@ -655,30 +679,34 @@ G.bosses = {
         bring   = "a fifth healer earns its place",
 
         rules = {
-            "Split into two soak groups before you pull, five players minimum each. "
-                .. "Mutilate alternates between them.",
-            "Drop cysts on the markers OPPOSITE the tunnels that will blow. Four "
-                .. "cysts, three winds, one spare.",
-            "The tunnels with white orbs inside are the ones that fire, and the "
-                .. "number of orbs is the order: one, two, three.",
+            "Two frontal cones, and they go in opposite directions. The poisonous one "
+                .. "(Mutilate) is aimed AT the raid; the physical one (Ravage) is "
+                .. "aimed away.",
+            "Split into two halves before you pull. Mutilate must not hit the same "
+                .. "half twice in a row.",
+            "The tunnels on the rim show wind orbs. The number of orbs is the order "
+                .. "they blow -- one, then two, then three.",
         },
 
         phases = {
             {
-                name = "Apex Predator",
-                tag  = "five casts in a random order",
+                name = "The tank combo",
+                tag  = "two cones, opposite jobs",
                 lines = {
-                    "Two Ravage, two Mutilate, one Tempest -- any order, and the same "
-                        .. "one can come twice in a row.",
-                    "Ravage is the tank frontal. Anyone hit takes +400% from it for 25 "
-                        .. "seconds, so the tanks swap before the next one.",
-                    "Mutilate is the raid frontal. It splits between soakers and "
-                        .. "leaves +500% from the NEXT one for 22 seconds -- which is "
-                        .. "the whole reason for two groups.",
-                    "Tempest sends tornadoes roaming out of the boss. They hit hard "
-                        .. "and they wander, so keep looking.",
-                    "Both cones aim at the current tank, so tank near the edge with "
-                        .. "the raid behind the boss.",
+                    "Ravage is the tank buster and it is a cone. Point it AWAY from "
+                        .. "everybody.",
+                    "Mutilate is also a cone, but it has to be pointed INTO the raid, "
+                        .. "because it splits between everyone it hits.",
+                    "Easy way to hold it: the poisonous-looking one goes at the raid, "
+                        .. "the physical-looking one goes away from it.",
+                    "On heroic, being hit by Mutilate increases your damage from the "
+                        .. "next one -- so the tank alternates which half of the raid "
+                        .. "each cone lands on.",
+                    "Tanks swap afterwards. Note that a taunt can change the target "
+                        .. "mid-cast, which is occasionally exactly what you want.",
+                    "Tempest sends poisonous tornadoes wandering out of the boss, and "
+                        .. "anyone clipped picks up a poison dot. Cleansing totems earn "
+                        .. "their spot here.",
                 },
             },
             {
@@ -711,23 +739,27 @@ G.bosses = {
                 },
             },
             {
-                name = "Intermission",
+                name = "Howling Maelstrom",
                 tag  = "after two full sets",
                 lines = {
-                    "The boss digs into the middle and takes 30% more damage.",
-                    "Everybody PIXEL STACKS in the middle. Being off to one side is "
-                        .. "what starts the disasters here.",
-                    "Each wind blows you into the cyst opposite it. That bounces you "
-                        .. "back toward the boss and makes you wind-resistant, so you "
-                        .. "keep hitting him through the amp.",
+                    "The boss digs in and takes 30% more damage. This is the burn "
+                        .. "window and it repeats on a clean timer.",
+                    "Everybody stacks in the middle. Being off to one side is what "
+                        .. "starts the disasters here.",
+                    "Each wind blows the raid from the tunnel it came from toward the "
+                        .. "opposite side -- an orb at 12 o'clock blows you south.",
+                    "That is why the cyst goes at 6 o'clock: you get blown into it, it "
+                        .. "kills the knockback and leaves you wind-resistant, and you "
+                        .. "keep hitting the boss through the amp.",
                     "Three winds, in the order the orbs told you.",
-                    "After the third, walk to the leftover cyst and pop it on purpose "
-                        .. "rather than letting it expire under somebody.",
                 },
             },
         },
 
-        heroicUnknown = true,
+        heroic = {
+            "Mutilate leaves increased damage from the next Mutilate, which is the "
+                .. "entire reason the raid splits in half and the tank alternates.",
+        },
 
         roles = {
             DAMAGER = {
@@ -767,12 +799,12 @@ G.bosses = {
         bring   = "reliable two-target damage",
 
         rules = {
-            "Eternal Venom stacks all fight and at 10 stacks you die. Watch the "
-                .. "number, not your health bar.",
-            "Ravenous Feast is the only stack removal in the fight, and the soak "
-                .. "debuff means you take ONE of its three pops.",
-            "Kill both bosses together. Killing one first triggers Uncoiled Rot, and "
-                .. "the survivor gains 25% damage every 4 seconds.",
+            "Eternal Venom stacks all fight. Eleven stacks stuns you on normal; ten "
+                .. "KILLS you on heroic. Watch the number, not your health bar.",
+            "Every player soaks the acid globules. Any left unsoaked put a stack on "
+                .. "the ENTIRE raid instead of on one person.",
+            "Ravenous Feast removes exactly ONE stack per cast, no matter how many of "
+                .. "its three pops you stand in.",
         },
 
         phases = {
@@ -793,86 +825,84 @@ G.bosses = {
                 },
             },
             {
-                name = "What gives you stacks",
-                tag  = "anything green",
+                name = "Caustic Deluge",
+                tag  = "the opener, and where the stacks come from",
                 lines = {
-                    "Venomous Emergence: everybody gets a stack, and three serpents "
-                        .. "spawn in the middle.",
-                    "Those serpents fire Corrosive Spit lines at random players. The "
-                        .. "target stands STILL; everybody else steps out of the line.",
-                    "Caustic Globules spawn around the room. Soaking one is a stack "
-                        .. "for you; leaving one is a stack for the entire raid after "
-                        .. "10 seconds.",
-                    "The Depths is raid damage with no stacks attached -- but the green "
-                        .. "waves that cross the room afterwards do. Dodge those.",
+                    "It lands on one tank, stacking nature damage on them, and ejects "
+                        .. "acid globules all over the room.",
+                    "EVERY player soaks a globule. One left on the floor puts a stack "
+                        .. "of Eternal Venom on the whole raid instead.",
+                    "That is the arithmetic of the fight: soaked globules cost one "
+                        .. "person a stack, ignored ones cost twenty.",
+                    "Further waves of adds arrive through the fight and add more "
+                        .. "Eternal Venom, plus frontal lines you point away from the "
+                        .. "raid.",
+                },
+            },
+            {
+                name = "Stonebreaker",
+                tag  = "and why the tanks cannot walk away",
+                lines = {
+                    "Three physical circles land and the tanks soak them -- one tank "
+                        .. "takes two, the other takes the third.",
+                    "The catch is that both tanks must stay in range of the boss they "
+                        .. "are holding.",
+                    "Step out of range and you eat Congealed Gore or Concentrated "
+                        .. "Spittle for very heavy damage.",
+                    "So the soaks have to be taken without abandoning your boss, which "
+                        .. "is the whole puzzle.",
                 },
             },
             {
                 name = "Ravenous Feast",
                 tag  = "the only way stacks come off",
                 lines = {
-                    "A big red circle explodes three times in quick succession. The "
-                        .. "damage splits between soakers, and each pop you stand in "
-                        .. "removes a stack.",
-                    "Soaking leaves +800% damage from it for 8 seconds, so you take "
-                        .. "one pop and get out.",
-                    "Three groups of seven or more, one per pop. Or two groups, with "
-                        .. "immunities sent in for the last one.",
-                    "The stacks you clear come back as a big slime add. Focus it down.",
-                },
-            },
-            {
-                name = "The tank mechanics",
-                tag  = "and what happens if they are missed",
-                lines = {
-                    "Caustic Deluge stacks +10% of itself on Vexil's tank for 90 "
-                        .. "seconds, so it forces a swap.",
-                    "Stonebreaker drops three white swirlies that go off one at a "
-                        .. "time. A tank soaks each set, alternating -- +33% from it "
-                        .. "per soak.",
-                    "A swirly that hits NOBODY is heavy raid damage and a knockback. "
-                        .. "That is the one that ruins pulls.",
+                    "It lands on a tank's position and strikes three times, splitting "
+                        .. "the damage between everyone soaking.",
+                    "You only ever remove ONE stack of Eternal Venom per cast. Standing "
+                        .. "in all three pops does not remove three.",
+                    "On heroic, soaking more than one pop gives you 800% increased "
+                        .. "damage from it and you will simply die.",
+                    "So split into three groups, one per pop. On normal everyone can "
+                        .. "soak, but it is still one stack.",
                 },
             },
             {
                 name = "Coiling Ichor",
-                tag  = "and where to put it",
+                tag  = "the deadliest thing for non-tanks",
                 lines = {
-                    "A red circle on random players: heavy damage, and a slowing "
-                        .. "puddle where it expires.",
-                    "Walk to the side of the room and drop it there, without clipping "
-                        .. "anyone on the way out.",
+                    "It goes out on several players and ramps up over about 12 seconds "
+                        .. "as the pool of blood shrinks onto you.",
+                    "When it expires it deals its maximum damage and leaves a Congealed "
+                        .. "Gore puddle behind.",
+                    "Take it to the edge of the room and use a real defensive. This is "
+                        .. "where DPS and healers die.",
                 },
             },
             {
                 name = "The intermission",
-                tag  = "after the second Feast",
+                tag  = "about two and a half minutes in",
                 lines = {
-                    "Both bosses submerge and swap sides. Vexil surfaces in the middle "
-                        .. "and casts Wild Flood, a rotating laser.",
-                    "The orbs spinning around the boss show which way it will turn.",
-                    "Run against the spin, cross the laser once, and the spot you "
-                        .. "crossed stays safe -- it does not sweep a full circle.",
-                    "Sanguine Storm drops red circles the whole time. Dodge those as "
-                        .. "well.",
-                    "Then the bosses meet up again and the loop restarts, with the raid "
-                        .. "carrying more stacks than last time.",
-                },
-            },
-            {
-                name = "The enrage",
-                tag  = "third time at 100 energy",
-                lines = {
-                    "Both bosses move to the middle and cast Caustic Rain and Sanguine "
-                        .. "Storm without stopping.",
-                    "Every cycle before that is harder than the one before it, because "
-                        .. "the raid never clears every stack it gained. That is the "
-                        .. "soft enrage, and it is the real timer.",
+                    "Both bosses submerge and move to another corner of the triangular "
+                        .. "room. One surfaces in the middle and channels Vile Flood, a "
+                        .. "rotating beam.",
+                    "The orbs spinning around it tell you which way the beam will turn.",
+                    "If it is going to sweep right, stand just to the LEFT of its head. "
+                        .. "The beam then starts on your side and travels away from you.",
+                    "Then follow it around toward where the next boss is waiting.",
+                    "Grips and movement speed are how you rescue anyone who read the "
+                        .. "spin wrong.",
                 },
             },
         },
 
-        heroicUnknown = true,
+        heroic = {
+            "Ten stacks of Eternal Venom kills you outright. On normal eleven stacks "
+                .. "only stuns.",
+            "Soaking more than one pop of a Ravenous Feast gives you 800% increased "
+                .. "damage from it, so three separate soak groups is mandatory rather "
+                .. "than tidy.",
+        },
 
         roles = {
             DAMAGER = {
@@ -925,13 +955,13 @@ G.bosses = {
         shape   = "3 phases, 2 bosses",
 
         rules = {
-            "Phase one is orbs. Pile them up, and the tank's frontal destroys them -- "
-                .. "every orb destroyed stacks a dot on the raid, so take them in "
-                .. "batches.",
-            "Phase two: if a spirit is chasing you, LOOK AT IT. Staring freezes it so "
-                .. "the tank's frontal can destroy it.",
-            "Kill Zul'jin in the MIDDLE of the room. He is resurrected exactly where "
-                .. "he died.",
+            "Phase one is orbs. Carry them in front of Zul'jin so his Sever frontal "
+                .. "destroys them -- but each one destroyed stacks Venom Rupture on "
+                .. "the raid, so take two or three at a time on heroic.",
+            "Do NOT push Zul'jin while a lot of orbs are on the floor. They all burst "
+                .. "at once when he dies.",
+            "In the last phase, both bosses must die together or the survivor enrages "
+                .. "for 100% more damage.",
         },
 
         phases = {
@@ -939,111 +969,126 @@ G.bosses = {
                 name = "Phase one",
                 tag  = "Zul'jin",
                 lines = {
-                    "He throws green venom orbs out all phase, and every one still "
-                        .. "alive when the phase ends explodes at once.",
-                    "The tank's frontal destroys them. Each destroyed orb puts a "
-                        .. "stacking dot on the raid, so the healers set the pace.",
-                    "Run over an orb to pick it up. It sticks to you for a few seconds "
-                        .. "and drops where you are.",
-                    "So: carry them into a pile and let the tank clear several with "
-                        .. "one cone. Mobile ranged do this as much as the off-tank.",
-                    "Guillotine is a group soak near the edge. Soak it, then everybody "
-                        .. "runs away from the blast.",
-                    "Axe Grinder throws spinning axes around the room. Annoying rather "
-                        .. "than lethal.",
-                    "Clear as many orbs as you can before you push him, and stack for "
-                        .. "the explosion when he dies.",
+                    "Fangs of the Crucible fills half the room with venom and scatters "
+                        .. "acid orbs that radiate damage until they are destroyed.",
+                    "Run over an orb to pick it up. It sticks to you until the debuff "
+                        .. "expires, then drops where you are standing.",
+                    "So mobile ranged carry them in front of the boss, and the tank's "
+                        .. "Sever destroys the pile. An off-tank not currently tanking "
+                        .. "is ideal for this.",
+                    "Every orb destroyed stacks Venom Rupture on the raid. On normal "
+                        .. "you can grab everything; on heroic, two or three per Sever.",
+                    "Guillotine throws an axe at a player. Half the raid soaks it on "
+                        .. "heroic, and it leaves a huge void zone -- a warlock gateway "
+                        .. "is the clean way out.",
+                    "Loose axes fly around the room all phase. They ignore armour, so "
+                        .. "getting clipped hurts far more than it looks like it should.",
+                    "Time the kill. Another wave of orbs comes about every 80 to 90 "
+                        .. "seconds, and killing him on a full floor bursts all of them "
+                        .. "at once.",
                 },
             },
             {
                 name = "Phase two  --  Hex Lord Malacrass",
                 unsure = true,
-                tag  = "red light, green light",
+                tag  = "positioning is the whole fight",
                 lines = {
-                    "Dread March mind-controls several players, and they walk straight "
-                        .. "off the platform. Beat them out of it fast.",
-                    "Every player you free spawns two spirits, and each spirit fixates "
-                        .. "somebody. They cannot be damaged or crowd controlled.",
-                    "A spirit FREEZES while you look straight at it.",
-                    "So let them close in, freeze them together, and the tank's "
-                        .. "frontal destroys the pile.",
-                    "Gloom Bomb drops a circle on you. You, and anyone caught in it, "
-                        .. "spawn three small spirits in a triangle -- collect all "
-                        .. "three within about 12 seconds or you die.",
-                    "The boss shields itself and starts a cast. Break the shield, THEN "
-                        .. "kick the cast.",
-                    "At 1 HP he stops and the intermission begins.",
+                    "Dread March mind-controls players and walks them off the edge of "
+                        .. "the platform. Damage breaks them out.",
+                    "So mark a spot nearest an edge and stand there, and the "
+                        .. "controlled players walk somewhere your DPS can reach them "
+                        .. "instantly.",
+                    "Manifestations of Dread fixate players and cannot be damaged. "
+                        .. "Look AWAY and they chase you; stare straight at one and it "
+                        .. "freezes.",
+                    "So walk them to a spot, freeze them together, and the tank's Soul "
+                        .. "Sever destroys the pile.",
+                    "Put that spot PERPENDICULAR to the Dread March spot. Freeing "
+                        .. "someone into a frontal is a very silly way to lose a player.",
+                    "Gloom Bomb marks players with a void zone to take out of the raid. "
+                        .. "A good moment for a personal.",
+                    "Eternal Nightfall shields him and starts pulsing AoE and dropping "
+                        .. "more void zones. Pool damage for it and watch your feet.",
                 },
             },
             {
                 name = "Intermission",
-                tag  = "the burn",
+                tag  = "the soul bind -- 30 seconds",
                 lines = {
-                    "Malacrass resurrects Zul'jin and heals him -- but Zul'jin takes "
-                        .. "100% increased damage. This is the Bloodlust window.",
-                    "Damage here is not wasted: it sets the health Zul'jin starts the "
-                        .. "last phase on.",
-                    "Spirits drift toward Zul'jin and heal him if they arrive. Stand "
-                        .. "in the way and play goalie.",
-                    "Stack up for healing cooldowns while you do it.",
+                    "Malacrass dies, binds with Zul'jin and starts healing him -- but "
+                        .. "Zul'jin takes 100% increased damage while it happens.",
+                    "This is the Bloodlust window, and it runs 30 seconds, so you get "
+                        .. "another 10 seconds of Hero after it ends.",
+                    "Spirits converge on Zul'jin from all around the room and heal him "
+                        .. "if they arrive. Stand in the way.",
+                    "Body-blocking them pulses damage onto the group, so stack up and "
+                        .. "use a raid cooldown -- and hold one back, because the next "
+                        .. "phase is worse.",
                 },
             },
             {
                 name = "Phase three",
                 tag  = "both at once",
                 lines = {
-                    "Phase one and phase two together: orbs, spirits, and the shield.",
-                    "Only Zul'jin has the frontal now, and it has to clear both the "
-                        .. "orbs and the frozen spirits.",
-                    "So the orb pile goes where the spirits are being frozen. One cone, "
-                        .. "both problems.",
-                    "On the PTR this was the hardest thing in the raid, with almost no "
-                        .. "room to do any of it. Expect coordination -- and expect it "
-                        .. "to have been tuned.",
+                    "Defilement pulses AoE, stacks a healing absorb on the raid, and "
+                        .. "brings back the acid orbs from phase one.",
+                    "So it is phase one and phase two together: orbs to carry, ghosts "
+                        .. "to freeze, and Dread March on top.",
+                    "Put the orbs and the ghosts in the SAME place and the Dread March "
+                        .. "spot somewhere else. One frontal, both problems, nobody "
+                        .. "freed into it.",
+                    "Blighted Sever takes a while to come round, so you can hold your "
+                        .. "orbs and wait for the shadow puddles to recede before you "
+                        .. "commit.",
+                    "Anyone not fetching orbs stays stacked. Anyone who is fetching "
+                        .. "needs a personal or an external, because they are out of "
+                        .. "healer range.",
+                    "About 90 seconds in, Defilement of the Crucible fires again for a "
+                        .. "fresh wave of orbs and a lot of raid damage. Empty the bag.",
                 },
             },
         },
 
         heroic = {
-            "Soul Boiler adds spawn every 40 seconds or so. They cannot be tanked, and "
-                .. "their long cast has to be interrupted every time.",
-            "But every interrupt teleports the Soul Boiler somewhere new -- so do not "
-                .. "spam kicks. Kick it late, ideally where you can cleave it.",
-            "A Soul Boiler that reaches 100 energy becomes immune to interrupts. Kill "
-                .. "it before that.",
-            "Guillotine stacks, so split the raid in half: one half soaks this one, "
-                .. "the other half the next.",
-            "A spirit that reaches you MIND CONTROLS you instead of just hitting you.",
-            "The last phase gets Guillotine and Gloom Bombs on top of everything else, "
-                .. "so the raid bounces from one side of the room to the other.",
+            "Every orb destroyed by Sever stacks Venom Rupture higher, so two or three "
+                .. "per cast rather than the whole floor.",
+            "If Zul'jin dies with a lot of orbs out, they instantly burst for all their "
+                .. "damage at once. If he is low as Fangs of the Crucible goes off, "
+                .. "stop damage, clear a round with one Sever, and then kill him.",
+            "Guillotine needs half the raid to soak it.",
+            "Soul Coiler adds cast Wail of Terror, a 5-second fear. DPS cover those "
+                .. "interrupts.",
         },
 
         roles = {
             DAMAGER = {
                 "Phase one: mobile ranged carry orbs into the pile. It is a real job, "
                     .. "not a spare moment.",
-                "Phase two: break the Hex Lord's shield fast, then kick the cast. "
-                    .. "Anything with bonus damage to absorbs belongs here.",
-                "Phase two: beat the mind-controlled players out of it before they "
-                    .. "walk off the edge.",
-                "Intermission: everything into Zul'jin, and body-block the spirits.",
+                "Phase two: break the mind-controlled players out fast, before they "
+                    .. "reach the edge.",
+                "Phase two: pool damage for the Eternal Nightfall shield, and cover "
+                    .. "the Wail of Terror interrupts on heroic.",
+                "Phase three: swap between the two bosses so they die together. One "
+                    .. "dying early enrages the other for 100% more damage.",
             },
             HEALER = {
-                "The dot from destroying orbs is the pace-setter for phase one. Tell "
-                    .. "them when to take the next batch.",
-                "The orb explosion when Zul'jin dies is a scripted raid hit. Have a "
-                    .. "cooldown ready.",
-                "Gloom Bomb kills people outright if they do not collect their "
-                    .. "spirits. There is no healing through it -- call it out.",
-                "The intermission is stack-and-chain-cooldowns.",
+                "Venom Rupture from destroyed orbs is the pace-setter for phase one. "
+                    .. "Tell them when the next batch is affordable.",
+                "The orb burst when Zul'jin dies is a scripted raid hit -- and entirely "
+                    .. "avoidable by clearing first.",
+                "Venom Fang leaves poison on several players at once. Cleansing totem "
+                    .. "if you have one.",
+                "The intermission is stack-and-chain-cooldowns, and phase three needs "
+                    .. "you to have saved one.",
             },
             TANK = {
                 "The tank not currently tanking does the orb-moving.",
-                "Aim the cone at orbs in phase one, and at frozen spirits in phase "
-                    .. "two.",
-                "In phase three it is one cone for both, so tank where the pile and "
-                    .. "the spirits meet.",
-                "Kill Zul'jin in the centre so his resurrection point is central.",
+                "Aim Sever at the orb pile in phase one, and Soul Sever at the frozen "
+                    .. "ghosts in phase two.",
+                "In phase three it is one frontal for both, so tank where the pile and "
+                    .. "the ghosts meet -- and away from where Dread March lands.",
+                "Twin Fang Toxin stacks extra nature damage onto every melee you take. "
+                    .. "Factor it into your swaps.",
             },
         },
 
