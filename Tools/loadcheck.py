@@ -3219,28 +3219,64 @@ def main():
                 T:Stop()
             end
 
-            -- Vitriolic Stasis: a full bar refunds the gap, and refunds
-            -- nothing when the bars are level.
-            T:Start("sentinels", false)
-            S.countdown = 0
-            local a, b = S.bossActors[1], S.bossActors[2]
-            a.hp, b.hp = a.maxHp * 0.4, b.maxHp * 0.9
-            S.energy = 100
-            update(f, 0.05)
-            if a.hp <= a.maxHp * 0.4 + 0.01 then
-                problems[#problems + 1] =
-                    "Vitriolic Stasis did not heal the lower golem up"
+            -- Vitriolic Stasis refunds the gap, and refunds nothing when
+            -- the bars are level.
+            --
+            -- Driven by pushing the phase over, not by filling the energy
+            -- bar: the stasis is a PHASE, and the number game and the
+            -- healing are one event inside it. Setting the bar to full
+            -- used to trigger the heal on its own, which fired it twice
+            -- a cycle in the middle of a golem phase.
+            local function stasisFrom(loFrac, hiFrac)
+                math.randomseed(3445)
+                T:Start("sentinels", false)
+                S.countdown = 0
+                local a, b = S.bossActors[1], S.bossActors[2]
+                a.hp, b.hp = a.maxHp * loFrac, b.maxHp * hiFrac
+                -- Run the opening phase out so the stasis begins, and
+                -- take the miss count across the TRANSITION FRAME only.
+                --
+                -- Totalling the phase measured ninety seconds of
+                -- droplets and miasma, which came out identical for both
+                -- pairs and said nothing about the heal.
+                local missed = 0
+                for _ = 1, 900 do
+                    S.hp, S.firing = 100, false
+                    -- Silenced, or six allies shooting drag both bars
+                    -- to the phase floor and there is no gap left to
+                    -- measure.
+                    for _, ally in ipairs(S.allies) do ally.stagger = 999 end
+                    a.hp = math.min(a.hp, a.maxHp * loFrac)
+                    b.hp = math.min(b.hp, b.maxHp * hiFrac)
+                    local before = S.failed
+                    update(f, 0.05)
+                    if S.phaseIndex >= 2 then
+                        missed = S.failed - before
+                        break
+                    end
+                end
+                local healed = a.hp / a.maxHp
+                local reached = S.phaseIndex
+                T:Stop()
+                return healed, missed, reached
             end
-            -- And level bars cost nothing.
-            a.hp, b.hp = a.maxHp * 0.5, b.maxHp * 0.5
-            S.energy = 100
-            local missedBefore = S.failed
-            update(f, 0.05)
-            if S.failed > missedBefore then
-                problems[#problems + 1] =
-                    "Vitriolic Stasis punished a raid whose bars were level"
+
+            local healed, gapMissed, reached = stasisFrom(0.40, 0.90)
+            if reached < 2 then
+                problems[#problems + 1] = "the Sentinels never reached Vitriolic Stasis"
+            elseif healed <= 0.41 then
+                problems[#problems + 1] = string.format(
+                    "Vitriolic Stasis left the weaker boss at %.0f%% -- it never healed",
+                    healed * 100)
             end
-            T:Stop()
+            -- And level bars cost nothing: no miss is scored for the heal.
+            local levelHealed, levelMissed = stasisFrom(0.50, 0.50)
+            if levelMissed >= gapMissed then
+                problems[#problems + 1] = string.format(
+                    "a level pair was charged %d misses against %d for a wide gap"
+                    .. " (healed to %.0f%% vs %.0f%%)",
+                    levelMissed, gapMissed, levelHealed * 100, healed * 100)
+            end
 
             -- Both dots: only in the middle, never on a side.
             --
@@ -3275,22 +3311,27 @@ def main():
                     mid, onSide)
             end
 
-            -- Uncoiled Rot: only after one dies, and never while both live.
-            T:Start("twinfangs", false)
+            -- The kill-together enrage: only after one dies, never while
+            -- both live.
+            --
+            -- Checked on the COILED ALTAR, which is the boss whose guide
+            -- states it. It was recorded on the Twin Fangs from a source
+            -- that did not survive, and the Fangs only ask to be cleaved
+            -- down together -- which two bars already say.
+            T:Start("alteredfangs", false)
             S.countdown = 0
-            S.stacks = 0
             S.hp = 100
-            for _ = 1, 20 do S.stacks = 0; update(f, 0.05) end
+            for _ = 1, 20 do S.hp = 100; update(f, 0.05) end
             local bothAlive = S.rot
             S.bossActors[2].hp = 0
-            for _ = 1, 60 do S.stacks = 0; update(f, 0.05) end
+            for _ = 1, 60 do S.hp = 100; update(f, 0.05) end
             local rotting = S.rot
             T:Stop()
             if bothAlive ~= nil then
-                problems[#problems + 1] = "Uncoiled Rot ran while both Fangs were alive"
+                problems[#problems + 1] = "the enrage ran while both bosses were alive"
             end
             if not rotting or rotting <= 0 then
-                problems[#problems + 1] = "killing one Fang first started no rot"
+                problems[#problems + 1] = "killing one boss first started no enrage"
             end
 
             if #problems > 0 then return table.concat(problems, "; ") end
@@ -3536,35 +3577,81 @@ def main():
             end
             T:Stop()
 
-            -- And a second element while carrying the first is the wipe.
-            if not untilCarrying() then
-                T:Stop(); return "could not set up the double-element case"
+            -- And the half that matters: CLEARING is what explodes.
+            --
+            -- Two runs of the same seeded phase. One clears the instant
+            -- it can; one waits for the window to go cold. The eager
+            -- player has to come off worse, because "clear it early,
+            -- every time" is the instinct this fight punishes and the
+            -- one the first version of this mechanic taught.
+            --- `during` true clears only while the HOLD warning is up;
+            --- false clears only once it has gone cold.
+            ---
+            --- Testing "clears as soon as possible" against "waits"
+            --- proved nothing: the player who steps straight onto a patch
+            --- clears BEFORE any ally has started, which is genuinely
+            --- safe and should be. What the rule actually says is that
+            --- the warning means something, so the two runs have to
+            --- differ on the warning and nothing else.
+            local function clearingRun(during)
+                math.randomseed(3497)
+                T:Start("explorers", false)
+                S.countdown = 0
+                local exploded, clean = 0, 0
+                for _ = 1, 4000 do
+                    S.firing, S.hp, S.energy = false, 100, 0
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    local hot = S.lastClear
+                        and (S.time - S.lastClear) < 3.0 or false
+                    if S.element and hot == during then
+                        -- Walk onto the nearest opposite-element patch.
+                        local want = (S.element.school == "fire") and "frost" or "fire"
+                        local best, bd
+                        for _, a in ipairs(S.actors) do
+                            if a.kind == "cleanse" and a.school == want and not a.dead then
+                                local d = math.sqrt((a.x - S.px) ^ 2 + (a.y - S.py) ^ 2)
+                                if not bd or d < bd then best, bd = a, d end
+                            end
+                        end
+                        if best then S.px, S.py = best.x, best.y end
+                    else
+                        S.px, S.py = 0, -88
+                    end
+                    local p, m = S.passed, S.failed
+                    local had = S.element ~= nil
+                    update(f, 0.05)
+                    if had and not S.element then
+                        -- Resolved this frame, one way or the other.
+                        if S.failed > m then exploded = exploded + 1 end
+                        if S.passed > p then clean = clean + 1 end
+                    end
+                    if not S.running then break end
+                end
+                T:Stop()
+                return exploded, clean
             end
-            local hurtBefore = S.failed
-            local hpDrop = 0
-            for _ = 1, 900 do
-                -- Parked at the wall, never clearing, so the next volley
-                -- lands on a player who still has the first.
-                S.firing = false
-                S.px, S.py = 0, -88
-                S.energy = 0
-                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
-                local hp = S.hp
-                update(f, 0.05)
-                if S.hp < hp then hpDrop = hpDrop + (hp - S.hp) end
-                S.hp = 100
-                if not S.running then break end
-            end
-            T:Stop()
-            if S.failed <= hurtBefore then
+
+            local hotBoom, hotOk = clearingRun(true)
+            local coldBoom, coldOk = clearingRun(false)
+            if hotBoom + hotOk == 0 then
                 problems[#problems + 1] =
-                    "carrying an element into the next set cost nothing"
+                    "never managed to clear during a HOLD window, so nothing was tested"
+            end
+            if coldBoom + coldOk == 0 then
+                problems[#problems + 1] = "no Frostfire debuff ever cleared cleanly"
+            end
+            if hotBoom <= coldBoom then
+                problems[#problems + 1] = string.format(
+                    "clearing during the HOLD window exploded %d times and clearing"
+                    .. " after it exploded %d -- the stagger is doing nothing",
+                    hotBoom, coldBoom)
             end
 
             if #problems > 0 then return table.concat(problems, "; ") end
             return string.format(
-                "ok:opposite puddle clears and your own does not;"
-                .. " never clearing cost %.0f health across the phase", hpDrop)
+                "ok:opposite patch clears and your own does not;"
+                .. " clearing during the HOLD window exploded %d times against %d after it",
+                hotBoom, coldBoom)
         end
     """)(ns)
     if volley and str(volley).startswith("ok:"):
@@ -3608,9 +3695,18 @@ def main():
                     if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
                     for _, bi in ipairs(S.bossActors) do bi.hp = bi.maxHp end
                     -- The nearest soak circle that is currently casting.
+                    -- Split soaks, whatever SHAPE they are.
+                    --
+                    -- Mutilate became a cone you stand in rather than a
+                    -- circle, because the two frontals pointing opposite
+                    -- ways is the whole fight. Matching on kind == soak
+                    -- then found nothing on Sszorak and the check passed
+                    -- while testing one boss instead of two.
                     local best, bd
                     for _, a in ipairs(S.actors) do
-                        if a.kind == "soak" and not a.dead then
+                        local isSplit = (a.kind == "soak")
+                            or (a.kind == "line" and a.soakIn)
+                        if isSplit and not a.dead then
                             local d = math.sqrt((a.x - S.px) ^ 2 + (a.y - S.py) ^ 2)
                             if not bd or d < bd then best, bd = a, d end
                         end
@@ -3619,14 +3715,37 @@ def main():
                     if best then
                         if obeyMark and marked then
                             -- Walk out of it, and stay out.
-                            local dx, dy = S.px - best.x, S.py - best.y
-                            local d = math.sqrt(dx * dx + dy * dy)
-                            if d < 0.001 then dx, dy, d = 1, 0, 1 end
-                            S.px = best.x + dx / d * (best.r + 22)
-                            S.py = best.y + dy / d * (best.r + 22)
+                            --
+                            -- A cone and a circle need leaving in
+                            -- different directions: stepping radially
+                            -- away from a cone's APEX can stay inside
+                            -- it the whole way, because the apex is the
+                            -- boss and the shape opens out from there.
+                            if best.kind == "line" then
+                                local perp = (best.dir or 0) + math.pi / 2
+                                local out = (best.width or 24) + 26
+                                S.px = best.x + math.cos(perp) * out
+                                S.py = best.y + math.sin(perp) * out
+                            else
+                                local dx, dy = S.px - best.x, S.py - best.y
+                                local d = math.sqrt(dx * dx + dy * dy)
+                                if d < 0.001 then dx, dy, d = 1, 0, 1 end
+                                local out = (best.r or 16) + 22
+                                S.px = best.x + dx / d * out
+                                S.py = best.y + dy / d * out
+                            end
                             satOut = satOut + 1
                         else
-                            S.px, S.py = best.x, best.y
+                            -- Into it. For a cone that means a little
+                            -- way down its axis, not on top of the
+                            -- caster.
+                            if best.kind == "line" then
+                                local along = math.min(30, (best.len or 60) * 0.4)
+                                S.px = best.x + math.cos(best.dir or 0) * along
+                                S.py = best.y + math.sin(best.dir or 0) * along
+                            else
+                                S.px, S.py = best.x, best.y
+                            end
                             soaked = soaked + 1
                         end
                     end
@@ -3638,19 +3757,29 @@ def main():
                     -- Totalling the round's misses measured that, and
                     -- reported the alternating player as worse while the
                     -- mark was working perfectly.
-                    local live = {}
+                    local function isSplitSoak(a)
+                        return a.kind == "soak"
+                            or (a.kind == "line" and a.soakIn)
+                    end
+                    -- Attributed on the frame a soak RESOLVES, spotted
+                    -- by it gaining `flashUntil`.
+                    --
+                    -- Watching for the actor to disappear instead worked
+                    -- for circles and silently failed for cones: a line
+                    -- lingers about a fifth of a second after it fires,
+                    -- so by the time it vanished the score had moved two
+                    -- frames earlier and the delta was always zero.
+                    local pending = {}
                     for _, a in ipairs(S.actors) do
-                        if a.kind == "soak" then live[a] = true end
+                        if isSplitSoak(a) and not a.flashUntil then
+                            pending[a] = true
+                        end
                     end
                     local p, m = S.passed, S.failed
                     update(f, 0.05)
-                    local still = {}
-                    for _, a in ipairs(S.actors) do
-                        if a.kind == "soak" then still[a] = true end
-                    end
                     local resolved = false
-                    for a in pairs(live) do
-                        if not still[a] then resolved = true end
+                    for a in pairs(pending) do
+                        if a.flashUntil then resolved = true end
                     end
                     if resolved then
                         passed = passed + (S.passed - p)
@@ -3779,21 +3908,13 @@ def main():
                     cleared, ignored)
             end
 
-            -- Zul'jin comes back where he fell.
-            local _, _, mid = phaseOne(false, { 0, 0 })
-            local _, _, wall = phaseOne(false, { 78, 0 })
-            if not mid or not wall then
-                problems[#problems + 1] = "no resurrection point was ever recorded"
-            elseif math.abs(wall.x - 78) > 2 then
-                problems[#problems + 1] = string.format(
-                    "he died at x=78 but comes back at x=%.0f", wall.x)
-            elseif math.abs(mid.x) > 2 then
-                problems[#problems + 1] = string.format(
-                    "he died at the middle but comes back at x=%.0f", mid.x)
-            end
-
-            -- And the intermission actually puts him there, with the
-            -- spirits walking at HIM rather than at the room's centre.
+            -- The intermission's spirits walk at ZUL'JIN rather than at
+            -- the room's centre.
+            --
+            -- This used to also assert that he was resurrected wherever
+            -- he was pushed. That rule is gone: it rested on a source
+            -- that did not survive, and no guide says it -- Malacrass
+            -- binds with him and heals him where he already stands.
             math.randomseed(3429)
             T:Start("alteredfangs", false)
             S.countdown = 0
@@ -3846,7 +3967,7 @@ def main():
             if #problems > 0 then return table.concat(problems, "; ") end
             return string.format(
                 "ok:the push cost %.0f with orbs left against %.0f cleared;"
-                .. " he revives where he fell (x=%.0f) and the spirits walk at him",
+                .. " the intermission's spirits walk at Zul'jin (x=%.0f), not the room",
                 ignored, cleared, endedAt)
         end
     """)(ns)

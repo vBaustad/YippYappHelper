@@ -260,54 +260,57 @@ SC.soulcoiler = {
 -- under the soakers a few seconds AFTER the soak, which is why the guide
 -- says to walk somewhere useless immediately.
 ------------------------------------------------------------
-local function GreenGolem(name, dur, floor)
+--- The Breath of Ula'tek's side: droplets that travel, and the blob.
+local function BreathSide(name, dur, floor)
     return {
-        name = name, duration = dur, hpFloor = floor, side = 1,
-        call = "Green golem -- pop every droplet",
+        name = name, duration = dur, hpFloor = floor, side = 2,
+        call = "Breath side -- soak every droplet",
         events = Timeline(
             Every(3, 5, 6, {
                 kind = "orb", name = "Toxic Droplet", school = "nature",
                 window = 12, damage = 20, r = 4, spikes = true,
+                call = "Toxic Droplets -- soak them, tanks first",
             }),
-            Every(6, 14, 2, {
+            -- The highest damage in the fight, about once a minute, and
+            -- it radiates the whole time it lives.
+            Every(6, 16, 2, {
                 kind = "chaser", name = "Venom Coagulation", school = "nature",
-                goal = "player", speed = 9, hp = 120, art = "blob",
-                r = 6, damage = 26, life = 16,
+                goal = "player", speed = 9, hp = 130, art = "blob",
+                r = 6, damage = 26, life = 18,
                 call = "Venom Coagulation -- priority target, every time",
             }),
-            Every(9, 13, 3, {
-                kind = "line", name = "Blightburn", school = "nature",
+            Every(11, 13, 3, {
+                kind = "line", name = "Empowering Slam", school = "physical",
                 where = "boss", cast = 2.2, width = 22, damage = 22,
-                call = "Blightburn -- and it comes back",
-            }),
-            Every(13, 13, 3, {
-                kind = "line", name = "Blightburn returning", school = "nature",
-                where = "boss", cast = 1.6, width = 22, damage = 22,
+                call = "Empowering Slam -- out of it, and it ramps",
             })
         ),
     }
 end
 
-local function RedGolem(name, dur, floor)
+--- The Blood of Ula'tek's side: soak together, then get to the edge.
+local function BloodSide(name, dur, floor)
     return {
-        name = name, duration = dur, hpFloor = floor, side = 2,
-        call = "Red golem -- everything here leaves a puddle",
+        name = name, duration = dur, hpFloor = floor, side = 1,
+        call = "Blood side -- soak the Miasma, then move to the edge",
         events = Timeline(
             Every(4, 12, 3, {
-                kind = "soak", name = "Debilitating Miasma", school = "blood",
+                kind = "soak", name = "Unstable Miasma", school = "blood",
                 cast = 3.4, r = 16, damage = 24,
-                call = "Debilitating Miasma -- the whole side soaks",
+                call = "Unstable Miasma -- the whole side soaks",
             }),
+            -- "Then get to the edge and stack, because what you just
+            -- soaked comes back as puddles under all of you."
             Every(9, 12, 3, {
-                kind = "dodge", name = "Miasma pools", school = "blood",
+                kind = "dodge", name = "Clinging Murk", school = "blood",
                 cast = 2.2, r = 14, damage = 18,
                 leaves = { r = 15, life = 20, dps = 12 },
-                call = "Pools landing under the soakers -- move",
+                call = "Clinging Murk fading -- blood lands under every soaker",
             }),
             Every(7, 11, 3, {
-                kind = "drop", name = "Blood Venom", school = "blood",
+                kind = "drop", name = "Blighted Blood", school = "blood",
                 cast = 4, minDist = 26, r = 13, life = 22, dps = 12, damage = 18,
-                call = "Blood Venom -- it pools where it expires",
+                call = "Blighted Blood -- take the dispel away from the group",
             }),
             Every(6, 7, 4, {
                 kind = "orb", name = "Toxic Droplet", school = "nature",
@@ -317,16 +320,30 @@ local function RedGolem(name, dur, floor)
     }
 end
 
-local function HelicalToxins(name, floor)
+--- Vitriolic Stasis: the number game AND the healing, in one phase.
+---
+--- These were two separate things here, which was simply wrong -- the
+--- bosses going 99% immune, the venom orbs, and the weaker boss being
+--- healed back up are one event at maximum energy.
+---
+--- The orbs are a single count that must SUM TO FOUR with one other
+--- player: three looks for one, two looks for two. Not two colours added
+--- separately, which is what this used to say.
+local function VitriolicStasis(name, floor)
     return {
-        -- Both bosses immune, and far more time than it feels like. The
-        -- guide's own advice is to look around and not panic, so the cast
-        -- is long on purpose.
+        -- Thirty seconds in the real fight, and the guide is emphatic
+        -- that this is plenty and nobody should panic -- so the cast is
+        -- long on purpose here too.
         name = name, duration = 14, bossImmune = true, hpFloor = floor,
-        call = "Helical Toxins -- your GREEN orbs plus theirs make four",
+        healsWeaker = true,
+        call = "Vitriolic Stasis -- your venom orbs plus theirs make FOUR",
         events = {
-            { at = 1, kind = "meet", name = "Helical Toxins", school = "arcane",
-              cast = 10, labels = true, reach = 9, damage = 30 },
+            { at = 1, kind = "meet", name = "Vitriolic Stasis", school = "nature",
+              cast = 10, labels = true, reach = 9, damage = 30,
+              -- Failing the combine is Cultivated Burst: a big hit and a
+              -- dot that runs for the next minute.
+              onMiss = { kind = "puddle", name = "Cultivated Burst",
+                         school = "nature", r = 15, life = 22, dps = 13 } },
         },
     }
 end
@@ -346,16 +363,16 @@ SC.sentinels = {
     -- stacks fall off. `side` on a phase says which golem your half of
     -- the raid is standing on.
     bosses = {
-        { name = "Green Golem", at = { x = -40, y = 10 },
+        { name = "Blood of Ula'tek",  at = { x = -40, y = 10 },
+          colour = { 1.00, 0.35, 0.35 } },
+        { name = "Breath of Ula'tek", at = { x = 40,  y = 10 },
           colour = { 0.55, 1.00, 0.50 } },
-        { name = "Red Golem",   at = { x = 40,  y = 10 },
-          colour = { 1.00, 0.45, 0.40 } },
     },
 
-    -- Vitriolic Stasis. The bar is not a kill timer here -- at the top it
-    -- heals the lower golem up to the higher, so the cost of letting the
-    -- bars diverge is exactly the size of the gap. See TickEnergy.
-    energy = { name = "Vitriolic Stasis", rate = 3.4, max = 100 },
+    -- The bar is not a kill timer. A full bar means Vitriolic Stasis is
+    -- due, and the stasis phase is what heals the weaker boss back up --
+    -- see `healsWeaker` and the note on VitriolicStasis above.
+    energy = { name = "Energy", rate = 3.0, max = 100 },
     evenHealth = { name = "Vitriolic Stasis" },
 
     -- The other half of the raid, working on the golem you are not
@@ -371,11 +388,11 @@ SC.sentinels = {
     bothDots = { range = 52, dps = 5 },
 
     phases = {
-        GreenGolem("Your side: the Green Golem", 32, 72),
-        HelicalToxins("Intermission -- swap sides", 72),
-        RedGolem("Your side: the Red Golem", 32, 42),
-        HelicalToxins("Intermission -- swap sides", 42),
-        GreenGolem("Your side: the Green Golem", 30, 0),
+        BloodSide("Your side: the Blood of Ula'tek", 32, 72),
+        VitriolicStasis("Vitriolic Stasis -- swap sides", 72),
+        BreathSide("Your side: the Breath of Ula'tek", 32, 42),
+        VitriolicStasis("Vitriolic Stasis -- swap sides", 42),
+        BloodSide("Your side: the Blood of Ula'tek", 30, 0),
     },
 }
 
@@ -431,10 +448,15 @@ SC.explorers = {
                 -- puddle of the other one. The sets are spaced so that
                 -- carrying one into the next is possible but not
                 -- inevitable -- which is the whole warning.
-                Every(4, 11, 3, {
+                -- Clearing is what sets off the explosion, so the raid
+                -- staggers. `allyClears` is how many of the other five
+                -- take their turn during your window; you have to find a
+                -- gap between them.
+                Every(4, 13, 3, {
                     kind = "volley", name = "Frostfire Volley",
-                    cast = 3.4, carry = 16, life = 24, others = 2,
-                    puddleR = 14, damage = 40,
+                    cast = 3.4, carry = 18, life = 26, others = 2,
+                    allyClears = 3, stagger = 3.0, explodeDamage = 34,
+                    puddleR = 14,
                 }),
                 Every(5, 13, 2, {
                     kind = "caster", name = "Icebound Flames", school = "frost",
@@ -682,15 +704,24 @@ local function SszorakPhase(dur, floor)
             -- duration sits just past the cadence, so being marked costs
             -- exactly the next cast and no more -- that is the
             -- alternation, expressed as something one player can feel.
+            -- A CONE, aimed at the raid, that you are meant to be in.
+            --
+            -- It was a circle to stand in, which threw away the whole
+            -- shape of this boss: the two frontals go in opposite
+            -- directions and that IS the fight. Ravage is the tank
+            -- buster and points away; Mutilate splits between everyone
+            -- it hits and is deliberately swung into the raid.
             Every(8, 32, 2, {
-                kind = "soak", name = "Mutilate", school = "physical",
-                group = 1, cast = 3, r = 15, damage = 24,
+                kind = "line", name = "Mutilate", school = "nature",
+                where = "boss", cast = 3, width = 30, damage = 24,
+                soakIn = true, aimAtPlayer = true,
                 marks = "Mutilated", marksFor = 17,
-                call = "Mutilate -- first group soaks",
+                call = "Mutilate -- the poisonous cone. GET IN IT.",
             }),
             Every(24, 32, 1, {
-                kind = "soak", name = "Mutilate", school = "physical",
-                group = 2, cast = 3, r = 15, damage = 24,
+                kind = "line", name = "Mutilate", school = "nature",
+                where = "boss", cast = 3, width = 30, damage = 24,
+                soakIn = true, aimAtPlayer = true,
                 marks = "Mutilated", marksFor = 17,
                 call = "Mutilate -- second group's turn",
             }),
@@ -790,12 +821,13 @@ SC.twinfangs = {
           colour = { 1.00, 0.40, 0.45 } },
     },
 
-    -- Uncoiled Rot. Kill one first and the survivor gains 25% every four
-    -- seconds -- the one unavoidable damage source in this file, and it
-    -- earns that the same way the poison meter does: it is switched off
-    -- entirely by playing correctly. Bring both bars down together and
-    -- it never starts.
-    killTogether = { gainPct = 25, every = 4, dps = 1.6 },
+    -- No `killTogether` here.
+    --
+    -- "Uncoiled Rot" was recorded on this boss from a source that did
+    -- not survive; the enrage-if-one-dies-first rule belongs to the
+    -- Coiled Altar, where the guide states it plainly. The Twin Fangs
+    -- only ask that you cleave them down together, which the two bars
+    -- already say on their own.
 
     phases = {
         {
@@ -856,13 +888,13 @@ SC.twinfangs = {
                 -- trainer rewarded it. The mark runs past the third pop,
                 -- so soaking any one of them sits you out of the rest.
                 { at = 2,  kind = "soak", name = "Ravenous Feast 1", school = "blood", group = 1,
-                  cast = 3, r = 16, damage = 20, clears = 2,
+                  cast = 3, r = 16, damage = 20, clears = 1,
                   marks = "Gorged", marksFor = 9, call = "First pop -- soak ONE of the three" },
                 { at = 6,  kind = "soak", name = "Ravenous Feast 2", school = "blood", group = 2,
-                  cast = 3, r = 16, damage = 20, clears = 2,
+                  cast = 3, r = 16, damage = 20, clears = 1,
                   marks = "Gorged", marksFor = 9, call = "Second pop" },
                 { at = 10, kind = "soak", name = "Ravenous Feast 3", school = "blood", group = 3,
-                  cast = 3, r = 16, damage = 20, clears = 2,
+                  cast = 3, r = 16, damage = 20, clears = 1,
                   marks = "Gorged", marksFor = 9, call = "Third pop" },
                 -- The stacks you cleared come back as a slime add.
                 { at = 13, kind = "chaser", name = "Reclaimed Slime", school = "nature",
@@ -884,7 +916,7 @@ SC.twinfangs = {
                 }),
                 Every(20, 5, 3, {
                     kind = "soak", name = "Ravenous Feast", school = "blood",
-                    cast = 3, r = 16, damage = 20, clears = 2,
+                    cast = 3, r = 16, damage = 20, clears = 1,
                     marks = "Gorged", marksFor = 9,
                 }),
                 Every(8, 8, 3, {
@@ -910,14 +942,31 @@ SC.alteredfangs = {
     title  = "The Coiled Altar",
     intro  = "Zul'jin, then the Hex Lord, then both. Hold still to freeze a spirit.",
     bossHp = 5600,
+
+    -- Two bosses, and the last phase has both up at once. "If either
+    -- boss dies early before the other, it enrages them and increases
+    -- their damage by 100%" -- so the kill-together rule lives HERE. It
+    -- was recorded on the Twin Fangs, which is the wrong boss.
+    bosses = {
+        { name = "Zul'jin",   at = { x = -34, y = 12 },
+          colour = { 1.00, 0.55, 0.30 } },
+        { name = "Malacrass", at = { x = 34,  y = 12 },
+          colour = { 0.80, 0.45, 1.00 } },
+    },
+    killTogether = { gainPct = 100, every = 4, dps = 1.8 },
+
     phases = {
         {
             name = "Phase One -- Zul'jin", untilPct = 58, hpFloor = 58, duration = 38,
             -- The two things this phase is judged on, both at its very
             -- end: what is still lying on the floor, and where he was
             -- standing when he went down.
+            -- `recordsDeathSpot` is gone. "Zul'jin is resurrected exactly
+            -- where he died" came from a source that did not survive
+            -- scrutiny, and no guide says it -- Malacrass binds with him
+            -- and heals him where he already is.
             orbsExplode = true, orbDamage = 8,
-            recordsDeathSpot = true,
+            side = 1,
             call = "Clear the orbs -- every one still alive explodes at the push",
             events = Timeline(
                 -- "Run over an orb to pick it up... carry them into a
@@ -962,6 +1011,7 @@ SC.alteredfangs = {
         },
         {
             name = "Phase Two -- Hex Lord Malacrass", duration = 46, hpFloor = 26,
+            side = 2,
             call = "Stop moving to freeze a spirit",
             events = Timeline(
                 Every(4, 13, 3, {
@@ -1019,7 +1069,11 @@ SC.alteredfangs = {
             -- MIDDLE") worth obeying: a Zul'jin resurrected against the
             -- wall gives the drifting spirits a short run and the goalie
             -- a long one.
-            bossAt = "revive",
+            -- Malacrass binds with Zul'jin and heals him where he
+            -- stands, and Zul'jin takes 100% more damage while it runs.
+            -- Thirty seconds, and the guide is explicit that this is the
+            -- Bloodlust window.
+            side = 1,
             bloodlust = true,
             call = "Play goalie -- spirits reaching Zul'jin heal him. BLOODLUST.",
             events = Timeline(

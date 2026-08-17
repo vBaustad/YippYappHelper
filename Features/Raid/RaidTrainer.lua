@@ -404,6 +404,15 @@ local bothDotsText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall
 if ns.ApplyTextShadow then ns.ApplyTextShadow(bothDotsText) end
 bothDotsText:Hide()
 
+-- How long after anybody clears a Frostfire debuff it is unsafe for the
+-- next person to. Shared by the mechanic and by the thing that draws it,
+-- so the warning cannot drift out of step with the rule.
+local FROSTFIRE_STAGGER = 3.0
+
+local clearText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+if ns.ApplyTextShadow then ns.ApplyTextShadow(clearText) end
+clearText:Hide()
+
 local resultText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 resultText:SetPoint("TOP", bigText, "BOTTOM", 0, -8)
 resultText:SetWidth(ARENA_PX - 80)
@@ -642,7 +651,7 @@ for i = 1, MAX_BOSSES do
     bossFace[i] = arena:CreateTexture(nil, "OVERLAY", nil, 5)
     bossFace[i]:SetTexture(ART.dart)
 
-    -- The ward it hides behind while a phase says it cannot be hurt.
+        -- The ward it hides behind while a phase says it cannot be hurt.
     bossWard[i] = arena:CreateTexture(nil, "ARTWORK", nil, 4)
     bossWard[i]:SetTexture(ART.swirl)
     bossWardRing[i] = arena:CreateTexture(nil, "ARTWORK", nil, 5)
@@ -653,6 +662,16 @@ for i = 1, MAX_BOSSES do
     -- looking at, and the guide talks about them by name throughout.
     bossLabel[i] = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 end
+
+------------------------------------------------------------
+-- The flare on whoever is currently clearing a Frostfire debuff.
+--
+-- Outside the boss loop above, which is where this first went -- a local
+-- declared in a `for` body is scoped to the body, so every later
+-- reference resolved to a nil global instead.
+local clearRing = arena:CreateTexture(nil, "OVERLAY", nil, 6)
+clearRing:SetTexture(ART.ring)
+clearRing:Hide()
 
 ------------------------------------------------------------
 -- Corpses
@@ -792,31 +811,14 @@ local function TickEnergy(dt)
     -- What a full bar DOES is not the same on every boss, and treating
     -- it as "the raid wipes" everywhere would have made the Sentinels'
     -- bar a second kill timer instead of the thing it actually is.
-    local even = S.scenario.evenHealth
-    if even then
-        -- Vitriolic Stasis. It heals the lower golem up to the higher,
-        -- so a side that raced ahead did that damage for nothing -- and
-        -- the punishment is exactly the size of the gap you let open.
-        -- Nobody dies, the round simply gets longer, which is what the
-        -- guide describes and what makes "keep them even" worth doing.
-        S.energy = 0
-        local lo, hi
-        for _, b in ipairs(S.bossActors) do
-            if not lo or b.hp < lo.hp then lo = b end
-            if not hi or b.hp > hi.hp then hi = b end
-        end
-        if lo and hi and hi.hp > lo.hp then
-            local gap = hi.hp - lo.hp
-            lo.hp = hi.hp
-            S.flash = 0.5
-            Hurt(0, ("%s -- %s healed back up to %s"):format(
-                even.name or "Vitriolic Stasis", lo.name, hi.name))
-        else
-            Credit(("%s -- level, so it healed nothing"):format(
-                even.name or "Vitriolic Stasis"))
-        end
-        return
-    end
+    --
+    -- On the Sentinels a full bar simply means Vitriolic Stasis is due.
+    -- The stasis is a PHASE -- the number game and the healing of the
+    -- weaker boss are one event, not two -- so the bar just sits at the
+    -- top until the phase arrives and HealWeaker runs. Firing the heal
+    -- off the bar itself made it happen twice per cycle, once in the
+    -- middle of a golem phase for no reason the player could see.
+    if S.scenario.evenHealth then return end
 
     S.hp = 0
     callOut:SetTextColor(1, 0.3, 0.3)
@@ -873,7 +875,11 @@ local function TickOtherTeam(dt)
     for _, b in ipairs(S.bossActors) do
         if b ~= S.bossActor and b.hp > 0 then
             local floor = ((phase and phase.hpFloor) or 0) / 100 * b.maxHp
-            b.hp = math.max(floor, b.hp - (rule.dps or 22) * dt)
+            -- Downward only, for the same reason HitScan is: a boss
+            -- already under the floor must not be pulled UP to it.
+            if b.hp > floor then
+                b.hp = math.max(floor, b.hp - (rule.dps or 22) * dt)
+            end
         end
     end
 end
@@ -884,11 +890,31 @@ end
 --- not "take damage over a minute" -- it is "you failed to find the
 --- opposite puddle", and that is a single verdict with a deadline.
 local function TickElement()
+    -- The rest of the raid clearing theirs. Each one opens a window in
+    -- which the player must NOT clear, and the window is announced
+    -- rather than left to be discovered by dying in it.
+    if S.allyClears then
+        for i = #S.allyClears, 1, -1 do
+            local c = S.allyClears[i]
+            if S.time >= c.at then
+                S.lastClear = S.time
+                S.clearingWho = c.who
+                callOut:SetTextColor(1, 0.55, 0.2)
+                callOut:SetText("Someone is clearing -- HOLD")
+                S.callUntil = S.time + 1.2
+                table.remove(S.allyClears, i)
+            end
+        end
+    end
+
     local e = S.element
     if e and e.expiry <= S.time then
         S.element = nil
         S.debuffs.Fire, S.debuffs.Ice = nil, nil
-        Hurt(28, ("Frostfire Volley -- your %s never got cleared"):format(e.school))
+        -- Still a failure -- a minute-long dot you never removed -- but
+        -- a smaller one than exploding the raid. The fight wants it gone
+        -- eventually, in a gap, not immediately.
+        Hurt(18, ("Frostfire Volley -- your %s never got cleared"):format(e.school))
     end
 end
 
@@ -2335,19 +2361,34 @@ KINDS.puddle = {
 -- and were not, and the fight's own guide says why it was worth it:
 -- "this is the one to be scared of".
 --
--- Fire lands on some players, ice on others. Each leaves a large puddle
--- and a long dot, and you clear YOUR dot by walking into somebody
--- else's OPPOSITE puddle -- which removes the debuff and the puddle
--- together. Get caught by the other element while still carrying the
--- first and Elemental Explosion very likely wipes the raid.
+-- Fire lands on some players, ice on others. Each leaves a large patch
+-- and a minute-long dot, and you clear YOUR dot by walking into somebody
+-- else's OPPOSITE patch.
 --
--- What makes this different from every other verb here is that the
--- answer is not a distance from something. It is a distance from the
--- RIGHT something, out of two kinds that look alike apart from colour --
--- so it is the only mechanic in the trainer where reading the palette is
--- the mechanic rather than a shortcut. That is also why the carried
--- element is written over the player's head in words: a fight that
--- punishes a colour mistake should not be scored on colour alone.
+-- AND THAT IS THE DANGEROUS PART, not the safe one. Clearing TRIGGERS
+-- Elemental Explosion, which is what wiped the PTR raids over and over.
+-- So the raid staggers its clears and runs cooldowns while it does.
+--
+-- The first build of this had it backwards: clearing was the reward and
+-- the explosion was the punishment for carrying two elements at once.
+-- That is a coherent mechanic and it is not this one, and it taught the
+-- exact instinct -- clear the moment you can -- that the guide spends
+-- four sentences warning against.
+--
+-- Two things follow, and both are what make it teachable alone:
+--
+-- The other five carry it too, and they clear on their own schedule. The
+-- player's job is to find a gap, which is a thing one person can
+-- practise; "the raid staggers" is not.
+--
+-- The window is SHOWN, not inferred. An unsafe moment you can only learn
+-- by dying to it is not a mechanic, it is a trap -- so a clearing ally
+-- flares and the header says so while the window is hot.
+--
+-- The answer is also a distance from the RIGHT thing, out of two kinds
+-- that look alike apart from colour, so the carried element is written
+-- over the player's head in words as well: a fight that punishes a
+-- colour mistake should not be scored on colour alone.
 ------------------------------------------------------------
 local OPPOSITE = { fire = "frost", frost = "fire" }
 
@@ -2361,20 +2402,21 @@ KINDS.volley = {
         a.school = S.volleyFlip and "fire" or "frost"
     end,
     Resolve = function(a)
-        local carried = S.element
-        if carried and carried.expiry > S.time then
-            -- Both elements at once. The wipe the guide names.
-            Hurt(a.damage or 40,
-                ("Elemental Explosion -- %s landed while you still carried %s")
-                    :format(a.school, carried.school))
-            S.element = nil
-            return
-        end
-
         S.element = { school = a.school, expiry = S.time + (a.carry or 20) }
+        -- The rest of the raid got one too, and they will clear on their
+        -- own schedule. These are the windows the player has to avoid.
+        S.allyClears = S.allyClears or {}
+        local n = a.allyClears or 3
+        for k = 1, n do
+            S.allyClears[#S.allyClears + 1] = {
+                at = S.time + 3.5 + (k - 1) * ((a.carry or 20) - 5) / n
+                     + math.random() * 1.2,
+                who = 1 + math.floor(math.random() * ALLY_COUNT),
+            }
+        end
         ApplyDebuff(a.school == "fire" and "Fire" or "Ice", a.carry or 20)
         callOut:SetTextColor(1, 0.8, 0.35)
-        callOut:SetText(("Frostfire Volley -- you have %s. Clear it in a %s puddle.")
+        callOut:SetText(("Frostfire Volley -- you have %s. Clear it in a %s patch, but WAIT YOUR TURN.")
             :format(a.school:upper(), (OPPOSITE[a.school] or "?"):upper()))
         S.callUntil = S.time + 2.6
 
@@ -2426,10 +2468,17 @@ KINDS.cleanse = {
             S.element = nil
             S.debuffs.Fire, S.debuffs.Ice = nil, nil
             a.dead = true
-            -- The puddle goes with the debuff. That is the guide's own
-            -- wording and it matters: clearing tidies the floor, so
-            -- doing it early is doubly right.
-            Credit("Frostfire cleared -- and the puddle with it")
+            -- Clearing sets off Elemental Explosion. Doing it while
+            -- somebody else's is still going off is the overlap that
+            -- wiped the PTR raids, and it is the entire lesson here.
+            local since = S.time - (S.lastClear or -99)
+            S.lastClear = S.time
+            if since < (a.stagger or 3.0) then
+                Hurt(a.explodeDamage or 34,
+                    "Elemental Explosion -- somebody else was still clearing")
+            else
+                Credit("Frostfire cleared in a gap")
+            end
             return
         end
         if S.time > a.expireAt then a.dead = true end
@@ -2530,6 +2579,9 @@ KINDS.line = {
         if a.aimAtPlayer then a.dir = atan2(S.py - a.y, S.px - a.x) end
         a.len = a.len or distanceToWall(a.x, a.y, a.dir)
         a.width = a.width or 24
+        -- Read once, at cast time, exactly as a split soak does: a mark
+        -- that lapses mid-cast must not change the answer halfway.
+        a.notMine = a.marks and HasDebuff(a.marks) or false
     end,
     Resolve = function(a)
         local along, across = alongAcross(S.px, S.py, a.x, a.y, a.dir)
@@ -2537,8 +2589,36 @@ KINDS.line = {
         -- test under a tapered drawing would clip people who were
         -- visibly outside it near the caster, which is the worst kind of
         -- unfair: the shape lied.
-        if along >= 0 and along <= a.len
-            and across <= a.width / 2 * coneFrac(along, a.len) then
+        local inside = along >= 0 and along <= a.len
+            and across <= a.width / 2 * coneFrac(along, a.len)
+
+        -- A cone you are supposed to BE in.
+        --
+        -- Sszorak's two frontals go in opposite directions and that is
+        -- the fight: Ravage is the tank buster and points away, Mutilate
+        -- splits between everyone it hits and is deliberately aimed INTO
+        -- the raid. Modelling Mutilate as a circle to stand in threw the
+        -- geometry away, and modelling it as another thing to dodge
+        -- taught the raid to do the one thing that kills the target.
+        if a.soakIn then
+            local marked = a.notMine
+            if inside and marked then
+                Hurt((a.damage or 25) * 3,
+                    a.name .. " -- you are " .. a.marks .. ", this one is not yours")
+            elseif inside then
+                Credit(a.name .. " soaked")
+                if a.marks then ApplyDebuff(a.marks, a.marksFor or 14) end
+            elseif marked then
+                Credit("Sat out " .. a.name .. " -- correct")
+            else
+                Hurt(a.damage or 25, a.name .. " -- it needed bodies in it")
+            end
+            a.flashUntil = S.time + 0.22
+            a.expireAt = a.flashUntil
+            return
+        end
+
+        if inside then
             Hurt(a.damage or 25, a.name)
             if a.stack then AddStack(a.stack) end
         else
@@ -2555,6 +2635,14 @@ KINDS.line = {
         -- the moment it lands the only useful fact is that it hurts.
         local col = live and C.bad or schoolOf(a, { 1, 0.85, 0.3 })
         local alpha = live and 0.85 or (0.14 + 0.22 * p)
+        -- The ring rule, applied to a cone: what it IS stays in the
+        -- school colour, what to DO with it is green for get-in. Amber
+        -- when you are marked, because the honest answer for a player
+        -- who just took one is "not this one".
+        if a.soakIn and not live then
+            col = a.notMine and { 1.0, 0.72, 0.25 } or C.good
+            alpha = 0.16 + 0.26 * p
+        end
 
         -- Drawn as a few widening segments rather than one bar, so it
         -- reads as a cone spreading from the caster. One uniform plank
@@ -3696,7 +3784,19 @@ local function HitScan(shot)
                 -- was unreachable, in a round that still looked completely
                 -- normal from the outside.
                 local floor = ((phase and phase.hpFloor) or 0) / 100 * b.maxHp
-                b.hp = math.max(floor, b.hp - shot.damage)
+                -- Only ever downward.
+                --
+                -- max(floor, hp - damage) quietly HEALS a boss that is
+                -- already under the floor, which nothing could reach
+                -- while there was one boss per fight and the floor only
+                -- ever descended. Vitriolic Stasis reaches it: it hauls
+                -- the weaker Sentinel up to the stronger, and the next
+                -- phase's floor is above where the other one was, so
+                -- shooting either of them dragged both to the floor and
+                -- the two bars became impossible to hold apart.
+                if b.hp > floor then
+                    b.hp = math.max(floor, b.hp - shot.damage)
+                end
                 return true
             end
         end
@@ -3917,6 +4017,28 @@ local function DrawDots(s)
         wellTex:Hide()
     end
 
+    -- The explosion window, while it is hot.
+    --
+    -- Drawn on the ALLY who is clearing rather than as a header light,
+    -- because "wait for that person to finish" is what the raid actually
+    -- says to each other, and a bar at the top of the screen does not
+    -- point at anybody.
+    local hot = S.lastClear and (S.time - S.lastClear) < FROSTFIRE_STAGGER
+    if hot and S.element then
+        local ally = S.allies[S.clearingWho or 1]
+        if ally then
+            put(clearRing, "ring", ally.x, ally.y, 26, s, { 1, 0.5, 0.15 },
+                0.9, S.time * 3)
+        end
+        clearText:SetPoint("CENTER", arena, "CENTER",
+            S.px * s, (S.py + PLAYER_R * 8) * s)
+        clearText:SetText("|cffff8833HOLD -- someone is clearing|r")
+        clearText:Show()
+    else
+        clearRing:Hide()
+        clearText:Hide()
+    end
+
     DrawCorpses(s)
     DrawAltars(s)
     DrawTunnels(s)
@@ -3997,6 +4119,30 @@ local function EnterPhase(i)
     S.phaseTime = 0
     S.nextEvent = 1
     ClearActors()
+
+    -- Vitriolic Stasis restores health to the weaker of the Sentinels,
+    -- so the cost of letting the bars diverge is exactly the size of the
+    -- gap -- and it is charged once, here, as the stasis begins. Nobody
+    -- dies; the round simply gets longer, which is what the guide
+    -- describes and what makes keeping them level worth doing.
+    local entering = S.phases and S.phases[i]
+    if entering and entering.healsWeaker and #S.bossActors > 1 then
+        S.energy = 0
+        local lo, hi
+        for _, b in ipairs(S.bossActors) do
+            if not lo or b.hp < lo.hp then lo = b end
+            if not hi or b.hp > hi.hp then hi = b end
+        end
+        local named = (S.scenario.evenHealth and S.scenario.evenHealth.name)
+            or "Vitriolic Stasis"
+        if lo and hi and hi.hp > lo.hp + 1 then
+            lo.hp = hi.hp
+            S.flash = 0.5
+            Hurt(0, ("%s -- %s healed back up to %s"):format(named, lo.name, hi.name))
+        else
+            Credit(("%s -- level, so it healed nothing"):format(named))
+        end
+    end
 
     if raise > 0 then
         -- One add back on its feet per body nobody burned, from where it
@@ -4307,8 +4453,11 @@ function T:Start(bossId, heroic)
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
     S.element, S.volleyFlip = nil, nil
+    S.allyClears, S.lastClear, S.clearingWho = nil, nil, nil
     S.revive, S.orbRot, S.orbRotUntil = nil, 0, 0
     bothDotsText:Hide()
+    clearText:Hide()
+    clearRing:Hide()
 
     ReleaseInput()
     -- Belt and braces on the overlay: Finish clears it, but a round can
