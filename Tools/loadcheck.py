@@ -3146,6 +3146,66 @@ def main():
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
 
+    # Possession Barrage is ONE lane.
+    #
+    # It was built as a fan of four separate lines, which turns "keep
+    # this lane clear" -- something the raid does once -- into four
+    # dodges, and doubles the floor the mechanic covers. Reported from
+    # watching the fight.
+    lane = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            math.randomseed(3470)
+
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            local mostAtOnce, spread = 0, 0
+            for _ = 1, 1200 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -86
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                update(f, 0.05)
+                local dirs, n = {}, 0
+                for _, a in ipairs(S.actors) do
+                    if a.name == "Possession Barrage" and not a.dead and a.dir then
+                        n = n + 1
+                        dirs[#dirs + 1] = a.dir
+                    end
+                end
+                if n > mostAtOnce then mostAtOnce = n end
+                -- How far apart the live spirits' headings are.
+                if n >= 2 then
+                    local lo, hi = dirs[1], dirs[1]
+                    for _, d in ipairs(dirs) do
+                        if d < lo then lo = d end
+                        if d > hi then hi = d end
+                    end
+                    if (hi - lo) > spread then spread = hi - lo end
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if mostAtOnce < 2 then
+                return "never saw two spirits in the air at once, so nothing was tested"
+            end
+            -- The fan was 0.6 radians corner to corner. One lane is zero.
+            if spread > 0.02 then
+                return string.format(
+                    "%d spirits in the air and their headings differ by %.2f rad"
+                    .. " -- that is a fan, not a lane", mostAtOnce, spread)
+            end
+            return string.format("ok:%d spirits share one heading", mostAtOnce)
+        end
+    """)(ns)
+    if lane and str(lane).startswith("ok:"):
+        print("  ok   trainer barrage: %s" % str(lane)[3:])
+    else:
+        print("  FAIL trainer barrage: %s" % lane)
+        failures.append(("trainer barrage", str(lane)))
+
     # Two bosses.
     #
     # Both of these fights are built on a rule about the RELATIONSHIP

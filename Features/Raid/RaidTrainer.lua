@@ -223,6 +223,13 @@ local C = {
 local SCHOOL = {
     fire     = { 1.00, 0.48, 0.12 },
     frost    = { 0.45, 0.80, 1.00 },
+    -- Spirit. Not a damage school in the game's sense -- it is what the
+    -- ghostly things on Nek'zali actually LOOK like, which is a sickly
+    -- blue-green rather than the purple `shadow` gives them. Reported
+    -- from watching the fight, and worth its own entry: her whole floor
+    -- is spirits and void zones, and rendering all of it purple made the
+    -- room a different colour from the encounter.
+    spirit   = { 0.35, 0.95, 0.82 },
     nature   = { 0.40, 0.90, 0.25 },
     shadow   = { 0.62, 0.35, 0.92 },
     arcane   = { 0.92, 0.48, 1.00 },
@@ -2937,7 +2944,28 @@ KINDS.projectile = {
         a.speed = a.speed or 58
         if not a.dir then
             local base = (S.bossActor and S.bossActor.facing) or TANK_ANGLE
-            a.dir = base + (a.fan or 0)
+            if a.lane then
+                -- ONE lane, several travellers.
+                --
+                -- Possession Barrage is a single line with four spirits
+                -- running down it at the tank, not four lines in a fan.
+                -- Built as a fan first, which turned "keep this lane
+                -- clear" -- a thing the whole raid does once -- into
+                -- four separate dodges and quietly doubled the floor the
+                -- mechanic covers.
+                --
+                -- The angle is settled by whichever spirit launches
+                -- first and reused by the rest of the volley, because
+                -- the boss keeps turning and a lane that drifted between
+                -- the first ghost and the fourth would not be a lane.
+                if not S.laneDir or S.time > (S.laneUntil or 0) then
+                    S.laneDir = base
+                    S.laneUntil = S.time + (a.laneFor or 6)
+                end
+                a.dir = S.laneDir
+            else
+                a.dir = base + (a.fan or 0)
+            end
         end
         a.travelled = 0
         a.resolveAt = nil

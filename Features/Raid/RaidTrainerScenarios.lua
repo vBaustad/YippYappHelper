@@ -74,6 +74,28 @@ local function Every(first, interval, count, template)
     return out
 end
 
+--- A WAVE of the same thing, several at once, on a cadence.
+---
+--- Adds arrive in packs, not in single file. Nek'zali's Restless Amani
+--- were spawning one at a time, which is why the guide's instruction --
+--- grip and knock them into PILES so the intermission can burn them --
+--- had nothing to act on: you cannot pile up a queue.
+---
+--- Spread slightly in time as well as position, so a pack reads as
+--- several things arriving rather than one thing that got wider.
+local function Pack(first, interval, waves, size, template)
+    local out = {}
+    for w = 0, waves - 1 do
+        for k = 1, size do
+            local ev = {}
+            for key, v in pairs(template) do ev[key] = v end
+            ev.at = first + w * interval + (k - 1) * 0.35
+            out[#out + 1] = ev
+        end
+    end
+    return out
+end
+
 --- Flatten cadences into one phase timeline, in time order.
 ---
 --- Sorted because the trainer walks the list with a cursor and stops at
@@ -104,7 +126,11 @@ SC.soulcoiler = {
     bossId = "soulcoiler",
     title  = "Nek'zali the Soulcoiler",
     intro  = "Nothing reaches the well. Every add that does feeds her energy.",
-    bossHp = 5200,
+    -- Down from 5200 when the Amani started arriving in packs. Three at
+    -- a time is a lot more to shoot, so a lot less of the player's
+    -- damage reaches her -- which is true of the real fight too, and is
+    -- the reason her health had to come down rather than the packs.
+    bossHp = 4300,
     well   = true,
     energy = { name = "Nek'zali", rate = 0, max = 100 },
     phases = {
@@ -112,44 +138,51 @@ SC.soulcoiler = {
             name = "Phase One", untilPct = 55, hpFloor = 55, duration = 44,
             call = "Keep the Amani off the well",
             events = Timeline(
-                Every(3, 9, 5, {
-                    kind = "chaser", name = "Restless Amani", school = "shadow",
+                -- A PACK at a time, which is what makes piling them up
+                -- possible at all. See Pack.
+                Pack(3, 11, 3, 3, {
+                    kind = "chaser", name = "Restless Amani", school = "spirit",
                     where = "edge", goal = "centre", speed = 11, hp = 60,
                     art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
+                    call = "Restless Amani -- grip them into ONE pile",
                 }),
-                Every(7, 9, 4, {
-                    kind = "chaser", name = "Restless Amani", school = "shadow",
+                Pack(8, 11, 2, 2, {
+                    kind = "chaser", name = "Restless Amani", school = "spirit",
                     where = "edge", goal = "centre", speed = 12, hp = 60,
-                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true, heroicOnly = true,
+                    art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
+                    heroicOnly = true,
                 }),
-                -- Four spirits, travelling outward at the tank. Each
-                -- pops on the first body it touches, so the line has to
-                -- be CLEAR rather than merely survivable.
+                -- ONE line, four spirits running down it at the tank,
+                -- one after another. Each pops on the first body it
+                -- touches, so the lane has to be CLEAR rather than
+                -- merely survivable -- and it is a single lane to clear,
+                -- not four to dodge.
                 Every(6, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", cast = 2.0, fan = -0.30, speed = 56, damage = 22,
-                    call = "Possession Barrage -- four spirits, clear their path",
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
+                    where = "boss", cast = 2.0, lane = true, laneFor = 6,
+                    speed = 56, damage = 22,
+                    call = "Possession Barrage -- four spirits, ONE line. Clear it.",
                 }),
-                Every(6, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", cast = 2.0, fan = -0.10, speed = 56, damage = 22,
-                    call = "Possession Barrage -- four spirits, clear their path",
+                Every(6.5, 12, 4, {
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
+                    where = "boss", cast = 2.0, lane = true, speed = 56, damage = 22,
                 }),
-                Every(6, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", cast = 2.0, fan = 0.10, speed = 56, damage = 22,
-                    call = "Possession Barrage -- four spirits, clear their path",
+                Every(7.0, 12, 4, {
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
+                    where = "boss", cast = 2.0, lane = true, speed = 56, damage = 22,
                 }),
-                Every(6, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", cast = 2.0, fan = 0.30, speed = 56, damage = 22,
-                    call = "Possession Barrage -- four spirits, clear their path",
+                Every(7.5, 12, 4, {
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
+                    where = "boss", cast = 2.0, lane = true, speed = 56, damage = 22,
                 }),
+                -- The void zone lands when the debuff is REMOVED -- the
+                -- healer dispels it -- so the whole job is being at the
+                -- edge when that happens, not surviving the dot.
                 Every(11, 13, 3, {
-                    kind = "drop", name = "Essence Rend", school = "shadow",
+                    kind = "drop", name = "Essence Rend", school = "spirit",
                     cast = 4.5, away = "centre", minDist = 62, r = 14,
                     permanent = true, dps = 13, damage = 20,
-                    call = "Essence Rend -- that puddle is PERMANENT, take it wide",
+                    call = "Essence Rend -- be at the EDGE when it is dispelled",
                 })
             ),
         },
@@ -167,15 +200,15 @@ SC.soulcoiler = {
                 -- Soul Transfer channels into one side of the room and
                 -- the Echo lands at the end of it, so the beam is a place
                 -- not to be standing rather than a thing to interrupt.
-                { at = 1, kind = "line", name = "Soul Transfer", school = "shadow",
+                { at = 1, kind = "line", name = "Soul Transfer", school = "spirit",
                   where = "centre", cast = 4, width = 26, damage = 24,
                   call = "Soul Transfer -- an Echo lands where this points" },
-                { at = 5, kind = "caster", name = "Echo of Nek'zali", school = "shadow",
+                { at = 5, kind = "caster", name = "Echo of Nek'zali", school = "spirit",
                   hp = 240, castLen = 15, damage = 32, r = 7, art = "spike",
                   call = "First Echo -- burn it" },
-                { at = 20, kind = "line", name = "Soul Transfer", school = "shadow",
+                { at = 20, kind = "line", name = "Soul Transfer", school = "spirit",
                   where = "centre", cast = 4, width = 26, damage = 24 },
-                { at = 24, kind = "caster", name = "Echo of Nek'zali", school = "shadow",
+                { at = 24, kind = "caster", name = "Echo of Nek'zali", school = "spirit",
                   hp = 240, castLen = 15, damage = 32, r = 7, art = "spike",
                   call = "Second Echo" },
                 Every(8, 11, 3, {
@@ -203,7 +236,7 @@ SC.soulcoiler = {
                     call = "Slithering Flame -- if you did not soak, get out",
                 }),
                 Every(6, 10, 3, {
-                    kind = "chaser", name = "Restless Amani", school = "shadow",
+                    kind = "chaser", name = "Restless Amani", school = "spirit",
                     where = "edge", goal = "centre", speed = 11, hp = 60,
                     art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
                 })
@@ -222,28 +255,28 @@ SC.soulcoiler = {
             call = "Invoke sets every puddle travelling -- BLOODLUST",
             events = Timeline(
                 Every(4, 8, 6, {
-                    kind = "dodge", name = "Invoke", school = "shadow",
+                    kind = "dodge", name = "Invoke", school = "spirit",
                     cast = 2.2, r = 15, damage = 24,
                     leaves = { r = 14, life = 14, dps = 12 },
                     call = "Invoke -- the puddles are moving now",
                 }),
                 Every(7.0, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
                     where = "boss", cast = 2.0, fan = -0.22, speed = 58, damage = 20,
                     call = "Possession Barrage -- clear their path",
                 }),
                 Every(7.0, 12, 4, {
-                    kind = "projectile", name = "Possession Barrage", school = "shadow",
+                    kind = "projectile", name = "Possession Barrage", school = "spirit",
                     where = "boss", cast = 2.0, fan = 0.22, speed = 58, damage = 20,
                     call = "Possession Barrage -- clear their path",
                 }),
                 Every(9, 10, 4, {
-                    kind = "chaser", name = "Restless Amani", school = "shadow",
+                    kind = "chaser", name = "Restless Amani", school = "spirit",
                     where = "edge", goal = "centre", speed = 13, hp = 60,
                     art = "hex", damage = 26, feeds = 5, leavesCorpse = true,
                 }),
                 Every(14, 15, 2, {
-                    kind = "drop", name = "Essence Rend", school = "shadow",
+                    kind = "drop", name = "Essence Rend", school = "spirit",
                     cast = 4, away = "centre", minDist = 62, r = 14,
                     permanent = true, dps = 13, damage = 20,
                 })
