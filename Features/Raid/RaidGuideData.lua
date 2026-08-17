@@ -1150,9 +1150,6 @@ G.bosses = {
         id       = "nymrissa",
         instance = "tg",
         order    = 1,
-        -- Written up, not yet playable. The trainer hides its own button
-        -- for these, and the load harness knows not to demand a scenario.
-        guideOnly = true,
         name     = "Nymrissa Wavecaller",
         ejID     = 2849,
         accent   = { 0.45, 0.80, 1.00 },

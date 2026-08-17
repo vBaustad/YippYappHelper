@@ -3288,6 +3288,66 @@ def main():
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
 
+    # Nymrissa's murlocs BECOME something.
+    #
+    # A murloc that reaches the Alluring Bubble does not merely hit you
+    # and vanish -- it turns into a berserker that pulses until somebody
+    # kills it. Folding that into the arrival hit would have made letting
+    # one through a moment of damage rather than a problem you now have,
+    # which is the opposite of what the fight is about.
+    grotto = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            math.randomseed(2849)
+
+            T:Start("nymrissa", false)
+            S.countdown = 0
+            local sawMurloc, berserkers, whirlAtRim = false, 0, nil
+            for _ = 1, 2600 do
+                -- Never shoot and stand at the wall, so every murloc
+                -- gets through and every orb is left to shatter.
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -88
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                update(f, 0.05)
+                for _, a in ipairs(S.actors) do
+                    if a.name == "Murloc" then sawMurloc = true end
+                    if a.name == "Berserker" and not a.counted then
+                        a.counted = true
+                        berserkers = berserkers + 1
+                    end
+                    -- The whirlpools' safe ground is shoreline.
+                    if a.kind == "refuge" and a.spots and a.spots[1] and not whirlAtRim then
+                        local d = math.sqrt(a.spots[1].x ^ 2 + a.spots[1].y ^ 2)
+                        whirlAtRim = d
+                    end
+                end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if not sawMurloc then return "no murlocs ever spawned" end
+            if berserkers == 0 then
+                return "murlocs reached the bubble and no Berserker appeared"
+            end
+            if not whirlAtRim then return "the whirlpools never cast" end
+            if whirlAtRim < 60 then
+                return string.format(
+                    "the whirlpools' safe ground sat %.0f from the middle,"
+                    .. " which is open floor rather than shoreline", whirlAtRim)
+            end
+            return string.format("ok:%d berserkers from murlocs that got through;"
+                .. " safe shore %.0f out", berserkers, whirlAtRim)
+        end
+    """)(ns)
+    if grotto and str(grotto).startswith("ok:"):
+        print("  ok   trainer grotto: %s" % str(grotto)[3:])
+    else:
+        print("  FAIL trainer grotto: %s" % grotto)
+        failures.append(("trainer grotto", str(grotto)))
+
     # More than one instance in the rail.
     #
     # The guide covers the raid and the Lair, and they have to stay

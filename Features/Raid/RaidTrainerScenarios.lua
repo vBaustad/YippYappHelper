@@ -48,6 +48,13 @@ local _, ns = ...
 --     needed and which their headline rules are made of.
 --   * every add on Vashnik walking for the pool, and feeding the bar
 --     when it arrives.
+--   * an add that BECOMES something when it arrives (`becomes`), which
+--     is what a murloc reaching the Alluring Bubble does.
+--   * refuge ground on the RIM rather than the open floor (`atRim`).
+--
+-- Covers The Tidebound Grotto as well as the raid now; see the foot of
+-- the file. A Lair is a different kind of instance and the same kind of
+-- scenario.
 --
 -- Still missing that COULD be built, in order of value:
 --   * carrying venom orbs into a PILE for the tank's cone (Coiled
@@ -1184,5 +1191,107 @@ SC.alteredfangs = {
                 })
             ),
         },
+    },
+}
+
+------------------------------------------------------------
+-- The Tidebound Grotto
+------------------------------------------------------------
+-- 8. Nymrissa Wavecaller                journal 2849
+--
+-- A Lair rather than a raid boss, and ONE PHASE ON A LOOP -- the guide
+-- says so and nothing here should pretend otherwise. The three phases
+-- below are three turns of the same cycle, named as such: Frost Barrage,
+-- then the Rain, then the murlocs, then the whirlpools, then again
+-- harder. That is a real repetition, not invented structure.
+--
+-- No combat-log encounterID is recorded for her anywhere on this
+-- machine, so the guide carries none and neither does this.
+--
+-- DELIBERATELY ABSENT, by the rule at the top of this file:
+--   * Ice Blade Flurry. Six slashes ramping 45% each is a tank swap, and
+--     a lone dot in an arena cannot practise a taunt.
+--   * Unending Tides / Drenched. A permanent raid-wide dot is a healer's
+--     problem and unavoidable by construction, and this file does not
+--     ship damage the player cannot answer.
+--   * Water Jet clearing frozen ground, which is mythic and is also the
+--     tank's tool rather than yours.
+------------------------------------------------------------
+local function GrottoCycle(name, dur, floor, opts)
+    opts = opts or {}
+    return {
+        name = name, duration = dur, hpFloor = floor,
+        bloodlust = opts.bloodlust,
+        call = opts.call or "Soak every orb. Nothing reaches the bubble.",
+        events = Timeline(
+            -- Frost Barrage. The orbs are the fight: one left to shatter
+            -- is enormous raid damage, so they are worth more than
+            -- anything else you could be doing.
+            Every(3, 4, opts.orbs or 5, {
+                kind = "orb", name = "Frost Orb", school = "frost",
+                window = 9, damage = 30, r = 5,
+                call = "Frost Barrage -- soak every orb, none may shatter",
+            }),
+            -- Abyssal Rain. Modelled as the thing the raid DOES about it
+            -- -- stack up and eat it together -- rather than as chip
+            -- damage nobody can answer.
+            Every(11, opts.rainEvery or 19, opts.rains or 2, {
+                kind = "stack", name = "Abyssal Rain", school = "frost",
+                cast = 3.4, maxDist = 15, damage = 26,
+                call = "Abyssal Rain -- stack up for it",
+            }),
+            -- The murlocs, dragged in from the edges toward the bubble.
+            -- One that arrives becomes a berserker and pulses until it
+            -- dies, which is what `becomes` is for.
+            Pack(7, opts.packEvery or 15, opts.packs or 2, 3, {
+                kind = "chaser", name = "Murloc", school = "frost",
+                where = "edge", goal = "centre", speed = 10, hp = 62,
+                art = "hex", damage = 24,
+                becomes = {
+                    kind = "caster", name = "Berserker", school = "frost",
+                    hp = 150, castLen = 12, damage = 30, r = 6, art = "blob",
+                    call = "A murloc got through -- kill the Berserker",
+                },
+                call = "Murlocs incoming -- hold them off the bubble",
+            }),
+            -- Bubblefin Frostscale: its shield gives every murloc near it
+            -- 99% damage reduction, so it is the priority target and
+            -- nothing else matters while it lives.
+            Every(20, 22, opts.frostscales or 1, {
+                kind = "caster", name = "Bubblefin Frostscale", school = "frost",
+                hp = 170, castLen = 11, damage = 28, r = 6, art = "spike",
+                heroicOnly = true,
+                call = "Bubblefin Frostscale -- kill it or the pack is immune",
+            }),
+            -- Swirling Whirlpools. Dragged in from the rim, and the safe
+            -- ground is the stretch of shore they are NOT coming from.
+            Every(opts.whirlAt or 28, 26, opts.whirls or 1, {
+                kind = "refuge", name = "Swirling Whirlpools", school = "frost",
+                cast = 5, count = 3, r = 12, damage = 38, atRim = true,
+                call = "Whirlpools -- get to the calm stretch of shore",
+            })
+        ),
+    }
+end
+
+SC.nymrissa = {
+    bossId = "nymrissa",
+    title  = "Nymrissa Wavecaller",
+    intro  = "Soak every frost orb. Nothing reaches the bubble.",
+    bossHp = 4200,
+    -- The Alluring Bubble sits in the middle and the murlocs walk at it,
+    -- which is the same shape as Nek'zali's well and reuses it.
+    well   = true,
+    wellName = "The Alluring Bubble",
+    phases = {
+        GrottoCycle("First cycle", 40, 62),
+        GrottoCycle("Second cycle", 40, 28, {
+            orbs = 6, packs = 2, packEvery = 13, whirls = 2, whirlAt = 22,
+        }),
+        GrottoCycle("Third cycle", 38, 0, {
+            orbs = 7, packs = 3, packEvery = 12, rains = 3, rainEvery = 14,
+            whirls = 2, whirlAt = 20, frostscales = 2, bloodlust = true,
+            call = "Everything at once now -- BLOODLUST",
+        }),
     },
 }

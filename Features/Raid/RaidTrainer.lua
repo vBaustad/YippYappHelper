@@ -2914,6 +2914,20 @@ KINDS.chaser = {
             Hurt(a.damage or 30, a.name ..
                 (a.goal == "boss" and " reached him -- that is a heal"
                  or " reached the middle"))
+            -- What it TURNS INTO on arrival.
+            --
+            -- A murloc that reaches the Alluring Bubble does not merely
+            -- hit you and vanish -- it becomes a berserker and pulses
+            -- until somebody kills it. Folding that into the arrival hit
+            -- would have made letting one through a moment of damage
+            -- rather than a problem you now have to solve, which is the
+            -- opposite of what the fight is about.
+            if a.becomes then
+                local ev = {}
+                for k, v in pairs(a.becomes) do ev[k] = v end
+                ev.where = { x = a.x, y = a.y }
+                Spawn(ev)
+            end
             if a.feeds and S.scenario and S.scenario.energy then
                 S.energy = math.min((S.scenario.energy.max or 100),
                     S.energy + a.feeds)
@@ -3331,12 +3345,31 @@ KINDS.orb = {
 ------------------------------------------------------------
 KINDS.refuge = {
     Init = function(a)
-        a.spots = {}
-        for i = 1, (a.count or 3) do
-            local x, y = randomPoint(28)
-            a.spots[i] = { x = x, y = y }
-        end
+        -- Defaulted BEFORE the spots are placed, because the rim
+        -- placement below needs it to know how far in to sit.
         a.r = a.r or 11
+        a.spots = {}
+        if a.atRim then
+            -- On the SHORELINE, not out on the open floor.
+            --
+            -- Nymrissa's whirlpools are dragged inward from the edges,
+            -- and the safe ground is the stretch of shore they are not
+            -- coming from -- so the answer is "get to that piece of the
+            -- wall", which is a different movement from "find a circle
+            -- somewhere in the room". Placed adjacently so they read as
+            -- one length of beach rather than three islands.
+            local base = math.random() * math.pi * 2
+            local rad = ARENA_R - (a.r or 11) - 6
+            for i = 1, (a.count or 3) do
+                local ang = base + (i - (a.count or 3) / 2 - 0.5) * 0.24
+                a.spots[i] = { x = math.cos(ang) * rad, y = math.sin(ang) * rad }
+            end
+        else
+            for i = 1, (a.count or 3) do
+                local x, y = randomPoint(28)
+                a.spots[i] = { x = x, y = y }
+            end
+        end
     end,
     Resolve = function(a)
         local safe = false
