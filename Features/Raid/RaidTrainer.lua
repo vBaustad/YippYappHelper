@@ -208,6 +208,41 @@ local C = {
     shot   = { 1.00, 0.95, 0.60 },
     boss   = { 1.00, 0.45, 0.35 },
     well   = { 0.90, 0.30, 0.60 },
+
+    -- Everything below was an inline `{ r, g, b }` written at the point
+    -- of use, inside a Draw that runs sixty times a second.
+    --
+    -- A table constructor allocates. Thirty-odd of them, across twenty
+    -- actors, on every frame, is a few hundred short-lived tables a
+    -- second -- and Lua's collector does not charge you a little all the
+    -- time for that, it charges you a pause when the allocation
+    -- threshold trips. Naming them costs nothing at runtime and reads
+    -- better besides: `C.notMine` says what the amber MEANS, which
+    -- `{ 1.0, 0.72, 0.25 }` never did.
+    notMine    = { 1.00, 0.72, 0.25 },  -- somebody else's soak
+    telegraph  = { 1.00, 0.85, 0.40 },  -- a cast winding up
+    cone       = { 1.00, 0.85, 0.30 },  -- a frontal, before it fires
+    white      = { 1.00, 1.00, 1.00 },
+    ward       = { 0.55, 0.75, 1.00 },  -- the immunity bubble
+    immune     = { 0.62, 0.66, 0.74 },  -- a boss you cannot hurt
+    corpse     = { 0.55, 0.52, 0.60 },
+    cyst       = { 0.50, 1.00, 0.60 },
+    cystLit    = { 0.60, 1.00, 0.70 },
+    tunnel     = { 0.60, 0.85, 1.00 },
+    tunnelDim  = { 0.45, 0.70, 1.00 },
+    tunnelHot  = { 1.00, 0.35, 0.30 },
+    stalker    = { 0.90, 0.50, 1.00 },
+    frozen     = { 0.50, 0.75, 1.00 },  -- a stalker you froze by holding still
+    carried    = { 0.40, 0.90, 1.00 },
+    imbibe     = { 1.00, 0.60, 0.20 },
+    partner    = { 0.40, 0.80, 1.00 },  -- the ally you must reach
+    clearing   = { 1.00, 0.50, 0.15 },  -- somebody clearing Frostfire
+    bossPale   = { 1.00, 0.93, 0.90 },
+    bossDown   = { 0.40, 0.38, 0.42 },
+    bossName   = { 0.85, 0.85, 0.90 },
+    allyMarked = { 0.40, 0.85, 1.00 },
+    allyHit    = { 1.00, 0.45, 0.40 },
+    allyOut    = { 0.90, 0.60, 1.00 },
 }
 
 ------------------------------------------------------------
@@ -781,7 +816,7 @@ local function DrawCorpses(s)
         if c then
             -- Dim and small, so a floor of them reads as litter to clear
             -- rather than as a dozen more things to dodge.
-            put(corpseTex[i], "skull", c.x, c.y, 11, s, { 0.55, 0.52, 0.60 }, 0.75)
+            put(corpseTex[i], "skull", c.x, c.y, 11, s, C.corpse, 0.75)
         else
             corpseTex[i]:Hide()
         end
@@ -1192,20 +1227,34 @@ end
 --- added to whatever the ally was already trying to do. An ally running
 --- to a soak should still bend around a puddle on the way rather than
 --- choosing between the two.
-local function DangerPush(x, y)
-    local px, py = 0, 0
+--- Running total for DangerPush, at file scope.
+---
+--- `repel` used to be a closure declared inside DangerPush, capturing
+--- x, y, px and py -- so every call built a function object, and
+--- DangerPush runs once per ally per frame. That is a few hundred
+--- closures a second for a helper whose body never changes, and it was
+--- the single largest source of garbage in the loop.
+---
+--- Hoisting it needs somewhere to keep the total, which is what these
+--- are. Safe because DangerPush is never re-entered: nothing it calls
+--- calls back into it.
+local pushFromX, pushFromY, pushX, pushY = 0, 0, 0, 0
 
-    local function repel(cx, cy, radius)
-        local dx, dy = x - cx, y - cy
-        local d = math.sqrt(dx * dx + dy * dy)
-        if d >= radius then return end
-        if d < 0.001 then
-            px, py = px + 1, py
-            return
-        end
-        local strength = (radius - d) / radius
-        px, py = px + dx / d * strength, py + dy / d * strength
+local function Repel(cx, cy, radius)
+    local dx, dy = pushFromX - cx, pushFromY - cy
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d >= radius then return end
+    if d < 0.001 then
+        pushX = pushX + 1
+        return
     end
+    local strength = (radius - d) / radius
+    pushX, pushY = pushX + dx / d * strength, pushY + dy / d * strength
+end
+
+local function DangerPush(x, y)
+    pushFromX, pushFromY = x, y
+    pushX, pushY = 0, 0
 
     -- The boss's front, always. "Nobody but the tank stands in the cone"
     -- is a position the raid holds for the whole fight, not a thing it
@@ -1220,8 +1269,8 @@ local function DangerPush(x, y)
                 % (math.pi * 2)) - math.pi)
             if off < 0.65 then
                 local strength = (0.65 - off) / 0.65
-                px, py = px + (-math.sin(b.facing or 0)) * strength * 1.4,
-                         py + (math.cos(b.facing or 0)) * strength * 1.4
+                pushX, pushY = pushX + (-math.sin(b.facing or 0)) * strength * 1.4,
+                         pushY + (math.cos(b.facing or 0)) * strength * 1.4
             end
         end
     end
@@ -1230,7 +1279,7 @@ local function DangerPush(x, y)
     -- is not an actor -- it is a hole in the floor -- so nothing in the
     -- loop below would ever have kept the raid off it.
     if S.scenario and S.scenario.well then
-        repel(0, 0, 26)
+        Repel(0, 0, 26)
     end
 
     for _, a in ipairs(S.actors) do
@@ -1248,11 +1297,11 @@ local function DangerPush(x, y)
                 local nx, ny = -math.sin(a.dir), math.cos(a.dir)
                 local side = ((x - a.x) * nx + (y - a.y) * ny) >= 0 and 1 or -1
                 local strength = (half - across) / half
-                px, py = px + nx * side * strength * 1.6,
-                         py + ny * side * strength * 1.6
+                pushX, pushY = pushX + nx * side * strength * 1.6,
+                         pushY + ny * side * strength * 1.6
             end
         elseif a.kind == "dodge" and not a.resolved then
-            repel(a.x, a.y, a.r + 7)
+            Repel(a.x, a.y, a.r + 7)
         elseif a.kind == "puddle" then
             -- Only what you are actually standing in, or all but.
             --
@@ -1264,11 +1313,11 @@ local function DangerPush(x, y)
             -- somewhere very slightly better to be. Ground already
             -- underfoot is worth moving off; ground twenty units away
             -- is scenery.
-            repel(a.x, a.y, a.r + 2)
+            Repel(a.x, a.y, a.r + 2)
         elseif a.kind == "chaser" and a.intercept then
             -- Deliberately no repulsion. You are meant to be in its way.
         elseif a.kind == "chaser" or a.kind == "stalker" then
-            repel(a.x, a.y, a.r + 8)
+            Repel(a.x, a.y, a.r + 8)
         elseif (a.kind == "line" and not a.resolved) or a.kind == "beam" then
             -- Pushed sideways off the axis, not backwards down it: the
             -- way out of a line is across it.
@@ -1278,7 +1327,7 @@ local function DangerPush(x, y)
                 local nx, ny = -math.sin(a.dir), math.cos(a.dir)
                 local side = ((x - a.x) * nx + (y - a.y) * ny) >= 0 and 1 or -1
                 local strength = (half - across) / half
-                px, py = px + nx * side * strength, py + ny * side * strength
+                pushX, pushY = pushX + nx * side * strength, pushY + ny * side * strength
             end
         elseif a.kind == "wave" then
             local perp = a.dir + math.pi / 2
@@ -1287,12 +1336,12 @@ local function DangerPush(x, y)
             if math.abs(along) <= a.len / 2 and across < half then
                 -- Ahead of the wave, so run with it rather than into it.
                 local strength = (half - across) / half
-                px = px + math.cos(a.dir) * strength
-                py = py + math.sin(a.dir) * strength
+                pushX = pushX + math.cos(a.dir) * strength
+                pushY = pushY + math.sin(a.dir) * strength
             end
         end
     end
-    return px, py
+    return pushX, pushY
 end
 
 --- How bad the ground is in a cone pointing `dir` from the boss.
@@ -1493,11 +1542,15 @@ local function NearestBoss(x, y)
     return best or S.bossActor
 end
 
+-- Priority order, built once. It was a table constructor inside
+-- AllyTarget, which runs per ally per frame.
+local ALLY_RANK = { caster = 3, chaser = 2, stalker = 1 }
+
 local function AllyTarget(ally)
     -- The tank holds the boss and does not chase adds. One fewer body on
     -- the pack, and it keeps the formation legible.
     if ally.role == "TANK" then return S.bossActor end
-    local RANK = { caster = 3, chaser = 2, stalker = 1 }
+    local RANK = ALLY_RANK
     local best, bestD, bestRank
     for _, a in ipairs(S.actors) do
         if a.enemy and not a.dead and a.hp and a.hp > 0 then
@@ -2098,12 +2151,12 @@ local function DrawTunnels(s)
     for i, t in ipairs(S.tunnels) do
         local live = S.windStep and t.order == S.windStep
         put(tunnelTex[i], "hex", t.x, t.y, 15, s,
-            live and { 1, 0.85, 0.4 } or { 0.55, 0.75, 1 }, live and 1 or 0.75)
+            live and C.telegraph or C.ward, live and 1 or 0.75)
         -- The count IS the mechanic: one pip blows first, two second.
         for k = 1, 3 do
             local pip = tunnelPip[i][k]
             if k <= t.order then
-                put(pip, "diamond", t.x + (k - 2) * 7, t.y, 6, s, { 1, 1, 1 }, 0.95)
+                put(pip, "diamond", t.x + (k - 2) * 7, t.y, 6, s, C.white, 0.95)
             else
                 pip:Hide()
             end
@@ -2111,11 +2164,11 @@ local function DrawTunnels(s)
         -- And where its cyst goes, drawn from the start so the pairing
         -- is visible rather than something to work out under pressure.
         if t.cyst then
-            put(cystTex[i], "spike", t.cx, t.cy, 20, s, { 0.6, 1, 0.7 }, 0.95,
+            put(cystTex[i], "spike", t.cx, t.cy, 20, s, C.cystLit, 0.95,
                 S.time * 0.4)
         else
             put(cystTex[i], "ring", t.cx, t.cy, CYST_REACH * 2, s,
-                { 0.45, 0.7, 1 }, 0.4)
+                C.tunnelDim, 0.4)
         end
     end
 end
@@ -2383,7 +2436,7 @@ KINDS.soak = {
         -- Amber, not green, when it is somebody else's turn. The ring
         -- means "what do I do about this", and the honest answer for a
         -- Singed player is "not this one".
-        local col = a.notMine and { 1.0, 0.72, 0.25 } or C.good
+        local col = a.notMine and C.notMine or C.good
         DrawGroundCircle(a, s, col, 0.25, a.flashUntil and S.time < a.flashUntil)
     end,
 }
@@ -2631,7 +2684,7 @@ KINDS.drop = {
     Draw = function(a, s)
         local p = castProgress(a)
         local d = (a.r or 13) * 2 * (1.6 - 0.6 * p)
-        local col = schoolOf(a, { 0.9, 0.5, 1 })
+        local col = schoolOf(a, C.stalker)
         put(V(a, 1, "ARTWORK", 2), "ring", S.px, S.py, d, s, col, 0.9)
         put(V(a, 2, "ARTWORK", 1), "swirl", S.px, S.py, d * 0.9, s, col,
             0.5, -S.time * 3)
@@ -2721,14 +2774,14 @@ KINDS.line = {
         -- Telegraph in the school's colour, then flash red as it fires:
         -- while it is winding up the useful fact is what it is, and at
         -- the moment it lands the only useful fact is that it hurts.
-        local col = live and C.bad or schoolOf(a, { 1, 0.85, 0.3 })
+        local col = live and C.bad or schoolOf(a, C.cone)
         local alpha = live and 0.85 or (0.14 + 0.22 * p)
         -- The ring rule, applied to a cone: what it IS stays in the
         -- school colour, what to DO with it is green for get-in. Amber
         -- when you are marked, because the honest answer for a player
         -- who just took one is "not this one".
         if a.soakIn and not live then
-            col = a.notMine and { 1.0, 0.72, 0.25 } or C.good
+            col = a.notMine and C.notMine or C.good
             alpha = 0.16 + 0.26 * p
         end
 
@@ -3015,7 +3068,7 @@ KINDS.stalker = {
         if a.playerHit then Credit(a.name .. " destroyed") end
     end,
     Draw = function(a, s)
-        DrawEnemy(a, s, "blob", S.moving and schoolOf(a, C.add) or { 0.5, 0.75, 1 })
+        DrawEnemy(a, s, "blob", S.moving and schoolOf(a, C.add) or C.frozen)
     end,
 }
 
@@ -3140,7 +3193,7 @@ KINDS.caster = {
         end
     end,
     Draw = function(a, s)
-        local col = schoolOf(a, { 1, 0.85, 0.3 })
+        local col = schoolOf(a, C.cone)
         local frac = a.hp / a.maxHp
         put(V(a, 1, "OVERLAY", 3), a.art or "hex", a.x, a.y, a.r * 2, s, col, 0.95,
             S.time * 0.5)
@@ -3257,7 +3310,7 @@ KINDS.carry = {
         end
     end,
     Draw = function(a, s)
-        local col = schoolOf(a, { 0.4, 0.9, 1 })
+        local col = schoolOf(a, C.carried)
         put(V(a, 1, "OVERLAY", 4), "star", a.x, a.y, a.r * 2.4, s, col, 1, S.time * 2)
         if a.held then
             -- Where it has to go, drawn only while you are holding it.
@@ -3415,7 +3468,7 @@ KINDS.spread = {
     end,
     Draw = function(a, s)
         local p = castProgress(a)
-        local col = schoolOf(a, { 1, 0.6, 0.2 })
+        local col = schoolOf(a, C.imbibe)
         -- DIAMETER equal to the required separation, so each ring has a
         -- radius of half of it.
         --
@@ -3618,7 +3671,7 @@ KINDS.meet = {
         -- are in it.
         local joined = dist(S.px, S.py, tx, ty) <= (a.reach or 9)
         put(V(a, 1, "ARTWORK", 2), "ring", tx, ty, (a.reach or 9) * 2, s,
-            joined and C.good or { 0.4, 0.8, 1 },
+            joined and C.good or C.partner,
             joined and 0.95 or (a.labels and 0.45 or 0.9))
         if joined then
             put(V(a, 2, "ARTWORK", 0), "disc", tx, ty, (a.reach or 9) * 2, s,
@@ -3703,11 +3756,11 @@ KINDS.place = {
         -- The target, and the tunnel it belongs to, lit together. The
         -- pairing is the lesson.
         put(V(a, 1, "ARTWORK", 2), "ring", t.cx, t.cy, CYST_REACH * 2, s,
-            { 0.5, 1, 0.6 }, 0.5 + 0.5 * p)
+            C.cyst, 0.5 + 0.5 * p)
         put(V(a, 2, "ARTWORK", 1), "swirl", t.cx, t.cy, CYST_REACH * 1.7, s,
-            { 0.5, 1, 0.6 }, 0.6, S.time * 2)
-        put(V(a, 3, "ARTWORK", 2), "ring", t.x, t.y, 26, s, { 1, 0.85, 0.4 }, 0.9)
-        put(V(a, 4, "ARTWORK", 2), "ring", S.px, S.py, 12, s, { 0.5, 1, 0.6 }, 0.7)
+            C.cyst, 0.6, S.time * 2)
+        put(V(a, 3, "ARTWORK", 2), "ring", t.x, t.y, 26, s, C.telegraph, 0.9)
+        put(V(a, 4, "ARTWORK", 2), "ring", S.px, S.py, 12, s, C.cyst, 0.7)
     end,
 }
 
@@ -3743,8 +3796,8 @@ KINDS.wind = {
         -- is something you can see rather than something you remember.
         putBar(V(a, 1, "OVERLAY", 1), t.x, t.y,
             atan2(-t.y, -t.x), TUNNEL_R + CYST_R, 18, s,
-            { 0.6, 0.85, 1 }, 0.18 + 0.3 * p)
-        local col = t.cyst and { 0.5, 1, 0.6 } or { 1, 0.35, 0.3 }
+            C.tunnel, 0.18 + 0.3 * p)
+        local col = t.cyst and C.cyst or C.tunnelHot
         put(V(a, 2, "ARTWORK", 2), "ring", t.cx, t.cy, CYST_REACH * 2, s, col, 1)
     end,
 }
@@ -3905,11 +3958,11 @@ local function DrawBoss(s)
                 -- screen can say during an intermission -- and a boss that
                 -- merely stopped losing health said it far too quietly.
                 put(bossSkull[i], "skull", b.x, b.y, b.r * 2.2, s,
-                    { 0.62, 0.66, 0.74 }, 0.85)
+                    C.immune, 0.85)
                 put(bossWard[i], "swirl", b.x, b.y, b.r * 3.4, s,
-                    { 0.55, 0.75, 1.0 }, 0.75, S.time * 1.4)
+                    C.ward, 0.75, S.time * 1.4)
                 put(bossWardRing[i], "ring", b.x, b.y, b.r * 3.4, s,
-                    { 0.55, 0.75, 1.0 }, 0.85)
+                    C.ward, 0.85)
                 bossFace[i]:Hide()
             elseif b.hp <= 0 then
                 -- Dead, and still on the floor. On the Twin Fangs that is
@@ -3917,14 +3970,14 @@ local function DrawBoss(s)
                 -- this one went down first, and a skull that vanished
                 -- would take the reason with it.
                 put(bossSkull[i], "skull", b.x, b.y, b.r * 2.0, s,
-                    { 0.40, 0.38, 0.42 }, 0.6)
+                    C.bossDown, 0.6)
                 bossFace[i]:Hide()
                 bossWard[i]:Hide(); bossWardRing[i]:Hide()
             else
                 bossWard[i]:Hide()
                 bossWardRing[i]:Hide()
                 put(bossSkull[i], "skull", b.x, b.y, b.r * 2.2, s,
-                    b.colour or { 1, 0.93, 0.90 }, 1)
+                    b.colour or C.bossPale, 1)
                 -- Small, and tucked against the skull. Far enough out it reads
                 -- as a separate object floating nearby; this way it is plainly
                 -- part of the boss and plainly points somewhere.
@@ -3937,7 +3990,7 @@ local function DrawBoss(s)
                 bossLabel[i]:SetPoint("CENTER", arena, "CENTER",
                     b.x * s, (b.y - b.r * 1.9) * s)
                 bossLabel[i]:SetText(b.name)
-                local c = b.colour or { 0.85, 0.85, 0.9 }
+                local c = b.colour or C.bossName
                 bossLabel[i]:SetTextColor(c[1], c[2], c[3], b.hp > 0 and 1 or 0.45)
                 bossLabel[i]:Show()
             else
@@ -4172,7 +4225,7 @@ local function DrawDots(s)
 
     put(playerTex, "ship", S.px, S.py, PLAYER_R * 3.2, s, { r, g, b }, 1,
         S.aim + SPRITE_FACING)
-    put(playerRing, "ring", S.px, S.py, PLAYER_R * 3.6, s, { 1, 1, 1 }, 0.55)
+    put(playerRing, "ring", S.px, S.py, PLAYER_R * 3.6, s, C.white, 0.55)
 
     for i, a in ipairs(S.allies) do
         local t = allyTex[i]
@@ -4180,11 +4233,11 @@ local function DrawDots(s)
         -- is carrying a mechanic, needs to read as THAT first.
         local col = ROLE_TINT[a.role] or C.ally
         if a.marked then
-            col = { 0.4, 0.85, 1 }
+            col = C.allyMarked
         elseif a.stagger > 0 then
-            col = { 1, 0.45, 0.4 }
+            col = C.allyHit
         elseif a.runOut then
-            col = { 0.9, 0.6, 1 }
+            col = C.allyOut
         end
         -- Upright, never rotated.
         --
@@ -4241,7 +4294,7 @@ local function DrawDots(s)
     if hot and S.element then
         local ally = S.allies[S.clearingWho or 1]
         if ally then
-            put(clearRing, "ring", ally.x, ally.y, 26, s, { 1, 0.5, 0.15 },
+            put(clearRing, "ring", ally.x, ally.y, 26, s, C.clearing,
                 0.9, S.time * 3)
         end
         clearText:SetPoint("CENTER", arena, "CENTER",
@@ -4434,6 +4487,36 @@ local function Finish(victory)
     callOut:SetText("")
 end
 
+------------------------------------------------------------
+-- What the header is currently SHOWING.
+--
+-- The loop runs sixty times a second and every one of these prints an
+-- integer read off a float, so the resulting string is identical on
+-- almost every frame. Remembering what was last set turns a dozen
+-- string builds per frame into a handful per round, and the screen looks
+-- exactly the same.
+--
+-- Reset in T:Start rather than trusted to differ, or a new round that
+-- happened to open on the same numbers would leave the previous round's
+-- text on screen.
+------------------------------------------------------------
+-- One table rather than nine locals, and not for tidiness.
+--
+-- This chunk is at Lua's hard ceiling of 200 locals in a single
+-- function, and the main chunk of a 4800-line file is one function.
+-- Adding nine more overflowed it, and the error -- "too many local
+-- variables" pointing at a line 3000 further down -- says nothing about
+-- what caused it. Anything new at this scope should join an existing
+-- table rather than claim another slot.
+local SHOWN = { boss = {}, ON = "|cffff5533BLOODLUST|r",
+                OFF = "|cff884433BLOODLUST|r" }
+
+local function ResetShown()
+    SHOWN.hp, SHOWN.energy, SHOWN.lust = nil, nil, nil
+    SHOWN.passed, SHOWN.failed, SHOWN.left, SHOWN.stacks = nil, nil, nil, nil
+    SHOWN.boss[1], SHOWN.boss[2] = nil, nil
+end
+
 local function Update(_, elapsed)
     if not S.running then return end
 
@@ -4541,7 +4624,18 @@ local function Update(_, elapsed)
     hp:SetValue(S.hp)
     local frac = S.hp / MAX_HP
     hp:SetStatusBarColor(frac > 0.5 and 0.3 or 0.9, frac > 0.25 and 0.85 or 0.25, 0.35)
-    hp.text:SetText(math.floor(S.hp) .. "%")
+    -- Only when the printed number actually changes.
+    --
+    -- Every one of these reads a float and prints an integer, so the
+    -- string is identical on roughly fifty-nine frames out of sixty --
+    -- and building it anyway allocated a fresh one each time. Nothing
+    -- about what is on screen changes; the only thing that changed was
+    -- how much garbage the collector had to walk.
+    local hpShown = math.floor(S.hp)
+    if hpShown ~= SHOWN.hp then
+        SHOWN.hp = hpShown
+        hp.text:SetText(hpShown .. "%")
+    end
 
     for i = 1, 2 do
         local bi = S.bossActors[i]
@@ -4549,8 +4643,12 @@ local function Update(_, elapsed)
             local pct = bi.hp / bi.maxHp * 100
             bossBar[i]:Show()
             bossBar[i]:SetValue(pct)
-            bossBar[i].text:SetText(("%s  %d%%"):format(
-                #S.bossActors > 1 and bi.name or "Boss", math.floor(pct)))
+            local shown = math.floor(pct)
+            if shown ~= SHOWN.boss[i] then
+                SHOWN.boss[i] = shown
+                bossBar[i].text:SetText(("%s  %d%%"):format(
+                    #S.bossActors > 1 and bi.name or "Boss", shown))
+            end
             -- The gap between the two bars is the mechanic on the
             -- Sentinels, so the bar that is AHEAD says so in colour
             -- rather than leaving it to be read off two lengths.
@@ -4584,7 +4682,11 @@ local function Update(_, elapsed)
         energyBar:Show()
         energyBar:SetValue(pct)
         energyBar:SetStatusBarColor(1.0, pct >= 70 and 0.35 or 0.80, 0.15)
-        energyBar.text:SetText(("%s  %d%%"):format(e.name, math.floor(pct)))
+        local shown = math.floor(pct)
+        if shown ~= SHOWN.energy then
+            SHOWN.energy = shown
+            energyBar.text:SetText(("%s  %d%%"):format(e.name, shown))
+        end
     else
         energyBar:Hide()
     end
@@ -4594,17 +4696,36 @@ local function Update(_, elapsed)
         -- cooldown into should not be a thing you notice afterwards.
         lustText:Show()
         local on = (math.floor(S.time * 2) % 2) == 0
-        lustText:SetText(on and "|cffff5533BLOODLUST|r" or "|cff884433BLOODLUST|r")
+        -- Two constant strings rather than a fresh one twice a second.
+        if on ~= SHOWN.lust then
+            SHOWN.lust = on
+            lustText:SetText(on and SHOWN.ON or SHOWN.OFF)
+        end
     else
         lustText:Hide()
+        SHOWN.lust = nil
     end
-    local stackLine = ""
-    if S.scenario.stacks then
-        local max = S.heroic and S.scenario.stacks.heroicMax or S.scenario.stacks.max
-        stackLine = ("   |cffaaff44%s %d/%d|r"):format(S.scenario.stacks.name, S.stacks, max)
+
+    -- The score line, rebuilt only when one of its numbers moves.
+    --
+    -- It is the most expensive string in the loop -- five substitutions
+    -- and two colour-coded fragments -- and its inputs are three
+    -- integers that change a handful of times a round.
+    local secsLeft = math.ceil(left)
+    if S.passed ~= SHOWN.passed or S.failed ~= SHOWN.failed
+        or secsLeft ~= SHOWN.left or S.stacks ~= SHOWN.stacks then
+        SHOWN.passed, SHOWN.failed = S.passed, S.failed
+        SHOWN.left, SHOWN.stacks = secsLeft, S.stacks
+        local stackLine = ""
+        if S.scenario.stacks then
+            local max = S.heroic and S.scenario.stacks.heroicMax or S.scenario.stacks.max
+            stackLine = ("   |cffaaff44%s %d/%d|r"):format(
+                S.scenario.stacks.name, S.stacks, max)
+        end
+        scoreText:SetText(
+            ("|cff44ff66%d handled|r   |cffff4444%d missed|r   |cff888888%ds left|r%s%s")
+            :format(S.passed, S.failed, secsLeft, energyLine, stackLine))
     end
-    scoreText:SetText(("|cff44ff66%d handled|r   |cffff4444%d missed|r   |cff888888%ds left|r%s%s")
-        :format(S.passed, S.failed, math.ceil(left), energyLine, stackLine))
 
     local allDown = #S.bossActors > 0
     for _, bi in ipairs(S.bossActors) do
@@ -4689,6 +4810,7 @@ function T:Start(bossId, heroic)
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
     S.element, S.volleyFlip, S.raiseQueue = nil, nil, nil
+    ResetShown()
     mineText:Hide()
     S.allyClears, S.lastClear, S.clearingWho = nil, nil, nil
     S.revive, S.orbRot, S.orbRotUntil = nil, 0, 0

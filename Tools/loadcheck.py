@@ -41,6 +41,17 @@ PRELUDE = r"""
 local function num(n) return function() return n end end
 
 local Region = {}
+-- One shared no-op, not a fresh closure per lookup.
+--
+-- This used to build a new function every time an unimplemented
+-- CamelCase method was called, which is thousands of closures a second
+-- under Tools/profile.py -- harness garbage that shows up as if the
+-- addon had allocated it. Behaviourally identical: it ignores its
+-- arguments and returns self either way.
+local NOOP = function(self) return self end
+-- Memoised, because `k:match` allocates a string on every hit and these
+-- lookups are the hottest thing in the stub.
+local isMethod = {}
 Region.__index = function(t, k)
     local f = rawget(Region, k)
     if f then return f end
@@ -48,9 +59,12 @@ Region.__index = function(t, k)
     -- still read as nil, or idioms like `self._scripts or {}` get a
     -- function instead of a table and the harness invents its own bugs
     -- instead of finding the addon's.
-    if type(k) == "string" and k:match("^%u") then
-        return function(self, ...) return self end
+    local known = isMethod[k]
+    if known == nil then
+        known = type(k) == "string" and k:match("^%u") ~= nil
+        isMethod[k] = known
     end
+    if known then return NOOP end
     return nil
 end
 
@@ -3401,6 +3415,70 @@ def main():
     else:
         print("  FAIL guide instances: %s" % inst)
         failures.append(("guide instances", str(inst)))
+
+    # A garbage budget for the trainer's frame.
+    #
+    # The trainer is the only thing in this addon with a permanent
+    # OnUpdate, so it is the only thing that can make the game stutter.
+    # What does that is not CPU -- it is ALLOCATION: Lua collects when
+    # allocation crosses a threshold, so a loop that allocates every
+    # frame does not cost a little all the time, it buys a pause,
+    # periodically, forever.
+    #
+    # This caught a real one. `repel` was a closure declared inside
+    # DangerPush, which runs per ally per frame, so the loop was building
+    # a few hundred function objects a second for a helper whose body
+    # never changes. Hoisting it cut the frame's garbage by about 44%.
+    #
+    # The stub's own SetPoint is swapped out while measuring, because it
+    # records every anchor for the layout checks -- two tables per call,
+    # on every sprite, every frame. Left in, it dwarfs the addon and the
+    # number means nothing. In the client these are C functions that
+    # allocate no Lua garbage at all.
+    BUDGET = 5000
+    perf = L.eval("""
+        function(ns, budget)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local mt = getmetatable(UIParent)
+            local realPoint, realClear = mt.SetPoint, mt.ClearAllPoints
+            local noop = function(self) return self end
+            rawset(mt, "SetPoint", noop)
+            rawset(mt, "ClearAllPoints", noop)
+
+            local worst, worstBoss = 0, "?"
+            for _, boss in ipairs(ns.RaidGuide:Ordered()) do
+                if ns.RaidTrainerScenarios[boss.id] then
+                    T:Start(boss.id, false)
+                    S.countdown = 0
+                    -- Warm up, so one-off pool and font-string setup is
+                    -- not charged to the steady-state frame.
+                    for _ = 1, 120 do S.hp, S.firing = 100, true; update(f, 0.016) end
+                    collectgarbage('collect')
+                    local before = collectgarbage('count')
+                    for _ = 1, 400 do S.hp, S.firing = 100, true; update(f, 0.016) end
+                    local per = (collectgarbage('count') - before) * 1024 / 400
+                    T:Stop()
+                    if per > worst then worst, worstBoss = per, boss.id end
+                end
+            end
+
+            rawset(mt, "SetPoint", realPoint)
+            rawset(mt, "ClearAllPoints", realClear)
+            if worst > budget then
+                return string.format("%s allocates %.0f bytes a frame, over the %d budget",
+                    worstBoss, worst, budget)
+            end
+            return string.format("ok:worst frame %.0f bytes (%s), budget %d",
+                worst, worstBoss, budget)
+        end
+    """)(ns, BUDGET)
+    if perf and str(perf).startswith("ok:"):
+        print("  ok   trainer garbage: %s" % str(perf)[3:])
+    else:
+        print("  FAIL trainer garbage: %s" % perf)
+        failures.append(("trainer garbage", str(perf)))
 
     # Permanent textures must come BACK.
     #
