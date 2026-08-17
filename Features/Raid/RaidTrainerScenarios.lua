@@ -517,6 +517,17 @@ SC.explorers = {
 --
 -- Plague Rot is a spread and THEN waves, eight seconds later: walk out,
 -- then dodge.
+--
+-- THE THREE PHASES BELOW ARE NOT ENCOUNTER PHASES. Vashnik is one phase
+-- with three fountains, and the guide says so; its `shape` field reads
+-- "1 phase, 3 fountains" and that is correct. These are the guide's own
+-- SECTIONS -- the fountains, blood, and whatever is empowered -- used as
+-- a teaching order, so a player meets Siphoning Infection on its own
+-- instead of buried under two other schools on the first pull.
+--
+-- The same licence the whole file already takes with time, named here
+-- because on this one boss a reader could mistake it for a claim about
+-- the fight.
 ------------------------------------------------------------
 SC.vashnik = {
     bossId = "vashnik",
@@ -570,7 +581,7 @@ SC.vashnik = {
             -- Infection is the one mechanic on this boss that no amount
             -- of healing answers and it deserves to be met on its own
             -- rather than buried under three other schools.
-            name = "Blood -- the leech", duration = 34, hpFloor = 26,
+            name = "Blood", duration = 34, hpFloor = 26,
             call = "Infected players walk into the nearest camp",
             events = Timeline(
                 Every(4, 12, 3, {

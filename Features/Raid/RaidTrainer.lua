@@ -3594,14 +3594,6 @@ local function SetupBoss(sc)
     S.bossActor = S.bossActors[1]
 end
 
---- Every boss still worth shooting. Empty during an immune phase, which
---- is what makes HitScan's bullets pass straight through them.
-local function LiveBosses()
-    local phase = CurrentPhase()
-    if phase and phase.bossImmune then return {} end
-    return S.bossActors
-end
-
 local function DrawBoss(s)
     local phase = CurrentPhase()
     local immune = phase and phase.bossImmune
@@ -4169,7 +4161,6 @@ local function Update(_, elapsed)
     hp:SetStatusBarColor(frac > 0.5 and 0.3 or 0.9, frac > 0.25 and 0.85 or 0.25, 0.35)
     hp.text:SetText(math.floor(S.hp) .. "%")
 
-    local b = S.bossActor
     for i = 1, 2 do
         local bi = S.bossActors[i]
         if bi then
