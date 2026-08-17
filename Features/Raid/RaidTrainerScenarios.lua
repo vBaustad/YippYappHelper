@@ -399,7 +399,7 @@ end
 SC.sentinels = {
     bossId = "sentinels",
     title  = "Entombed Sentinels",
-    intro  = "Swap sides at every intermission. Green orbs plus theirs make four.",
+    intro  = "Swap sides at every stasis. Your venom orbs plus theirs make four.",
     bossHp = 5400,
 
     -- TWO golems, forty yards apart, and they stay apart: the tanks hold

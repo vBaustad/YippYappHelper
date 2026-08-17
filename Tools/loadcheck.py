@@ -3266,6 +3266,55 @@ def main():
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
 
+    # Permanent textures must come BACK.
+    #
+    # A whole class of bug lived here: every long-lived texture in the
+    # trainer is drawn by one branch and hidden by another, and `put`
+    # did not Show. So anything hidden once stayed hidden for the rest
+    # of the session however many times it was drawn again -- and the
+    # Entombed Sentinels lost their second boss to it, because every
+    # single-boss fight hides bossSkull[2]. Health bar, name on the
+    # floor, working collision, no skull.
+    #
+    # Invisible to every other check in this file, because they all
+    # reason about state rather than about pixels.
+    reshow = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            if not T._bossSkull then return "the trainer exposes no boss skulls" end
+
+            -- A one-boss fight first, which is what hides the second.
+            T:Start("soulcoiler", false)
+            S.countdown = 0
+            for _ = 1, 40 do S.hp = 100; update(f, 0.05) end
+            if T._bossSkull[2]:IsShown() then
+                T:Stop()
+                return "a one-boss fight left the second skull shown"
+            end
+            T:Stop()
+
+            -- Then a two-boss fight, which must bring it back.
+            T:Start("sentinels", false)
+            S.countdown = 0
+            for _ = 1, 40 do S.hp = 100; update(f, 0.05) end
+            local one, two = T._bossSkull[1]:IsShown(), T._bossSkull[2]:IsShown()
+            T:Stop()
+            if not one or not two then
+                return string.format(
+                    "after a one-boss fight the Sentinels drew skull1=%s skull2=%s",
+                    tostring(one), tostring(two))
+            end
+            return "ok:both skulls return after a one-boss fight"
+        end
+    """)(ns)
+    if reshow and str(reshow).startswith("ok:"):
+        print("  ok   trainer redraw: %s" % str(reshow)[3:])
+    else:
+        print("  FAIL trainer redraw: %s" % reshow)
+        failures.append(("trainer redraw", str(reshow)))
+
     # Possession Barrage is ONE lane.
     #
     # It was built as a fan of four separate lines, which turns "keep

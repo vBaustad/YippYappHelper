@@ -434,6 +434,17 @@ local clearText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 if ns.ApplyTextShadow then ns.ApplyTextShadow(clearText) end
 clearText:Hide()
 
+-- YOUR number, during a number-game mechanic.
+--
+-- Everyone else's count was drawn over their head and the player's own
+-- was not, which makes the Sentinels' intermission literally unsolvable:
+-- the puzzle is "your orbs plus theirs make four", and you were never
+-- told your orbs. It reads as a phase where nothing happens, because
+-- there is nothing you can correctly do.
+local mineText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+if ns.ApplyTextShadow then ns.ApplyTextShadow(mineText) end
+mineText:Hide()
+
 local resultText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 resultText:SetPoint("TOP", bigText, "BOTTOM", 0, -8)
 resultText:SetWidth(ARENA_PX - 80)
@@ -597,6 +608,21 @@ local function releaseVis(a)
 end
 
 --- Place a sprite in arena coordinates.
+--- Place a texture in arena coordinates, and SHOW it.
+---
+--- The Show is not decoration, it is the whole correctness of the thing.
+--- Every long-lived texture in this file is drawn by one branch and
+--- hidden by another -- corpses, altars, tunnels, the well, the boss
+--- skulls -- and without a Show here, anything hidden once stayed hidden
+--- for the rest of the session no matter how many times it was drawn
+--- again.
+---
+--- That is exactly how the Entombed Sentinels lost their second boss:
+--- every single-boss fight hides `bossSkull[2]`, so the first time you
+--- opened a fight that HAD two, the Breath of Ula'tek had a health bar,
+--- a name on the floor, working collision -- and no skull. The pooled
+--- per-actor textures never showed this because `V()` shows on every
+--- fetch; only the permanent ones were affected.
 local function put(tex, art, x, y, size, s, col, alpha, rotation)
     tex:SetTexture(ART[art] or art)
     tex:SetSize(size * s, size * s)
@@ -604,6 +630,7 @@ local function put(tex, art, x, y, size, s, col, alpha, rotation)
     tex:SetPoint("CENTER", arena, "CENTER", x * s, y * s)
     tex:SetVertexColor(col[1], col[2], col[3], alpha or 1)
     tex:SetRotation(rotation or 0)
+    tex:Show()
     return tex
 end
 
@@ -690,6 +717,12 @@ for i = 1, MAX_BOSSES do
     -- looking at, and the guide talks about them by name throughout.
     bossLabel[i] = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 end
+
+-- Exposed for the load harness, same convention as ns.BisUI._cards.
+-- There is a whole class of bug where a permanent texture is hidden by
+-- one branch and never shown again by another, and it is invisible to
+-- everything except looking at the screen -- see the note on put().
+T._bossSkull = bossSkull
 
 ------------------------------------------------------------
 -- The flare on whoever is currently clearing a Frostfire debuff.
@@ -3503,11 +3536,24 @@ KINDS.meet = {
         for _, ally in ipairs(S.allies) do
             ally.marked = false; ally.label = nil; ally.hold = false
         end
+        mineText:Hide()
     end,
     Draw = function(a, s)
         local tx, ty = AllyPos(a.target)
         put(V(a, 1, "ARTWORK", 2), "ring", tx, ty, (a.reach or 9) * 2, s,
             { 0.4, 0.8, 1 }, a.labels and 0.25 or 0.9)
+        if a.mine then
+            -- Your own count, and the answer you are looking for, over
+            -- your head. Both halves: a bare number still leaves the
+            -- player doing arithmetic under pressure the first time, and
+            -- the mechanic being taught is "go and find your partner",
+            -- not subtraction.
+            mineText:SetPoint("CENTER", arena, "CENTER",
+                S.px * s, (S.py + PLAYER_R * 7) * s)
+            mineText:SetText(("|cff66ddffYOU: %d|r  |cffffcc44find %d|r")
+                :format(a.mine, 4 - a.mine))
+            mineText:Show()
+        end
     end,
 }
 
@@ -4556,6 +4602,7 @@ function T:Start(bossId, heroic)
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
     S.element, S.volleyFlip, S.raiseQueue = nil, nil, nil
+    mineText:Hide()
     S.allyClears, S.lastClear, S.clearingWho = nil, nil, nil
     S.revive, S.orbRot, S.orbRotUntil = nil, 0, 0
     bothDotsText:Hide()
