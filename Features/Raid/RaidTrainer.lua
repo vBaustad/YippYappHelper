@@ -71,7 +71,21 @@ local MAX_HP       = 100
 -- enough that you can still leave to dodge something.
 local FIRE_COOLDOWN = 0.15
 local SHOT_SPEED    = 170
-local SHOT_DAMAGE   = 12
+local SHOT_DAMAGE   = 15
+
+-- Global difficulty dials, deliberately in ONE place.
+--
+-- Every mechanic in the scenarios keeps the damage number that suits it
+-- relative to the others -- a Guillotine should still hurt more than a
+-- droplet -- and these scale the whole set. Retuning the fights by
+-- editing forty individual numbers would have destroyed that ordering
+-- within two passes, and the ordering is the part that took the longest
+-- to get right.
+--
+-- INCOMING applies to every source of damage to the player without
+-- exception, so there is no path that quietly ignores it. Anything added
+-- below that subtracts from S.hp goes through here.
+local INCOMING = 0.62
 local SHOT_R        = 2.2
 local SHOT_LIFE     = 1.5
 
@@ -759,7 +773,7 @@ local CurrentPhase   -- built with the phase machinery
 -- Scoring
 ------------------------------------------------------------
 local function Hurt(amount, why)
-    S.hp = math.max(0, S.hp - amount)
+    S.hp = math.max(0, S.hp - amount * INCOMING)
     S.flash = 0.45
     S.failed = S.failed + 1
     if why then
@@ -889,7 +903,7 @@ local function TickUncoiledRot(dt)
     -- you can hear arriving rather than a slope.
     S.rot = S.rot + dt
     local steps = math.floor(S.rot / (rule.every or 4)) + 1
-    S.hp = math.max(0, S.hp - steps * (rule.dps or 1.6) * dt)
+    S.hp = math.max(0, S.hp - steps * (rule.dps or 1.6) * dt * INCOMING)
     S.flash = math.max(S.flash, 0.12)
 end
 
@@ -981,7 +995,7 @@ local function TickBothDots(dt)
         S.bothDotsSince = nil
         return
     end
-    S.hp = math.max(0, S.hp - (rule.dps or 4) * dt)
+    S.hp = math.max(0, S.hp - (rule.dps or 4) * dt * INCOMING)
     S.flash = math.max(S.flash, 0.10)
     -- Named on screen, because chip damage with no label is the one
     -- thing this trainer is not allowed to have. The player has to be
@@ -2373,7 +2387,7 @@ KINDS.puddle = {
             end
         end
         if dist(S.px, S.py, a.x, a.y) <= a.r then
-            S.hp = math.max(0, S.hp - (a.dps or 14) * dt)
+            S.hp = math.max(0, S.hp - (a.dps or 14) * dt * INCOMING)
             S.flash = math.max(S.flash, 0.18)
         end
         if S.time > a.expireAt then a.dead = true end
@@ -2730,7 +2744,7 @@ KINDS.beam = {
         a.len = distanceToWall(a.x, a.y, a.dir)
         local along, across = alongAcross(S.px, S.py, a.x, a.y, a.dir)
         if along >= 0 and along <= a.len and across <= a.width / 2 then
-            S.hp = math.max(0, S.hp - (a.dps or 30) * dt)
+            S.hp = math.max(0, S.hp - (a.dps or 30) * dt * INCOMING)
             S.flash = math.max(S.flash, 0.3)
             a.touched = true
         end
