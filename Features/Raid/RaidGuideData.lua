@@ -101,6 +101,32 @@ local _, ns = ...
 ns.RaidGuide = ns.RaidGuide or {}
 local G = ns.RaidGuide
 
+------------------------------------------------------------
+-- The instances this page covers.
+--
+-- More than one now, because The Tidebound Grotto is a LAIR -- an
+-- instanced world boss that fills the raid row of the Great Vault -- and
+-- a player who has to go somewhere else to read about the only other
+-- thing that drops raid gear this patch is being sent on an errand for
+-- no reason.
+--
+-- Bosses carry an `instance` key. Anything without one belongs to the
+-- Venomous Abyss, so the seven that were written before this existed did
+-- not all have to be touched to add an eighth.
+------------------------------------------------------------
+G.instances = {
+    { key = "va", order = 1, name = "The Venomous Abyss",  kind = "Raid" },
+    { key = "tg", order = 2, name = "The Tidebound Grotto", kind = "Lair" },
+}
+
+function G:InstanceOf(boss)
+    local key = boss and boss.instance or "va"
+    for _, inst in ipairs(self.instances) do
+        if inst.key == key then return inst end
+    end
+    return self.instances[1]
+end
+
 G.instance = {
     name   = "The Venomous Abyss",
     season = "Midnight Season 2",
@@ -1099,6 +1125,167 @@ G.bosses = {
 
         lust = "the intermission, while Zul'jin takes double damage",
     },
+
+    ----------------------------------------------------------
+    -- The Tidebound Grotto's one boss.
+    --
+    -- Same discipline as the raid: mechanics from the walkthrough, name
+    -- from the client. Three sources agree on the spelling and none of
+    -- them is a video -- Plumber's EncounterData (journal 2849),
+    -- RaiderIO's RAID_BOSS_TG_1, and this addon's own ProgressionData.
+    -- The captions render her "Nimissa Waveller", which is why the
+    -- client wins.
+    --
+    -- No combat-log encounterID recorded, because nothing on this
+    -- machine states one and a guessed ID is a number that is silently
+    -- wrong. The trainer has no scenario for her yet either -- the guide
+    -- comes first, the way it did for the raid.
+    --
+    -- A Lair scales World -> Flexible Mythic. The page has Normal and
+    -- Heroic, so the heroic block carries what the source flags as
+    -- heroic and the mythic differences are called out inline where they
+    -- change what you DO, rather than pretending a third tab exists.
+    ----------------------------------------------------------
+    {
+        id       = "nymrissa",
+        instance = "tg",
+        order    = 1,
+        -- Written up, not yet playable. The trainer hides its own button
+        -- for these, and the load harness knows not to demand a scenario.
+        guideOnly = true,
+        name     = "Nymrissa Wavecaller",
+        ejID     = 2849,
+        accent   = { 0.45, 0.80, 1.00 },
+        oneLiner = "Soak every frost orb. One left to shatter ends the pull.",
+        shape    = "1 phase, on a loop",
+        bring    = "crowd control, and a way to reach the murlocs",
+
+        rules = {
+            "Soak every frost orb Frost Barrage leaves. An orb nobody touches "
+                .. "shatters for massive raid damage and usually ends the pull.",
+            "Kill the murlocs before they finish turning into berserkers at the "
+                .. "bubble. They can be stunned, slowed and gripped -- but not mind "
+                .. "controlled.",
+            "When the whirlpools converge, be standing on the safe stretch of "
+                .. "shoreline. Getting knocked into the water means sharks and a "
+                .. "stacking bleed.",
+        },
+
+        phases = {
+            {
+                name = "The tank hit",
+                tag  = "Ice Blade Flurry",
+                lines = {
+                    "Six slashes over a six-second channel, and each one raises her "
+                        .. "damage by 45%.",
+                    "That ramp is the whole tank mechanic -- the sixth slash lands on "
+                        .. "a tank taking far more than the first.",
+                    "On mythic this becomes Water Jet instead, and it is a TOOL: it is "
+                        .. "how you clear the frozen patches Frost Barrage leaves on the "
+                        .. "floor.",
+                },
+            },
+            {
+                name = "Frost Barrage",
+                tag  = "the orbs, and the whole fight",
+                lines = {
+                    "It targets several players, chills them and slows them, and "
+                        .. "scatters frost orbs across the floor.",
+                    "Every orb has to be soaked. Run them over.",
+                    "An orb left alone shatters for enormous raid-wide damage, and "
+                        .. "that is the thing that wipes you.",
+                    "On heroic the orbs stack damage on whoever soaks them, so spread "
+                        .. "the job around rather than sending the same player twice.",
+                    "On mythic they hit the whole raid as they are soaked instead, "
+                        .. "which is why it becomes a healing problem rather than a "
+                        .. "personal one.",
+                    "This is where personal defensives go on both difficulties.",
+                },
+            },
+            {
+                name = "The constant damage",
+                tag  = "Abyssal Rain and Unending Tides",
+                lines = {
+                    "Abyssal Rain is raid-wide AoE pulsing for a few seconds. On heroic "
+                        .. "it is very heavy and it is what your healing cooldowns are "
+                        .. "for.",
+                    "Unending Tides puts Drenched on the entire raid -- constant ticking "
+                        .. "damage that never stops.",
+                    "On mythic the Rain matters less on its own and more because it "
+                        .. "overlaps the first round of orbs.",
+                },
+            },
+            {
+                name = "Alluring Bubble",
+                tag  = "the murlocs",
+                lines = {
+                    "She puts a bubble in the middle and it drags the murlocs in from "
+                        .. "the edges of the room.",
+                    "Any that reach it start becoming berserkers, which pulse AoE until "
+                        .. "they die.",
+                    "Stuns, slows and grips all work. Mind control does not -- it was "
+                        .. "tried on the PTR and simply fails.",
+                    "On mythic a Bubblefin Frostscale turns up with a shield that gives "
+                        .. "nearby murlocs 99% damage reduction. Something has to "
+                        .. "priority-target it or the whole pack is unkillable.",
+                },
+            },
+            {
+                name = "Swirling Whirlpools",
+                tag  = "and where the safe ground is",
+                lines = {
+                    "Whirlpools are dragged from the edges of the room into the bubble "
+                        .. "in the middle.",
+                    "Look at the shoreline. One stretch of it has no disturbed water -- "
+                        .. "that is the safe spot, and it is readable well in advance.",
+                    "Put a demonic circle, a teleport or anything similar there before "
+                        .. "it starts.",
+                    "When they hit the middle they pop the bubble, deal some raid "
+                        .. "damage, and try to knock everybody into the water.",
+                    "The water is not a wipe but it is not survivable either: sharks "
+                        .. "eat you and stack a bleed for as long as you are in it.",
+                },
+            },
+        },
+
+        heroic = {
+            "Ice Blade Flurry is the tank hit here -- six slashes, +45% damage each. "
+                .. "The tanks plan around the sixth, not the first.",
+            "Frost orbs stack damage on the player soaking them, so orb duty rotates "
+                .. "rather than falling to the same people.",
+            "Abyssal Rain is the single heaviest planned hit, and the obvious place "
+                .. "for a raid cooldown.",
+        },
+
+        roles = {
+            DAMAGER = {
+                "Orbs first, always. Nothing else you are doing outweighs an orb that "
+                    .. "is about to shatter.",
+                "The murlocs are the other real job. Hold them with stuns, slows and "
+                    .. "grips before they reach the bubble.",
+                "On mythic, kill the Bubblefin Frostscale first -- its shield makes "
+                    .. "every murloc near it take 99% less damage.",
+            },
+            HEALER = {
+                "Drenched ticks on everybody all fight, underneath everything else.",
+                "Abyssal Rain on heroic is the planned burst. On mythic, save the "
+                    .. "cooldowns for each round of orbs instead -- they come round "
+                    .. "every 30 to 45 seconds.",
+                "The first wave is the nastiest, because the Rain is pulsing while the "
+                    .. "orbs are going out. Stack for it.",
+                "Overhealing is not wasted here. The raid-wide damage on mythic is "
+                    .. "high enough that a topped-off raid is the only safe one.",
+            },
+            TANK = {
+                "Ice Blade Flurry ramps 45% a slash across six slashes. That is your "
+                    .. "swap.",
+                "On mythic, Water Jet is yours to aim -- it is what clears the frozen "
+                    .. "ground, so treat it as a job rather than a hit.",
+                "Keep her away from the shoreline the raid is going to need when the "
+                    .. "whirlpools land.",
+            },
+        },
+    },
 }
 
 ------------------------------------------------------------
@@ -1132,11 +1319,15 @@ function G:Get(id)
     return byId[id]
 end
 
---- Bosses in pull order.
+--- Bosses in pull order, instance by instance.
 function G:Ordered()
     local out = {}
     for i, b in ipairs(self.bosses) do out[i] = b end
-    table.sort(out, function(a, b) return a.order < b.order end)
+    table.sort(out, function(a, b)
+        local ia, ib = self:InstanceOf(a).order, self:InstanceOf(b).order
+        if ia ~= ib then return ia < ib end
+        return a.order < b.order
+    end)
     return out
 end
 

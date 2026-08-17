@@ -1254,7 +1254,13 @@ def main():
             local ok, err = pcall(UI.Refresh, UI)
             if not ok then return tostring(err) end
             local boss = ns.RaidGuide:Get(bossId)
-            local h = (boss and boss.lust) and (UI._lustText:GetStringHeight() or 12) or 0
+            -- -1 means "this boss has no Bloodlust row at all", which is
+            -- not the same as "its row is zero high". The button moves UP
+            -- into the space when there is nothing to sit below, so there
+            -- is no overlap to check for -- and comparing against the
+            -- hidden label's old anchor measured the PREVIOUS boss.
+            local h = (boss and boss.lust)
+                and (UI._lustText:GetStringHeight() or 12) or -1
             -- y counts downward as a negative number, so "below" is less.
             return string.format("%d,%d,%d", UI._lustTop or 0, h, UI._railY or 0)
         end
@@ -1270,6 +1276,13 @@ def main():
             failures.append(("rail reflow", str(got)))
             continue
         top, text_h, button_y = (int(v) for v in got.split(","))
+        if text_h < 0:
+            # No Bloodlust row on this boss, so nothing for the button to
+            # clear. Still counted as a distinct offset, because "the
+            # button moved up into the empty space" is itself part of the
+            # reflow this check exists to prove.
+            seen_offsets.add(button_y)
+            continue
         floor = top - max(text_h, 20)
         if button_y > floor:
             msg = ("%s: button at %d, above the text's bottom at %d"
@@ -2446,7 +2459,16 @@ def main():
             local totalFailed = 0
             for _, boss in ipairs(ns.RaidGuide:Ordered()) do
                 local sc = ns.RaidTrainerScenarios[boss.id]
-                if not sc then
+                -- A boss can legitimately have a guide and no arena.
+                --
+                -- The guide comes first for every fight -- it did for the
+                -- whole raid -- so "written up but not yet playable" is a
+                -- real state and not a defect. The trainer already hides
+                -- its own button for these, so nothing offers the player
+                -- something that is not there.
+                if not sc and boss.guideOnly then
+                    -- Nothing to play. Not counted, not complained about.
+                elseif not sc then
                     problems[#problems + 1] = boss.id .. ": no scenario"
                 else
                     -- Timelines are walked with a cursor that stops at the
@@ -3265,6 +3287,60 @@ def main():
     else:
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
+
+    # More than one instance in the rail.
+    #
+    # The guide covers the raid and the Lair, and they have to stay
+    # separated: the Grotto's single boss is "1", and so is Nek'zali.
+    # Ordered() must group them, and the Lair must not be claiming to be
+    # part of the raid.
+    inst = L.eval("""
+        function(ns)
+            local G = ns.RaidGuide
+            if not (G and G.instances) then return "no instances declared" end
+            local ordered = G:Ordered()
+            if #ordered < 2 then return "fewer than two bosses" end
+
+            -- Grouped: an instance never reappears after another starts.
+            local seen, order, last = {}, {}, nil
+            for _, b in ipairs(ordered) do
+                local key = G:InstanceOf(b).key
+                if key ~= last then
+                    if seen[key] then
+                        return "instance " .. key .. " appears in two separate blocks"
+                    end
+                    seen[key] = true
+                    order[#order + 1] = key
+                    last = key
+                end
+            end
+            if #order < 2 then
+                return "every boss resolved to one instance (" .. (order[1] or "?") .. ")"
+            end
+            if order[1] ~= "va" then
+                return "the raid is not first in the rail"
+            end
+
+            -- A boss written up but not yet playable is a real state, and
+            -- the trainer must not offer a button for it.
+            local guideOnly = 0
+            for _, b in ipairs(ordered) do
+                if b.guideOnly then
+                    guideOnly = guideOnly + 1
+                    if ns.RaidTrainer:HasScenario(b.id) then
+                        return b.id .. " is marked guideOnly but has a scenario"
+                    end
+                end
+            end
+            return string.format("ok:%d instances, %d bosses, %d guide-only",
+                #order, #ordered, guideOnly)
+        end
+    """)(ns)
+    if inst and str(inst).startswith("ok:"):
+        print("  ok   guide instances: %s" % str(inst)[3:])
+    else:
+        print("  FAIL guide instances: %s" % inst)
+        failures.append(("guide instances", str(inst)))
 
     # Permanent textures must come BACK.
     #

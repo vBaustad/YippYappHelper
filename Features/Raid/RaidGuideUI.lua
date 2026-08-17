@@ -312,11 +312,15 @@ end
 ------------------------------------------------------------
 -- Bloodlust
 --
--- Called Bloodlust throughout the data because that is what raids call
--- the effect, but the icon and the caption follow the player's own
--- faction -- a Horde player looking for the orange hand and finding a
--- blue one has to translate, which is the small tax this page exists to
--- remove.
+-- Always "Bloodlust", on both factions, with the Bloodlust icon.
+--
+-- This used to follow the player's faction and show Alliance players
+-- "Heroism", on the reasoning that a Horde player who saw a blue hand
+-- would have to translate. That reasoning was wrong about how people
+-- talk: raids of both factions call the effect Bloodlust or just "lust",
+-- including the Alliance ones, and every guide and every callout in the
+-- data says Bloodlust. Renaming it per faction made this one row
+-- disagree with the entire rest of the page.
 --
 -- Spell IDs in preference order, and the texture comes from whichever
 -- one the client answers for. The path fallback is a classic icon name
@@ -328,14 +332,12 @@ local LUST_ALLIANCE = 32182     -- Heroism
 local LUST_OTHERS   = { 80353, 264667, 390386 }  -- Time Warp, Primal Rage, Fury of the Aspects
 local LUST_FALLBACK = "Interface\\Icons\\Spell_Nature_BloodLust"
 
---- The faction's own name for the effect, and an icon to match.
+--- The effect's name, and an icon to match. The same on both factions.
 local function LustLook()
-    local faction = UnitFactionGroup and UnitFactionGroup("player")
-    local alliance = faction == "Alliance"
-    local label = alliance and "Heroism" or "Bloodlust"
+    local label = "Bloodlust"
 
-    local order = { alliance and LUST_ALLIANCE or LUST_HORDE,
-                    alliance and LUST_HORDE or LUST_ALLIANCE }
+    -- Bloodlust's own icon first, so the word and the picture agree.
+    local order = { LUST_HORDE, LUST_ALLIANCE }
     for _, id in ipairs(LUST_OTHERS) do order[#order + 1] = id end
 
     for _, id in ipairs(order) do
@@ -370,11 +372,81 @@ function UI:BuildInto(parent)
     listTitle:SetTextColor(W:Color("muted"))
     listTitle:SetText((ns.RaidGuide and ns.RaidGuide.instance.name) or "Raid")
 
-    local bosses = ns.RaidGuide and ns.RaidGuide:Ordered() or {}
+    local G = ns.RaidGuide
+    local bosses = G and G:Ordered() or {}
+
+    -- Grouped by instance, with a heading whenever it changes.
+    --
+    -- The rail lists more than one place now -- the raid, and the Lair
+    -- that is the only other source of raid gear this patch. Without a
+    -- heading the Grotto's single boss simply appeared as another "1"
+    -- under the last of the eight, which reads as a numbering bug rather
+    -- than as a second instance.
+    --
+    -- The first group's heading is the title above the list, which is
+    -- already there and already says the right thing.
+    -- The boss the source guide never covered, said out loud in the list
+    -- rather than left as a gap the player has to notice.
+    --
+    -- It belongs to the RAID, so it is emitted at the end of the raid's
+    -- rows rather than at the end of the rail -- otherwise adding the
+    -- Grotto quietly moved Ula'tek underneath a heading he has nothing
+    -- to do with.
+    local gap = G and G.missing and G.missing[1]
+    local vaCount = 0
+    for _, b in ipairs(bosses) do
+        if G:InstanceOf(b).key == "va" then vaCount = vaCount + 1 end
+    end
+
+    local function AddMissingRow(y)
+        if not gap then return y end
+        local row = CreateFrame("Frame", nil, listFrame)
+        row:SetSize(LIST_W - 4, ROW_H)
+        row:SetPoint("TOPLEFT", 0, y)
+        row:EnableMouse(true)
+
+        local num = W:Label(row, "GameFontNormalSmall", "CENTER")
+        num:SetPoint("LEFT", 7, 0)
+        num:SetWidth(14)
+        num:SetText(tostring(vaCount + 1))
+        num:SetTextColor(W:Color("faint"))
+
+        local name = W:Label(row, "GameFontNormalSmall")
+        name:SetPoint("LEFT", 25, 0)
+        name:SetPoint("RIGHT", -6, 0)
+        name:SetWordWrap(false)
+        name:SetTextColor(W:Color("faint"))
+        name:SetText(Flagged(gap.name, gap.unsure) .. W:Tint("faint", "  --  no guide"))
+
+        row:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(gap.name)
+            GameTooltip:AddLine(gap.why, 0.7, 0.7, 0.7, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        return y - (ROW_H + 3)
+    end
+
+    local rowsBottom = -18
+    local lastKey = G and G:InstanceOf(bosses[1]).key or nil
     for i, boss in ipairs(bosses) do
+        local inst = G and G:InstanceOf(boss)
+        if inst and inst.key ~= lastKey then
+            if lastKey == "va" then rowsBottom = AddMissingRow(rowsBottom) end
+            rowsBottom = rowsBottom - 8
+            local head = W:Label(listFrame, "GameFontNormalSmall")
+            head:SetPoint("TOPLEFT", 2, rowsBottom)
+            head:SetTextColor(W:Color("muted"))
+            head:SetText(inst.name)
+            rowsBottom = rowsBottom - 16
+            lastKey = inst.key
+        end
+
         local b = CreateFrame("Button", nil, listFrame, "BackdropTemplate")
         b:SetSize(LIST_W - 4, ROW_H)
-        b:SetPoint("TOPLEFT", 0, -18 - (i - 1) * (ROW_H + 3))
+        b:SetPoint("TOPLEFT", 0, rowsBottom)
+        rowsBottom = rowsBottom - (ROW_H + 3)
 
         b.num = W:Label(b, "GameFontNormalSmall", "CENTER")
         b.num:SetPoint("LEFT", 7, 0)
@@ -396,47 +468,11 @@ function UI:BuildInto(parent)
         rowButtons[i] = b
     end
 
-    local rowsBottom = -18 - #bosses * (ROW_H + 3)
-
-    -- The boss the source guide never covered, said out loud in the list
-    -- rather than left as a gap the player has to notice.
-    --
-    -- RaidGuideData has carried this note since it was written and
-    -- nothing rendered it, so the honesty existed only in a comment. It
-    -- goes in the rail because the rail is the one place a player counts
-    -- bosses, and it is a Frame rather than a Button because there is
-    -- nothing to open -- a row that highlights and then does nothing is
-    -- worse than a row that plainly cannot be clicked.
-    local gap = ns.RaidGuide and ns.RaidGuide.missing and ns.RaidGuide.missing[1]
-    if gap then
-        local row = CreateFrame("Frame", nil, listFrame)
-        row:SetSize(LIST_W - 4, ROW_H)
-        row:SetPoint("TOPLEFT", 0, rowsBottom)
-        row:EnableMouse(true)
-
-        local num = W:Label(row, "GameFontNormalSmall", "CENTER")
-        num:SetPoint("LEFT", 7, 0)
-        num:SetWidth(14)
-        num:SetText(tostring(#bosses + 1))
-        num:SetTextColor(W:Color("faint"))
-
-        local name = W:Label(row, "GameFontNormalSmall")
-        name:SetPoint("LEFT", 25, 0)
-        name:SetPoint("RIGHT", -6, 0)
-        name:SetWordWrap(false)
-        name:SetTextColor(W:Color("faint"))
-        name:SetText(Flagged(gap.name, gap.unsure) .. W:Tint("faint", "  --  no guide"))
-
-        row:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(gap.name)
-            GameTooltip:AddLine(gap.why, 0.7, 0.7, 0.7, true)
-            GameTooltip:Show()
-        end)
-        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-        rowsBottom = rowsBottom - (ROW_H + 3)
-    end
+    -- And if the raid was the LAST group in the rail, its gap row still
+    -- has to be emitted. A Frame rather than a Button because there is
+    -- nothing to open, and a row that highlights and then does nothing
+    -- is worse than one that plainly cannot be clicked.
+    if lastKey == "va" then rowsBottom = AddMissingRow(rowsBottom) end
 
     ------------------------------------------------------------
     -- Role and difficulty, under the list
