@@ -3161,6 +3161,7 @@ def main():
                 T:Start("soulcoiler", false)
                 S.countdown = 0
                 local peak, raised, after, atEnd = 0, 0, 0, -1
+                local mostAtOnce = 0
                 for _ = 1, 4000 do
                     S.hp, S.firing = 100, true
                     if S.bossActor then
@@ -3195,12 +3196,15 @@ def main():
                     end
                     update(f, 0.05)
                     if #S.corpses > peak then peak = #S.corpses end
+                    local thisFrame = 0
                     for _, a in ipairs(S.actors) do
                         if a.name == "Raised Amani" and not a.counted then
                             a.counted = true
                             raised = raised + 1
+                            thisFrame = thisFrame + 1
                         end
                     end
+                    if thisFrame > mostAtOnce then mostAtOnce = thisFrame end
                     -- Kept running a little past the transition. The
                     -- Ritual raises the bodies as the phase ENDS, so
                     -- breaking the moment the index changes counts none
@@ -3208,16 +3212,22 @@ def main():
                     if S.phaseIndex >= 3 then
                         if after == 0 then atEnd = #S.corpses end
                         after = after + 1
-                        if after > 60 then break end
+                        -- Long enough for the whole queue to get up.
+                        --
+                        -- The bodies rise one at a time now rather than
+                        -- all on one frame, so a three-second window
+                        -- counted the first two and reported that
+                        -- burning corpses achieves nothing.
+                        if after > 500 then break end
                     end
                     if not S.running then break end
                 end
                 local gotTo = S.phaseIndex
                 T:Stop()
-                return peak, raised, atEnd, gotTo
+                return peak, raised, atEnd, gotTo, mostAtOnce
             end
 
-            local peak, raised = toIntermission(false)
+            local peak, raised, _, _, burst = toIntermission(false)
             if peak == 0 then
                 return "adds died and left no corpses at all"
             end
@@ -3228,6 +3238,18 @@ def main():
                 -- with zero and passes whatever the Flames did.
                 return "corpses were never burned and the Ritual raised nobody"
             end
+            -- And they must get up ONE AT A TIME.
+            --
+            -- Raising every un-burned body on a single frame killed the
+            -- player outright the moment the Amani started arriving in
+            -- packs: a dozen adds appeared together in a round that had
+            -- otherwise handled 41 of 45 mechanics. A punishment nobody
+            -- can react to is not a lesson.
+            if burst > 2 then
+                return string.format(
+                    "%d bodies got up on one frame -- the raise is not staggered", burst)
+            end
+
             local peakB, raisedB = toIntermission(true)
             if raisedB >= raised then
                 return string.format(

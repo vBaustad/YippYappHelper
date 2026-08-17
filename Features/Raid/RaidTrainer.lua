@@ -702,6 +702,8 @@ clearRing:Hide()
 -- that made it into the phase that burns it.
 ------------------------------------------------------------
 local MAX_CORPSES = 14
+-- Seconds between one raised body and the next. See EnterPhase.
+local RAISE_STAGGER = 1.6
 local corpseTex = {}
 for i = 1, MAX_CORPSES do
     corpseTex[i] = arena:CreateTexture(nil, "ARTWORK", nil, 5)
@@ -784,6 +786,26 @@ end
 --- between two casts, "then switch" cannot be expressed at all.
 local function HasDebuff(name)
     return (S.debuffs[name] or 0) > S.time
+end
+
+--- What a debuff is CALLED on screen, which is not its name.
+---
+--- "Singed 12" tells you the game's word for your condition and nothing
+--- about what to do with it, and the player has to have learnt the
+--- mechanic already for it to mean anything -- which is backwards in a
+--- thing whose whole job is teaching the mechanic.
+---
+--- So the timer over your head reads "DON'T SOAK 12". The proper noun
+--- still exists in the data and in the guide, where naming things is the
+--- point; it just does not belong on a heads-up display.
+local DEBUFF_SAYS = {
+    Singed    = "DON'T SOAK",
+    Mutilated = "STAY OUT",
+    Gorged    = "DON'T SOAK",
+}
+
+local function DebuffLabel(name)
+    return DEBUFF_SAYS[name] or name
 end
 
 local function ApplyDebuff(name, dur)
@@ -2255,8 +2277,8 @@ KINDS.soak = {
         -- would be worse than one that was simply wrong.
         a.notMine = a.marks and HasDebuff(a.marks) or false
         if a.notMine then
-            a.call = ("You are %s -- stay OUT of %s and take the Flames")
-                :format(a.marks, a.name)
+            a.call = ("%s -- you already took one. Stay out of %s and take the Flames.")
+                :format(DebuffLabel(a.marks), a.name)
         end
     end,
     -- A soak with `marks` is a SPLIT soak, and it has four outcomes
@@ -2282,7 +2304,7 @@ KINDS.soak = {
             -- CHEAPER than alternating -- the mark cost nothing, so the
             -- correct play was to ignore it.
             Hurt((a.damage or 20) * 3,
-                a.name .. " -- you are still " .. a.marks .. ", let someone else take it")
+                a.name .. " -- " .. DebuffLabel(a.marks) .. ". Let someone else take it.")
         elseif inside then
             Credit(a.name .. " soaked")
             if a.marks then ApplyDebuff(a.marks, a.marksFor or 14) end
@@ -2618,7 +2640,7 @@ KINDS.line = {
             local marked = a.notMine
             if inside and marked then
                 Hurt((a.damage or 25) * 3,
-                    a.name .. " -- you are " .. a.marks .. ", this one is not yours")
+                    a.name .. " -- " .. DebuffLabel(a.marks) .. ". This one is not yours.")
             elseif inside then
                 Credit(a.name .. " soaked")
                 if a.marks then ApplyDebuff(a.marks, a.marksFor or 14) end
@@ -4040,7 +4062,7 @@ local function DrawDots(s)
     if carried then
         debuffText:SetPoint("CENTER", arena, "CENTER",
             S.px * s, (S.py + PLAYER_R * 4) * s)
-        debuffText:SetText(("|cffffcc44%s %.0f|r"):format(carried, soonest - S.time))
+        debuffText:SetText(("|cffffcc44%s %.0f|r"):format(DebuffLabel(carried), soonest - S.time))
         debuffText:Show()
     else
         debuffText:Hide()
@@ -4191,14 +4213,20 @@ local function EnterPhase(i)
 
     if raise > 0 then
         -- One add back on its feet per body nobody burned, from where it
-        -- fell, walking at the well again.
-        for _, c in ipairs(S.corpses) do
-            Spawn({
-                kind = "chaser", name = "Raised Amani", school = "shadow",
-                goal = "centre", speed = 12, hp = 60, art = "hex",
-                damage = 26, feeds = 5, leavesCorpse = true,
-                where = { x = c.x, y = c.y },
-            })
+        -- fell, walking at the well again -- but ARRIVING OVER TIME.
+        --
+        -- Spawning them on one frame was unsurvivable and taught
+        -- nothing. Once the Amani started coming in packs there could be
+        -- a dozen bodies on the floor, and a dozen adds appearing
+        -- together killed the player instantly, in a round that had
+        -- otherwise scored 41 of 45. A punishment you cannot react to is
+        -- not a lesson, it is a slot machine.
+        --
+        -- As a stream it is still the same total problem and still
+        -- clearly your fault, but it is one you can fight.
+        S.raiseQueue = {}
+        for i, c in ipairs(S.corpses) do
+            S.raiseQueue[i] = { at = S.time + (i - 1) * RAISE_STAGGER, x = c.x, y = c.y }
         end
         wipe(S.corpses)
         Hurt(0, ("%d corpse%s raised -- they were never burned"):format(
@@ -4292,6 +4320,22 @@ local function Update(_, elapsed)
     S.time = S.time + elapsed
     S.phaseTime = S.phaseTime + elapsed
     TickEnergy(elapsed)
+    -- Bodies getting back up, one at a time.
+    if S.raiseQueue then
+        for i = #S.raiseQueue, 1, -1 do
+            local r = S.raiseQueue[i]
+            if S.time >= r.at then
+                Spawn({
+                    kind = "chaser", name = "Raised Amani", school = "spirit",
+                    goal = "centre", speed = 12, hp = 60, art = "hex",
+                    damage = 26, feeds = 5, leavesCorpse = true,
+                    where = { x = r.x, y = r.y },
+                })
+                table.remove(S.raiseQueue, i)
+            end
+        end
+        if #S.raiseQueue == 0 then S.raiseQueue = nil end
+    end
     TickElement()
     TickOtherTeam(elapsed)
     TickUncoiledRot(elapsed)
@@ -4497,7 +4541,7 @@ function T:Start(bossId, heroic)
     S.phaseIndex, S.phaseTime = 1, 0
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
-    S.element, S.volleyFlip = nil, nil
+    S.element, S.volleyFlip, S.raiseQueue = nil, nil, nil
     S.allyClears, S.lastClear, S.clearingWho = nil, nil, nil
     S.revive, S.orbRot, S.orbRotUntil = nil, 0, 0
     bothDotsText:Hide()

@@ -130,7 +130,13 @@ SC.soulcoiler = {
     -- a time is a lot more to shoot, so a lot less of the player's
     -- damage reaches her -- which is true of the real fight too, and is
     -- the reason her health had to come down rather than the packs.
-    bossHp = 4300,
+    -- Down again with the raise stagger: bodies now get up over about
+    -- twenty seconds of phase two, and every one of them soaks shots
+    -- that used to reach her. Given deliberate headroom this time rather
+    -- than trimmed to the exact number -- the sustained-fire check has
+    -- now failed three times by under two percent, which is a sign the
+    -- margin was too thin rather than that the number was wrong.
+    bossHp = 4000,
     well   = true,
     wellName = "The Soulcoil Well",
     energy = { name = "Nek'zali", rate = 0, max = 100 },
