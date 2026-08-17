@@ -2623,6 +2623,25 @@ def main():
             local killed, adds = false, 0
             for _ = 1, 3000 do
                 S.hp, S.firing = 100, true
+                -- Stand diametrically opposite the boss, so the firing
+                -- line runs through it.
+                --
+                -- The harness's cursor is pinned at the arena centre, so
+                -- the player always aims at the middle -- which used to
+                -- hit a boss that was always parked there. Now that the
+                -- boss is tanked off the well and shoved around by
+                -- puddles, "shots reach the boss" has to be arranged
+                -- rather than assumed, or this measures the boss's
+                -- position instead of the gun.
+                local b = S.bossActor
+                if b then
+                    local d = math.sqrt(b.x * b.x + b.y * b.y)
+                    if d > 1 then
+                        S.px, S.py = -b.x / d * 60, -b.y / d * 60
+                    else
+                        S.px, S.py = 0, -60
+                    end
+                end
                 update(f, 0.05)
                 if S.bossActor.hp <= 0 then killed = true end
                 if not S.running then break end
@@ -2930,20 +2949,30 @@ def main():
             -- 2. Staying out sets you alight.
             pyre = toPyre()
             if not pyre then return "never reached a second Hungering Pyre" end
+            local flames = false
             for _ = 1, 400 do
                 S.hp = 100
-                S.px, S.py = -pyre.x, -pyre.y - 60
-                update(f, 0.05)
-                if pyre.resolved then break end
-                if not S.running then break end
-            end
-            local flames = false
-            for _ = 1, 60 do
-                S.hp = 100
-                update(f, 0.05)
-                for _, a in ipairs(S.actors) do
-                    if a.name == "Slithering Flames" then flames = true end
+                -- Somewhere genuinely outside the circle, but still on
+                -- the floor: parking off the platform is not a test of
+                -- staying out of a soak.
+                local d = math.sqrt(pyre.x * pyre.x + pyre.y * pyre.y)
+                if d < 1 then
+                    S.px, S.py = 0, -70
+                else
+                    S.px, S.py = -pyre.x / d * 72, -pyre.y / d * 72
                 end
+                update(f, 0.05)
+                if pyre.resolved then
+                    -- Checked in the SAME frame it resolves. Scanning a
+                    -- few frames later races the phase: this
+                    -- intermission ends when the field is clear, and
+                    -- clearing the field takes the Flames with it.
+                    for _, a in ipairs(S.actors) do
+                        if a.name == "Slithering Flames" then flames = true end
+                    end
+                    break
+                end
+                if not S.running then break end
             end
             T:Stop()
             if not flames then return "staying out of the Pyre set nobody alight" end
@@ -2951,7 +2980,14 @@ def main():
             -- 3. Soaking while still marked costs more than soaking clean.
             pyre = toPyre()
             if not pyre then return "never reached a third Hungering Pyre" end
+            -- Marked as of when the circle APPEARED, which is the state
+            -- the mechanic captures. Setting the debuff alone would be
+            -- too late: the soak reads it at cast time on purpose, so a
+            -- mark that lapses mid-cast cannot change the answer under
+            -- the player.
             S.debuffs["Singed"] = S.time + 30
+            pyre.notMine = true
+            pyre.call = nil
             local marked
             for _ = 1, 400 do
                 S.hp = 100

@@ -316,6 +316,22 @@ hp:SetPoint("TOPRIGHT", -PAD - 26, -16)
 local bossBar = MakeBar(150, 10, f, C.boss[1], C.boss[2], C.boss[3])
 bossBar:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -5)
 
+-- The encounter's own timer, when it has one. Yellow, and its own bar
+-- rather than a number in the score line: it is a thing that fills while
+-- you are busy elsewhere, and a number at the foot of the screen is
+-- exactly where nobody looks while that is happening.
+local energyBar = MakeBar(150, 10, f, 1.0, 0.80, 0.15)
+energyBar:SetPoint("TOPRIGHT", bossBar, "BOTTOMRIGHT", 0, -5)
+energyBar:Hide()
+
+-- Bloodlust. A phase you are meant to empty every cooldown into is worth
+-- saying out loud, and it blinks because that is what the real thing
+-- does to a raid's UI.
+local lustText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+lustText:SetPoint("TOPRIGHT", energyBar, "BOTTOMRIGHT", 0, -6)
+lustText:Hide()
+if ns.ApplyTextShadow then ns.ApplyTextShadow(lustText) end
+
 -- The arena.
 local arena = CreateFrame("Frame", nil, f)
 arena:SetSize(ARENA_PX, ARENA_PX)
@@ -605,6 +621,26 @@ bossFace:SetTexture(ART.dart)
 local bossGaze = arena:CreateTexture(nil, "ARTWORK", nil, 3)
 bossGaze:SetTexture(WHITE)
 
+-- The ward it hides behind while a phase says it cannot be hurt.
+local bossWard = arena:CreateTexture(nil, "ARTWORK", nil, 4)
+bossWard:SetTexture(ART.swirl)
+local bossWardRing = arena:CreateTexture(nil, "ARTWORK", nil, 5)
+bossWardRing:SetTexture(ART.ring)
+
+------------------------------------------------------------
+-- Forward declarations
+--
+-- Four of these now, and they all have the same cause: this file builds
+-- the scoring and the raid AI before the actors and the phase machinery
+-- they consult. Without a declaration up here the name inside those
+-- functions resolves to a nil GLOBAL, and the failure surfaces much
+-- later and somewhere unrelated -- which has cost real time twice.
+--
+-- Anything added below that reaches forward belongs in this list.
+------------------------------------------------------------
+local Spawn          -- built with the actors
+local CurrentPhase   -- built with the phase machinery
+
 ------------------------------------------------------------
 -- Scoring
 ------------------------------------------------------------
@@ -665,7 +701,13 @@ end
 local function TickEnergy(dt)
     local e = S.scenario and S.scenario.energy
     if not e then return end
-    S.energy = math.min(e.max or 100, S.energy + (e.rate or 0) * dt)
+    -- A phase can override the rate. Nek'zali's bar is fed purely by
+    -- adds reaching the well for two phases and then starts climbing on
+    -- its own in the last one, which is the whole reason that phase is
+    -- a race rather than a repeat of the first.
+    local phase = CurrentPhase()
+    local rate = (phase and phase.energyRate) or e.rate or 0
+    S.energy = math.min(e.max or 100, S.energy + rate * dt)
     if S.energy >= (e.max or 100) then
         S.hp = 0
         callOut:SetTextColor(1, 0.3, 0.3)
@@ -674,11 +716,6 @@ local function TickEnergy(dt)
     end
 end
 
--- Forward-declared because the raid AI below drops puddles, and Spawn is
--- built with the actors further down the file. Without this the name
--- inside those functions resolves to a nil GLOBAL rather than to the
--- local, and the failure arrives much later and somewhere else.
-local Spawn
 
 ------------------------------------------------------------
 -- The rest of the raid
@@ -977,6 +1014,22 @@ local function UpdateBossPosition(dt)
         b.facing = b.facing + (diff > 0 and step or -step)
     end
 
+    -- A phase can call it somewhere. The intermission drags Nek'zali
+    -- onto the well to channel, which is also what makes her immune --
+    -- so the boss walking to the middle IS the phase starting, and the
+    -- player should see it happen rather than find her there.
+    local phase = CurrentPhase()
+    if phase and phase.bossAt == "centre" then
+        local d = math.sqrt(b.x * b.x + b.y * b.y)
+        local step = BOSS_MOVE_SPEED * dt
+        if d <= step then
+            b.x, b.y = 0, 0
+        elseif d > 0.001 then
+            b.x, b.y = b.x - b.x / d * step, b.y - b.y / d * step
+        end
+        return
+    end
+
     -- And step off anything it is standing in. Slowly, and only far
     -- enough to get clear -- a boss that fled every puddle would drag
     -- melee around the room all fight.
@@ -991,6 +1044,19 @@ local function UpdateBossPosition(dt)
             end
         end
     end
+    -- The well counts as ground to stay off, for the boss as much as
+    -- for anybody: melee stand on it if she does.
+    if S.scenario and S.scenario.well then
+        local d = math.sqrt(b.x * b.x + b.y * b.y)
+        if d < 34 then
+            if d < 0.001 then
+                px, py = px + 1, py
+            else
+                px, py = px + b.x / d * 1.5, py + b.y / d * 1.5
+            end
+        end
+    end
+
     local plen = math.sqrt(px * px + py * py)
     if plen > 0.001 then
         local step2 = BOSS_MOVE_SPEED * 0.7 * dt
@@ -1134,8 +1200,23 @@ local function AllyGoal(ally, index)
 
     if t == S.bossActor then
         local rot = (t.facing or TANK_ANGLE) - TANK_ANGLE
-        return t.x + math.cos(ally.formAngle + rot) * ally.formDist,
-               t.y + math.sin(ally.formAngle + rot) * ally.formDist
+        local reach = ally.formDist
+        if ally.role == "TANK" then
+            -- Barrage hits harder the closer you are, so the tank walks
+            -- out while it winds up and steps back once it has fired.
+            -- The boss keeps the facing it already had, which is how the
+            -- spirits end up pointed away from the raid rather than
+            -- through it.
+            for _, act in ipairs(S.actors) do
+                if act.kind == "projectile" and not act.dead
+                    and S.time < (act.launchAt or 0) then
+                    reach = 52
+                    break
+                end
+            end
+        end
+        return t.x + math.cos(ally.formAngle + rot) * reach,
+               t.y + math.sin(ally.formAngle + rot) * reach
     end
 
     local reach = (ally.role == "RANGED" or ally.role == "HEALER")
@@ -1375,7 +1456,7 @@ local function PhasesOf(sc)
     return { { name = sc.title or "", events = sc.events, duration = sc.duration } }
 end
 
-local function CurrentPhase()
+function CurrentPhase()
     return S.phases and S.phases[S.phaseIndex]
 end
 
@@ -1711,7 +1792,17 @@ KINDS.dodge = {
 }
 
 KINDS.soak = {
-    Init = function(a) a.spinDir = (math.random() < 0.5) and -1 or 1 end,
+    Init = function(a)
+        a.spinDir = (math.random() < 0.5) and -1 or 1
+        -- Read once, at cast time, and remembered: the mark can lapse
+        -- mid-cast and a circle that changed its mind halfway through
+        -- would be worse than one that was simply wrong.
+        a.notMine = a.marks and HasDebuff(a.marks) or false
+        if a.notMine then
+            a.call = ("You are %s -- stay OUT of %s and take the Flames")
+                :format(a.marks, a.name)
+        end
+    end,
     -- A soak with `marks` is a SPLIT soak, and it has four outcomes
     -- rather than two.
     --
@@ -1724,7 +1815,10 @@ KINDS.soak = {
     -- gone.
     Resolve = function(a)
         local inside = dist(S.px, S.py, a.x, a.y) <= a.r
-        local marked = a.marks and HasDebuff(a.marks)
+        -- The state as it was when the circle appeared, not as it is
+        -- now. Judging against a mark that lapsed during the cast would
+        -- punish a player for doing exactly what they were told.
+        local marked = a.notMine
 
         if inside and marked then
             -- The one real mistake, and it has to hurt more than the job
@@ -1756,7 +1850,11 @@ KINDS.soak = {
         a.flashUntil = S.time + 0.25
     end,
     Draw = function(a, s)
-        DrawGroundCircle(a, s, C.good, 0.25, a.flashUntil and S.time < a.flashUntil)
+        -- Amber, not green, when it is somebody else's turn. The ring
+        -- means "what do I do about this", and the honest answer for a
+        -- Singed player is "not this one".
+        local col = a.notMine and { 1.0, 0.72, 0.25 } or C.good
+        DrawGroundCircle(a, s, col, 0.25, a.flashUntil and S.time < a.flashUntil)
     end,
 }
 
@@ -1778,6 +1876,24 @@ KINDS.puddle = {
         a.resolveAt = nil
     end,
     Tick = function(a, dt)
+        -- Invoke sets the void zones wandering, which turns a floor you
+        -- had learned into one you have to keep re-reading. A phase says
+        -- so and every puddle in the room drifts.
+        local phase = CurrentPhase()
+        if phase and phase.movingPuddles then
+            a.heading = (a.heading or (math.random() * math.pi * 2))
+                + (math.random() - 0.5) * dt * 2.2
+            local speed = phase.puddleSpeed or 9
+            local nx = a.x + math.cos(a.heading) * speed * dt
+            local ny = a.y + math.sin(a.heading) * speed * dt
+            -- Turned back at the wall rather than clamped to it, or they
+            -- all end up parked around the rim within a few seconds.
+            if (nx * nx + ny * ny) > (ARENA_R - a.r) ^ 2 then
+                a.heading = a.heading + math.pi
+            else
+                a.x, a.y = nx, ny
+            end
+        end
         if dist(S.px, S.py, a.x, a.y) <= a.r then
             S.hp = math.max(0, S.hp - (a.dps or 14) * dt)
             S.flash = math.max(S.flash, 0.18)
@@ -2171,8 +2287,14 @@ KINDS.projectile = {
         end
         a.travelled = 0
         a.resolveAt = nil
+        -- A wind-up before it travels. Without one there is nothing to
+        -- react to -- the spirits simply existed and were already moving
+        -- -- and the tank has no moment in which to back off, which is
+        -- the whole reason the mechanic reduces damage by distance.
+        a.launchAt = S.time + (a.cast or 0)
     end,
     Tick = function(a, dt)
+        if S.time < a.launchAt then return end
         local step = a.speed * dt
         a.x = a.x + math.cos(a.dir) * step
         a.y = a.y + math.sin(a.dir) * step
@@ -2194,6 +2316,14 @@ KINDS.projectile = {
     end,
     Draw = function(a, s)
         local col = schoolOf(a, C.bad)
+        if S.time < a.launchAt then
+            -- Winding up: the dart sits on the caster with the lane it is
+            -- about to take drawn faintly ahead of it, so the raid can
+            -- clear that lane before it is a lane.
+            local lead = distanceToWall(a.x, a.y, a.dir)
+            putBar(V(a, 3, "OVERLAY", 1), a.x, a.y, a.dir, lead, a.r * 2.4, s,
+                col, 0.20)
+        end
         put(V(a, 1, "OVERLAY", 3), "dart", a.x, a.y, a.r * 3, s, col, 1,
             a.dir + SPRITE_FACING)
         -- A short tail, so the direction of travel reads while it moves.
@@ -2744,8 +2874,15 @@ KINDS.imbibe = {
 ------------------------------------------------------------
 
 local function SetupBoss(sc)
+    -- Off the middle when the middle is a mechanic. Nek'zali is tanked
+    -- at the entrance precisely because nothing may stand in the Soul
+    -- Well -- and a boss parked on top of it put the whole raid there
+    -- too, which is the one thing the fight forbids.
+    local sx, sy = 0, 0
+    if sc.well then sx, sy = 0, 46 end
+    if sc.bossStart then sx, sy = sc.bossStart.x, sc.bossStart.y end
     S.bossActor = {
-        x = 0, y = 0,
+        x = sx, y = sy,
         maxHp = sc.bossHp or 1400,
         hp = sc.bossHp or 1400,
         r = 13,
@@ -2759,6 +2896,8 @@ local function DrawBoss(s)
         return
     end
     local f = b.facing or 0
+    local phase = CurrentPhase()
+    local immune = phase and phase.bossImmune
 
     -- The gaze first, so the skull and the arrow both sit on top of it.
     -- Short and faint: it says which way, not how far -- the cone's real
@@ -2767,9 +2906,24 @@ local function DrawBoss(s)
     local reach = 34
     putBar(bossGaze, b.x, b.y, f, reach, 7, s, C.boss, 0.16)
 
-    put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 1, 0.93, 0.90 }, 1)
-    put(bossFace, "dart", b.x + math.cos(f) * (b.r + 6),
-        b.y + math.sin(f) * (b.r + 6), 12, s, C.boss, 1, f + SPRITE_FACING)
+    if immune then
+        -- Greyed and behind a turning ward, because "your damage is
+        -- doing nothing right now" is the single most useful thing the
+        -- screen can say during an intermission -- and a boss that
+        -- merely stopped losing health said it far too quietly.
+        put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 0.62, 0.66, 0.74 }, 0.85)
+        put(bossWard, "swirl", b.x, b.y, b.r * 3.4, s, { 0.55, 0.75, 1.0 },
+            0.75, S.time * 1.4)
+        put(bossWardRing, "ring", b.x, b.y, b.r * 3.4, s, { 0.55, 0.75, 1.0 }, 0.85)
+        bossFace:Hide()
+        bossGaze:Hide()
+    else
+        bossWard:Hide()
+        bossWardRing:Hide()
+        put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 1, 0.93, 0.90 }, 1)
+        put(bossFace, "dart", b.x + math.cos(f) * (b.r + 6),
+            b.y + math.sin(f) * (b.r + 6), 12, s, C.boss, 1, f + SPRITE_FACING)
+    end
 end
 
 ------------------------------------------------------------
@@ -3207,8 +3361,22 @@ local function Update(_, elapsed)
     if S.scenario.energy then
         local e = S.scenario.energy
         local pct = S.energy / (e.max or 100) * 100
-        energyLine = ("   |cff%s%s %d%%|r"):format(
-            pct >= 70 and "ff5555" or "ffcc44", e.name, math.floor(pct))
+        energyBar:Show()
+        energyBar:SetValue(pct)
+        energyBar:SetStatusBarColor(1.0, pct >= 70 and 0.35 or 0.80, 0.15)
+        energyBar.text:SetText(("%s  %d%%"):format(e.name, math.floor(pct)))
+    else
+        energyBar:Hide()
+    end
+
+    if phase and phase.bloodlust then
+        -- Blinking, because a phase you are meant to empty every
+        -- cooldown into should not be a thing you notice afterwards.
+        lustText:Show()
+        local on = (math.floor(S.time * 2) % 2) == 0
+        lustText:SetText(on and "|cffff5533BLOODLUST|r" or "|cff884433BLOODLUST|r")
+    else
+        lustText:Hide()
     end
     local stackLine = ""
     if S.scenario.stacks then

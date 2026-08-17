@@ -123,22 +123,22 @@ SC.soulcoiler = {
                 -- be CLEAR rather than merely survivable.
                 Every(6, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = -0.30, speed = 56, damage = 22,
+                    where = "boss", cast = 2.0, fan = -0.30, speed = 56, damage = 22,
                     call = "Possession Barrage -- four spirits, clear their path",
                 }),
                 Every(6, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = -0.10, speed = 56, damage = 22,
+                    where = "boss", cast = 2.0, fan = -0.10, speed = 56, damage = 22,
                     call = "Possession Barrage -- four spirits, clear their path",
                 }),
                 Every(6, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = 0.10, speed = 56, damage = 22,
+                    where = "boss", cast = 2.0, fan = 0.10, speed = 56, damage = 22,
                     call = "Possession Barrage -- four spirits, clear their path",
                 }),
                 Every(6, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = 0.30, speed = 56, damage = 22,
+                    where = "boss", cast = 2.0, fan = 0.30, speed = 56, damage = 22,
                     call = "Possession Barrage -- four spirits, clear their path",
                 }),
                 Every(11, 13, 3, {
@@ -151,7 +151,11 @@ SC.soulcoiler = {
         },
         {
             name = "Intermission -- Ritual of Awakening", untilClear = true,
-            hpFloor = 55, bossImmune = true,
+            -- She walks onto the well to channel, and that channel is
+            -- what makes her immune -- so the move and the immunity are
+            -- one event the player watches happen rather than a state
+            -- they find her already in.
+            hpFloor = 55, bossImmune = true, bossAt = "centre",
             call = "Kill both Echoes, and burn the corpses",
             events = Timeline(
                 -- Soul Transfer channels into one side of the room and
@@ -200,7 +204,15 @@ SC.soulcoiler = {
         },
         {
             name = "Phase Two", duration = 44, hpFloor = 0,
-            call = "Invoke sets every puddle travelling",
+            -- The last phase is a race, and three things say so: the
+            -- void zones stop being furniture and start travelling, her
+            -- energy begins climbing on its own instead of only when an
+            -- add gets through, and this is where the raid empties its
+            -- cooldowns.
+            movingPuddles = true, puddleSpeed = 10,
+            energyRate = 2.2,
+            bloodlust = true,
+            call = "Invoke sets every puddle travelling -- BLOODLUST",
             events = Timeline(
                 Every(4, 8, 6, {
                     kind = "dodge", name = "Invoke", school = "shadow",
@@ -210,12 +222,12 @@ SC.soulcoiler = {
                 }),
                 Every(7.0, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = -0.22, speed = 58, damage = 20,
+                    where = "boss", cast = 2.0, fan = -0.22, speed = 58, damage = 20,
                     call = "Possession Barrage -- clear their path",
                 }),
                 Every(7.0, 12, 4, {
                     kind = "projectile", name = "Possession Barrage", school = "shadow",
-                    where = "boss", fan = 0.22, speed = 58, damage = 20,
+                    where = "boss", cast = 2.0, fan = 0.22, speed = 58, damage = 20,
                     call = "Possession Barrage -- clear their path",
                 }),
                 Every(9, 10, 4, {
