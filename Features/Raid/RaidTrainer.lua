@@ -2608,6 +2608,13 @@ KINDS.chaser = {
                     r = math.max(3.6, (a.r or 6) * 0.78),
                     damage = math.max(10, (a.damage or 24) - 6),
                     life = a.life, splits = a.splits - 1,
+                    -- Inherited, or a Clotting Venom stopped mattering
+                    -- the instant it split: the halves walked at the
+                    -- pool exactly as before and fed it nothing, so
+                    -- killing the parent was strictly better than
+                    -- killing all of it.
+                    feeds = a.feeds, leavesCorpse = a.leavesCorpse,
+                    deathPuddle = a.deathPuddle,
                     where = { x = a.x + (k == 1 and -7 or 7), y = a.y },
                 })
             end
@@ -3044,6 +3051,64 @@ KINDS.stack = {
 }
 
 ------------------------------------------------------------
+-- leech -- get inside the group, not merely near somebody
+--
+-- Siphoning Infection. A huge absorb with 100% healing reduction, and
+-- the guide is explicit that healing is not the answer at all: it comes
+-- off by OTHER PLAYERS standing in your circle, which is why the raid
+-- keeps a melee camp and a ranged camp and infected players walk into
+-- the nearest one.
+--
+-- Deliberately not `stack`. Stack asks whether one ally is close enough,
+-- and one ally is not a camp -- an infected player brushing past a
+-- straggler on their way to the wall would have cleared it. This counts
+-- heads, so the only thing that satisfies it is being inside the group.
+--
+-- Deliberately not `meet` either: meet names a partner, and this has no
+-- partner. Any two of them will do.
+------------------------------------------------------------
+KINDS.leech = {
+    Init = function(a)
+        a.need = a.need or 2
+        a.reach = a.reach or 15
+    end,
+    Resolve = function(a)
+        local n = 0
+        for _, ally in ipairs(S.allies) do
+            if dist(S.px, S.py, ally.x, ally.y) <= a.reach then n = n + 1 end
+        end
+        if n >= a.need then
+            Credit(("%s leeched off by %d"):format(a.name, n))
+        else
+            Hurt(a.damage or 30,
+                ("%s -- only %d in your circle, you needed %d"):format(
+                    a.name, n, a.need))
+        end
+    end,
+    Draw = function(a, s)
+        -- Drawn on the PLAYER, because the circle travels with them --
+        -- that is the whole difference between this and a soak on the
+        -- floor, and drawing it at a fixed point would teach a mechanic
+        -- that does not exist.
+        local p = castProgress(a)
+        put(V(a, 1, "ARTWORK", 0), "disc", S.px, S.py, a.reach * 2, s,
+            SCHOOL.blood or C.bad, 0.14)
+        put(V(a, 2, "ARTWORK", 2), "ring", S.px, S.py, a.reach * 2, s,
+            SCHOOL.blood or C.bad, 0.45 + 0.5 * p)
+        -- One pip per body currently inside it, so the player can see
+        -- the requirement being met rather than find out at the end.
+        local slot = 2
+        for _, ally in ipairs(S.allies) do
+            if dist(S.px, S.py, ally.x, ally.y) <= a.reach then
+                slot = slot + 1
+                put(V(a, slot, "ARTWORK", 3), "ring", ally.x, ally.y, 11, s,
+                    C.good, 0.8)
+            end
+        end
+    end,
+}
+
+------------------------------------------------------------
 -- meet -- reach one specific person
 ------------------------------------------------------------
 KINDS.meet = {
@@ -3218,31 +3283,52 @@ KINDS.imbibe = {
                 if alt.school == "fire" then
                     -- Pulse damage while alive and a hit when they die,
                     -- so they must be taken one at a time.
+                    --
+                    -- Walking for the POOL, like every other add on this
+                    -- boss. "Every add walks for the green pool in the
+                    -- middle -- one arriving dots the whole raid, two
+                    -- arriving is a wipe" is the first rule of the
+                    -- fight, and until now not one add on it had
+                    -- anywhere to go: they all chased the player, which
+                    -- is a mechanic from a different encounter.
                     for k = 1, alt.stacks + 1 do
                         Spawn({
                             kind = "chaser", name = "Burning Venom",
-                            school = "fire", art = "blob", goal = "player",
-                            speed = 8, hp = 72, r = 5.5, damage = 22, life = 18,
-                            deathPuddle = 10,
+                            school = "fire", art = "blob", goal = "centre",
+                            speed = 8, hp = 72, r = 5.5, damage = 22, life = 26,
+                            deathPuddle = 10, feeds = 20,
                             where = { x = alt.x + (k - 2) * 9, y = alt.y },
                         })
                     end
                 elseif alt.school == "shadow" then
+                    -- Shrouded Venom. The guide's note on these is not
+                    -- "dodge something" -- it is "kill them where you
+                    -- are not standing", because each one drops a circle
+                    -- where it dies. So they are adds with a death
+                    -- puddle, and the lesson is where you fight them.
+                    --
+                    -- They were a bare `dodge` telegraph before, which
+                    -- taught neither half of that.
                     for k = 1, alt.stacks do
                         Spawn({
-                            kind = "dodge", name = "Shadow spray",
-                            school = "shadow", cast = 2.4, r = 14, damage = 18,
-                            leaves = { r = 16, life = 20, dps = 12 },
+                            kind = "chaser", name = "Shrouded Venom",
+                            school = "shadow", art = "hex", goal = "centre",
+                            speed = 9, hp = 70, r = 5.5, damage = 22, life = 26,
+                            deathPuddle = 13, feeds = 20,
+                            where = { x = alt.x + (k - 1.5) * 10, y = alt.y },
                         })
                     end
                 elseif alt.school == "blood" then
-                    -- The splitting add. One becomes two becomes four,
-                    -- and none of them can be slowed or stunned.
+                    -- Clotting Venom. One becomes two becomes four, none
+                    -- of them can be slowed or stunned, and every piece
+                    -- is still walking for the pool -- which is what
+                    -- makes "keep killing until the floor is clear" a
+                    -- deadline rather than tidiness.
                     Spawn({
-                        kind = "chaser", name = "Blood Fragment",
-                        school = "blood", art = "hex", goal = "player",
-                        speed = 10, hp = 90, r = 6, damage = 24, life = 22,
-                        splits = alt.stacks,
+                        kind = "chaser", name = "Clotting Venom",
+                        school = "blood", art = "hex", goal = "centre",
+                        speed = 10, hp = 90, r = 6, damage = 24, life = 26,
+                        splits = alt.stacks, feeds = 20,
                         where = { x = alt.x, y = alt.y },
                     })
                 end

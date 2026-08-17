@@ -3305,6 +3305,150 @@ def main():
         print("  FAIL trainer two bosses: %s" % two)
         failures.append(("trainer two bosses", str(two)))
 
+    # Vashnik's pool.
+    #
+    # "Every add walks for the green pool in the middle" is the boss's
+    # headline rule, and the scenario expressed none of it -- the adds
+    # Imbibe spawned chased the PLAYER. Two claims worth failing on: they
+    # walk to the middle, and getting there feeds the bar. Plus the
+    # leech, whose whole point is that standing near one straggler is not
+    # the same as standing in a camp.
+    vash = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+            math.randomseed(4550)
+
+            -- Run the fight with the player parked far from the middle
+            -- and never shooting. Adds that walk at the PLAYER would
+            -- close on them; adds that walk at the pool close on it.
+            T:Start("vashnik", false)
+            S.countdown = 0
+            local sawAdd, closedOnPool, closedOnPlayer = false, 0, 0
+            local fed = 0
+            for _ = 1, 900 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -86
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                local before = S.energy
+                update(f, 0.05)
+                if S.energy > before then fed = fed + (S.energy - before) end
+                for _, a in ipairs(S.actors) do
+                    if a.kind == "chaser" and a.enemy and not a.dead then
+                        sawAdd = true
+                        local dPool = math.sqrt(a.x * a.x + a.y * a.y)
+                        local dYou = math.sqrt((a.x - S.px) ^ 2 + (a.y - S.py) ^ 2)
+                        if a.lastPool and dPool < a.lastPool - 0.001 then
+                            closedOnPool = closedOnPool + 1
+                        end
+                        if a.lastYou and dYou < a.lastYou - 0.001 then
+                            closedOnPlayer = closedOnPlayer + 1
+                        end
+                        a.lastPool, a.lastYou = dPool, dYou
+                    end
+                end
+                if S.energy >= 99 then break end
+                if not S.running then break end
+            end
+            T:Stop()
+
+            if not sawAdd then
+                problems[#problems + 1] = "Imbibe spawned no adds at all"
+            elseif closedOnPool <= closedOnPlayer then
+                problems[#problems + 1] = string.format(
+                    "adds closed on the player %d frames against %d on the pool",
+                    closedOnPlayer, closedOnPool)
+            end
+            if fed <= 0 then
+                problems[#problems + 1] =
+                    "adds reached the pool and Toxic Vapor never moved"
+            end
+
+            -- The leech: inside a camp clears it, next to nobody does not.
+            local function leechAt(where)
+                T:Start("vashnik", false)
+                S.countdown = 0
+                local passed, missed = 0, 0
+                for _ = 1, 1400 do
+                    S.hp, S.firing, S.energy = 100, false, 0
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                    if where == "camp" then
+                        -- Stand on the biggest cluster of allies.
+                        local bx, by, best = 0, 0, -1
+                        for _, c in ipairs(S.allies) do
+                            local n = 0
+                            for _, o in ipairs(S.allies) do
+                                local d = math.sqrt((c.x - o.x) ^ 2 + (c.y - o.y) ^ 2)
+                                if d <= 14 then n = n + 1 end
+                            end
+                            if n > best then bx, by, best = c.x, c.y, n end
+                        end
+                        S.px, S.py = bx, by
+                    else
+                        S.px, S.py = 0, -92
+                    end
+                    -- Attributed to the LEECH, not to the round.
+                    --
+                    -- Counting every credit the frame handed out would
+                    -- compare two positions on a floor full of other
+                    -- mechanics -- the camp is also where the raid is
+                    -- dodging well -- so the contrast would look right
+                    -- for reasons that have nothing to do with this
+                    -- verb. A leech that vanished during an update
+                    -- resolved during it, and that frame's delta is its
+                    -- own.
+                    local live = {}
+                    for _, a in ipairs(S.actors) do
+                        if a.kind == "leech" then live[a] = true end
+                    end
+                    local p, m = S.passed, S.failed
+                    update(f, 0.05)
+                    local stillHere = {}
+                    for _, a in ipairs(S.actors) do
+                        if a.kind == "leech" then stillHere[a] = true end
+                    end
+                    local resolved = false
+                    for a in pairs(live) do
+                        if not stillHere[a] then resolved = true end
+                    end
+                    if resolved then
+                        passed = passed + (S.passed - p)
+                        missed = missed + (S.failed - m)
+                    end
+                    if not S.running then break end
+                end
+                T:Stop()
+                return passed, missed
+            end
+            local campPass, campMiss = leechAt("camp")
+            local alonePass, aloneMiss = leechAt("alone")
+            if campPass + campMiss == 0 then
+                problems[#problems + 1] = "no Siphoning Infection ever resolved"
+            end
+            if campPass <= alonePass or aloneMiss <= campMiss then
+                problems[#problems + 1] = string.format(
+                    "Siphoning Infection: in a camp %d handled / %d missed;"
+                    .. " alone at the wall %d handled / %d missed",
+                    campPass, campMiss, alonePass, aloneMiss)
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format(
+                "ok:adds walk at the pool (%d frames closing on it against %d on the player),"
+                .. " leaks fed %.0f vapor; Siphoning cleared %d/%d in a camp"
+                .. " against %d/%d at the wall",
+                closedOnPool, closedOnPlayer, fed,
+                campPass, campPass + campMiss, alonePass, alonePass + aloneMiss)
+        end
+    """)(ns)
+    if vash and str(vash).startswith("ok:"):
+        print("  ok   trainer vashnik: %s" % str(vash)[3:])
+    else:
+        print("  FAIL trainer vashnik: %s" % vash)
+        failures.append(("trainer vashnik", str(vash)))
+
     # Ranged and healers hold still.
     #
     # The formation used to rotate wholesale with the boss's facing,
@@ -3911,6 +4055,14 @@ def main():
             local function settle(target, frames)
                 for _ = 1, frames do
                     S.hp, S.firing = 100, false
+                    -- Toxic Vapor held at zero for the same reason the
+                    -- player's health and the boss's are: this check is
+                    -- about which altars empower, and it drives a player
+                    -- who never shoots. Now that leaked adds feed the
+                    -- bar, that player fills it and wipes -- the round
+                    -- ended before the check reached its own subject,
+                    -- and reported that Imbibe spawned nothing.
+                    S.energy = 0
                     if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
                     -- Parked on the altar; the raid should lean after us.
                     S.px, S.py = target.x * 0.75, target.y * 0.75
@@ -3959,6 +4111,7 @@ def main():
             local spawned, wrongSchool = 0, nil
             for _ = 1, 700 do
                 S.hp, S.firing = 100, false
+                S.energy = 0
                 if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
                 S.px, S.py = S.altars[2].x * 0.75, S.altars[2].y * 0.75
                 update(f, 0.05)

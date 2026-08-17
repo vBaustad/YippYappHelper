@@ -505,9 +505,18 @@ SC.explorers = {
 ------------------------------------------------------------
 -- 4. Vashnik the Malignant            encounterID 3455
 --
--- The adds walk for the pool in the middle, and one arriving dots the
--- raid while two is a wipe -- so they feed the bar here too. Plague Rot
--- is a spread and THEN waves, eight seconds later: walk out, then dodge.
+-- "Every add walks for the green pool in the middle. One arriving dots
+-- the whole raid; two arriving is a wipe." That is rule two of three on
+-- this boss, and for a long time nothing in this scenario expressed it:
+-- there were no adds at all in the timeline, and the ones Imbibe spawned
+-- chased the PLAYER, which is a mechanic from a different encounter.
+--
+-- They walk for the pool now, and every one that arrives feeds Toxic
+-- Vapor -- the same shape as Nek'zali's well, because it is the same
+-- idea: the bar is a record of what you let through.
+--
+-- Plague Rot is a spread and THEN waves, eight seconds later: walk out,
+-- then dodge.
 ------------------------------------------------------------
 SC.vashnik = {
     bossId = "vashnik",
@@ -517,39 +526,113 @@ SC.vashnik = {
     altars = true,
     bossFollowsTank = true,
     well   = true,
-    -- Toxic Vapor grows with every drink, so a slow tick plus what the
-    -- adds feed it.
-    energy = { name = "Toxic Vapor", rate = 0.5, max = 100 },
+    -- Toxic Vapor grows with every drink AND with every add that gets
+    -- through. The tick is slow on purpose: leaks are what fill it, and
+    -- a bar that filled on its own would say the opposite.
+    energy = { name = "Toxic Vapor", rate = 0.35, max = 100 },
     phases = {
         {
-            name = "The Three Fountains", duration = 82, hpFloor = 0,
+            name = "The Three Fountains", duration = 46, hpFloor = 52,
             call = "Imbibe drinks from the two nearest fountains",
             events = Timeline(
-                Every(6, 17, 4, {
+                Every(6, 17, 3, {
                     kind = "imbibe", name = "Imbibe", cast = 3.2,
                     call = "Imbibe -- the two nearest fountains empower",
                 }),
-                Every(9, 19, 4, {
+                Every(9, 19, 3, {
                     kind = "spread", name = "Plague Rot", school = "nature",
                     cast = 4, minDist = 28, damage = 22,
                     call = "Plague Rot -- walk out, the waves follow",
                 }),
-                Every(17, 19, 4, {
+                Every(17, 19, 3, {
                     kind = "wave", name = "Plague wave", school = "nature",
                     speed = 46, width = 17, damage = 18,
                     call = "Plague waves incoming -- move out of their path",
                 }),
-                Every(18, 19, 4, {
+                Every(18, 19, 3, {
                     kind = "wave", name = "Plague wave", school = "nature",
                     speed = 46, width = 17, damage = 18,
                     call = "Second wave right behind it",
                 }),
-                Every(14, 16, 4, {
+                Every(14, 16, 3, {
                     kind = "soak", name = "Malignant Catalyst", school = "shadow",
                     group = 1, cast = 3, r = 12, damage = 24,
                     call = "Malignant Catalyst -- one player per circle",
                 }),
-                Every(15, 16, 4, {
+                Every(15, 16, 3, {
+                    kind = "soak", name = "Malignant Catalyst", school = "shadow",
+                    group = 2, cast = 3, r = 12, damage = 24, heroicOnly = true,
+                })
+            ),
+        },
+        {
+            -- The blood fountain's own phase, because Siphoning
+            -- Infection is the one mechanic on this boss that no amount
+            -- of healing answers and it deserves to be met on its own
+            -- rather than buried under three other schools.
+            name = "Blood -- the leech", duration = 34, hpFloor = 26,
+            call = "Infected players walk into the nearest camp",
+            events = Timeline(
+                Every(4, 12, 3, {
+                    kind = "leech", name = "Siphoning Infection", school = "blood",
+                    cast = 5, reach = 15, need = 2, damage = 34,
+                    call = "Siphoning Infection -- get INSIDE a camp, healing will not fix it",
+                }),
+                Every(8, 14, 2, {
+                    kind = "imbibe", name = "Imbibe", cast = 3.2,
+                }),
+                Every(10, 15, 2, {
+                    kind = "spread", name = "Plague Rot", school = "nature",
+                    cast = 4, minDist = 28, damage = 22,
+                }),
+                Every(18, 15, 2, {
+                    kind = "wave", name = "Plague wave", school = "nature",
+                    speed = 46, width = 17, damage = 18,
+                    call = "Plague wave crossing -- step out of its path",
+                }),
+                Every(13, 16, 2, {
+                    kind = "soak", name = "Malignant Catalyst", school = "shadow",
+                    group = 1, cast = 3, r = 12, damage = 24,
+                })
+            ),
+        },
+        {
+            name = "Whatever is empowered", duration = 38, hpFloor = 0,
+            -- Toxic Vapor has been growing with every drink all fight,
+            -- and this is where it bites: the rate climbs on its own on
+            -- top of whatever the adds have already fed it.
+            energyRate = 1.1,
+            bloodlust = true,
+            call = "The casts never stop now -- BLOODLUST",
+            events = Timeline(
+                Every(4, 13, 3, {
+                    kind = "imbibe", name = "Imbibe", cast = 3.0,
+                    call = "Imbibe -- two more fountains live",
+                }),
+                Every(8, 14, 3, {
+                    kind = "spread", name = "Plague Rot", school = "nature",
+                    cast = 3.6, minDist = 28, damage = 22,
+                    call = "Plague Rot -- walk out, the waves follow",
+                }),
+                Every(16, 14, 3, {
+                    kind = "wave", name = "Plague wave", school = "nature",
+                    speed = 48, width = 17, damage = 18,
+                    call = "Plague waves incoming -- move out of their path",
+                }),
+                Every(17, 14, 3, {
+                    kind = "wave", name = "Plague wave", school = "nature",
+                    speed = 48, width = 17, damage = 18,
+                    call = "Second wave right behind it",
+                }),
+                Every(11, 13, 3, {
+                    kind = "leech", name = "Siphoning Infection", school = "blood",
+                    cast = 4.5, reach = 15, need = 2, damage = 34,
+                }),
+                Every(6, 12, 3, {
+                    kind = "soak", name = "Malignant Catalyst", school = "shadow",
+                    group = 1, cast = 3, r = 12, damage = 24,
+                }),
+                Every(7, 12, 3, {
                     kind = "soak", name = "Malignant Catalyst", school = "shadow",
                     group = 2, cast = 3, r = 12, damage = 24, heroicOnly = true,
                 })
