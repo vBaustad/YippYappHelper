@@ -589,6 +589,22 @@ end
 local bossSkull = arena:CreateTexture(nil, "OVERLAY", nil, 4)
 bossSkull:SetTexture(ART.skull)
 
+-- Which way it is looking.
+--
+-- The facing decides where every frontal goes, and until now the only
+-- way to know it was to watch where the last cone fired -- which is
+-- after the fact, and on a boss that turns deliberately it is the one
+-- piece of state worth reading ahead. The skull itself stays upright,
+-- because a rotating skull reads as a loading spinner, so the arrow
+-- carries the direction on its own.
+local bossFace = arena:CreateTexture(nil, "OVERLAY", nil, 5)
+bossFace:SetTexture(ART.dart)
+
+-- A dim stub of the cone's axis, so the arrow reads as "it is looking
+-- THAT way down the room" rather than as a decoration stuck to its chin.
+local bossGaze = arena:CreateTexture(nil, "ARTWORK", nil, 3)
+bossGaze:SetTexture(WHITE)
+
 ------------------------------------------------------------
 -- Scoring
 ------------------------------------------------------------
@@ -2739,10 +2755,21 @@ end
 local function DrawBoss(s)
     local b = S.bossActor
     if not b then
-        bossSkull:Hide()
+        bossSkull:Hide(); bossFace:Hide(); bossGaze:Hide()
         return
     end
+    local f = b.facing or 0
+
+    -- The gaze first, so the skull and the arrow both sit on top of it.
+    -- Short and faint: it says which way, not how far -- the cone's real
+    -- length is the frontal's business and drawing it here would be a
+    -- permanent telegraph for a mechanic that is not casting.
+    local reach = 34
+    putBar(bossGaze, b.x, b.y, f, reach, 7, s, C.boss, 0.16)
+
     put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 1, 0.93, 0.90 }, 1)
+    put(bossFace, "dart", b.x + math.cos(f) * (b.r + 6),
+        b.y + math.sin(f) * (b.r + 6), 12, s, C.boss, 1, f + SPRITE_FACING)
 end
 
 ------------------------------------------------------------
