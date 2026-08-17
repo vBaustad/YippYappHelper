@@ -387,9 +387,35 @@ function GetSpellInfo() return "Spell", nil, 134400 end
 
 C_ChatInfo = { RegisterAddonMessagePrefix = function() return true end,
                SendAddonMessage = function() end }
-C_PartyInfo = { GetInviteConfirmationInvalidQueues = function() return {} end }
+C_PartyInfo = { GetInviteConfirmationInvalidQueues = function() return {} end,
+                IsDelveInProgress = function() return false end }
+
+-- The delve companion.
+--
+-- Modelled as a FRIENDSHIP, which is what it is: Valeera reads level 57
+-- with a percentage toward 58, not a reputation standing and not a
+-- character level. Ranks come from one call and the bar within the rank
+-- from another, and either can be absent on its own -- a companion at
+-- maximum rank has no next threshold -- so the fixture gives both and
+-- the code has to cope when it does not.
+local COMPANION_FACTION = 2640
+C_DelvesUI = { GetFactionForCompanion = function() return COMPANION_FACTION end,
+               HasActiveDelve = function() return false end,
+               GetCurrentDelvesSeasonNumber = function() return 2 end }
+C_GossipInfo = { GetFriendshipReputation = function(id)
+                     if id ~= COMPANION_FACTION then return nil end
+                     return { name = "Valeera Sanguinar", reaction = "Trusty Delve Companion",
+                              standing = 1700, reactionThreshold = 1500,
+                              nextThreshold = 2500 }
+                 end,
+                 GetFriendshipReputationRanks = function(id)
+                     if id ~= COMPANION_FACTION then return nil end
+                     return { currentLevel = 57, maxLevel = 60 }
+                 end }
 C_UIWidgetManager = {}
-C_Reputation = {}
+C_Reputation = { GetFactionDataByID = function(id)
+                     return { factionID = id, name = "Valeera Sanguinar" }
+                 end }
 C_QuestLog = { IsQuestFlaggedCompleted = function() return false end }
 C_Calendar = {}
 C_DateAndTime = { GetCurrentCalendarTime = function()
@@ -2078,6 +2104,78 @@ def main():
         print("  FAIL BiS doll: %s" % doll)
         failures.append(("BiS doll", str(doll)))
 
+    # The Delves page. Built and refreshed, not merely loaded.
+    #
+    # The claims worth pinning are the ones the page was scoped around:
+    # the companion is read as a FRIENDSHIP rank rather than a level or a
+    # reputation, the tier ladder is the shared Progression table rather
+    # than a second copy, and a companion the player has not unlocked
+    # draws an honest empty state instead of a row of zeroes.
+    delves = L.eval("""
+        function(ns)
+            local page = ns.Shell and ns.Shell.GetPage and ns.Shell:GetPage("delves")
+            if not page then return "no delves page registered" end
+
+            local host = CreateFrame("Frame")
+            host:SetSize(700, 620)
+            local ok, err = pcall(page.Build, host)
+            if not ok then return "build failed: " .. tostring(err) end
+            local ok2, err2 = pcall(page.Refresh, { content = host, width = 700, height = 620 })
+            if not ok2 then return "refresh failed: " .. tostring(err2) end
+
+            local ui = ns.DelvesUI
+            if not ui then return "the page published nothing" end
+
+            -- Friendship rank, from the ranks call -- not a character
+            -- level and not a reputation standing.
+            local c = ui._companion
+            if not c then return "the companion was not read at all" end
+            if c.level ~= 57 or c.maxLevel ~= 60 then
+                return "companion reads level " .. tostring(c.level) .. "/"
+                    .. tostring(c.maxLevel) .. ", not 57/60"
+            end
+            -- 1700 of a 1500..2500 rank is a fifth of the way through
+            -- it. Measuring from zero instead of from the rank's own
+            -- floor would read 68%, which is the classic way to get a
+            -- friendship bar wrong.
+            if not c.pct or math.abs(c.pct - 0.2) > 0.001 then
+                return "companion bar reads " .. tostring(c.pct)
+                    .. "; 1700 within a 1500-2500 rank is 0.2"
+            end
+
+            -- The ladder is the shared table, so the row count follows
+            -- it. A second hand-typed copy would drift the first time a
+            -- season changed.
+            local tiers = ns.PROGRESSION and ns.PROGRESSION.DELVES or {}
+            if #tiers == 0 then return "no tier data to draw" end
+            local drawn = 0
+            for i, row in pairs(ui.tierRows or {}) do
+                if i > 0 and row:IsShown() then drawn = drawn + 1 end
+            end
+            if drawn ~= #tiers then
+                return "drew " .. drawn .. " tier rows for " .. #tiers .. " tiers"
+            end
+
+            -- And the empty state: no companion must not mean level 0.
+            local realGet = ns.Delves.GetCompanion
+            ns.Delves.GetCompanion = function() return nil end
+            local ok3 = pcall(page.Refresh, { content = host, width = 700, height = 620 })
+            ns.Delves.GetCompanion = realGet
+            if not ok3 then return "refresh failed with no companion" end
+            local txt = tostring(ui.compCard.level:GetText() or "")
+            if txt:match("0") then
+                return "an unknown companion rendered as level '" .. txt .. "'"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if delves == "ok":
+        print("  ok   delves: companion read as a friendship rank, ladder shared "
+              "with Progression, empty state honest")
+    else:
+        print("  FAIL delves: %s" % delves)
+        failures.append(("delves", str(delves)))
+
     # Tabs. Every strip in the addon goes through these three functions,
     # so the contract is worth stating: a tab reads as selected by TWO
     # signals, and it sits on a rail whether or not its container drew
@@ -2878,7 +2976,7 @@ def main():
             end
             for _, want in ipairs({
                 "Restless Amani", "Possession Barrage", "Essence Rend",
-                "Echo of Nek'zali", "Hungering Pyre",
+                "Echo of Jawae", "Hungering Pyre",
             }) do
                 if not fired[want] then
                     problems[#problems + 1] = want .. " never fired"
@@ -4326,6 +4424,12 @@ def main():
                 return n
             end
 
+            -- Seeded, for the same reason the sustained-fire check is:
+            -- every check here shares one RNG stream, and this one turns
+            -- on whether an ally happened to be assigned a soak during a
+            -- sampled window. Editing Nek'zali's intermission re-rolled
+            -- it and it failed on four bosses it does not touch.
+            math.randomseed(20260817)
             local mostInGrouped, mostInOpen = 0, 0
             -- The Sentinels and the Coiled Altar are in this list for
             -- the CONTROL half of it.

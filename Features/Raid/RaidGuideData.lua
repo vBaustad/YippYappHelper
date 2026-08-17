@@ -189,10 +189,13 @@ G.bosses = {
                 name = "Intermission",
                 tag  = "at 50% -- burn the piles",
                 lines = {
-                    "She hides in the well and turns immune. A second caster appears "
-                        .. "and starts producing Echoes at the edges of the room.",
-                    "Two Echoes, one after the other, each channelling Soul Transfer. "
-                        .. "Kill both and the intermission ends.",
+                    "She hides in the Soulcoil Well and turns immune. Jawae appears and "
+                        .. "starts producing Echoes of herself around the room.",
+                    "Both Echoes are up at once. Kill them and the intermission ends.",
+                    "Soul Transfer is a 15-second cast at unlimited range: Jawae pours "
+                        .. "her essence into an Echo, and the surge at the end hits "
+                        .. "anyone caught in the blast. You cannot stop it, so just be "
+                        .. "out of it.",
                     "Reposition the raid ON TOP of the Amani piles you made in phase "
                         .. "one. That is the whole job here.",
                     "Hungering Pyre splits fire damage between everyone soaking it, so "
@@ -223,10 +226,12 @@ G.bosses = {
         },
 
         heroic = {
-            "Amani corpses LINGER on heroic, and can be reawakened later if you never "
-                .. "burned them. On normal they simply die.",
-            "That is why phase one is about making two or three tidy piles rather than "
-                .. "killing adds wherever they happen to be.",
+            "Corpses and Raised Amani were both seen on a live pull, so treat the "
+                .. "reawakening as something that happens to you and not as a heroic "
+                .. "extra -- one source called it heroic-only and it is the weaker "
+                .. "claim of the two.",
+            "Either way heroic is where it bites, because there is more of everything "
+                .. "and less room to park a pile out of the way.",
         },
 
         roles = {

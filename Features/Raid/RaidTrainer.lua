@@ -624,6 +624,13 @@ playerRing:SetTexture(ART.ring)
 local wellTex = arena:CreateTexture(nil, "ARTWORK", nil, 1)
 wellTex:SetTexture(ART.ring)
 
+-- Named on the floor. It is "The Soulcoil Well", which the client puts
+-- on screen during the pull -- and the one thing the whole fight is
+-- about should not be an unlabelled ring in the middle of the room.
+local wellLabel = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+if ns.ApplyTextShadow then ns.ApplyTextShadow(wellLabel) end
+wellLabel:Hide()
+
 local allyTex = {}
 for i = 1, 6 do
     allyTex[i] = arena:CreateTexture(nil, "OVERLAY", nil, 2)
@@ -4041,8 +4048,18 @@ local function DrawDots(s)
 
     if S.scenario and S.scenario.well then
         put(wellTex, "ring", 0, 0, 18, s, C.well, 0.9, -S.time * 0.6)
+        local label = S.scenario.wellName
+        if label then
+            wellLabel:SetPoint("CENTER", arena, "CENTER", 0, -22 * s)
+            wellLabel:SetText(label)
+            wellLabel:SetTextColor(C.well[1], C.well[2], C.well[3], 0.8)
+            wellLabel:Show()
+        else
+            wellLabel:Hide()
+        end
     else
         wellTex:Hide()
+        wellLabel:Hide()
     end
 
     -- The explosion window, while it is hot.

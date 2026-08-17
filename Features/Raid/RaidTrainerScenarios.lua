@@ -132,6 +132,7 @@ SC.soulcoiler = {
     -- the reason her health had to come down rather than the packs.
     bossHp = 4300,
     well   = true,
+    wellName = "The Soulcoil Well",
     energy = { name = "Nek'zali", rate = 0, max = 100 },
     phases = {
         {
@@ -197,20 +198,28 @@ SC.soulcoiler = {
             raisesCorpses = true,
             call = "Kill both Echoes -- and burn every corpse before it ends",
             events = Timeline(
-                -- Soul Transfer channels into one side of the room and
-                -- the Echo lands at the end of it, so the beam is a place
-                -- not to be standing rather than a thing to interrupt.
+                -- BOTH Echoes are up together, and both are Echoes of
+                -- JAWAE -- she is the caster who appears when Nek'zali
+                -- hides in the Soulcoil Well, and the Echoes are hers,
+                -- not Nek'zali's. Read off the boss frames in a
+                -- screenshot of the pull: two "Echo of Jawae" at once.
+                --
+                -- Soul Transfer is a FIFTEEN second cast at unlimited
+                -- range -- Jawae pours her essence into an Echo, and the
+                -- surge at the end catches anyone standing in it. So it
+                -- is long, it is unmissable, and the only job is not
+                -- being in the blast when it lands.
                 { at = 1, kind = "line", name = "Soul Transfer", school = "spirit",
-                  where = "centre", cast = 4, width = 26, damage = 24,
-                  call = "Soul Transfer -- an Echo lands where this points" },
-                { at = 5, kind = "caster", name = "Echo of Nek'zali", school = "spirit",
-                  hp = 240, castLen = 15, damage = 32, r = 7, art = "spike",
-                  call = "First Echo -- burn it" },
+                  where = "centre", cast = 9, width = 26, damage = 30,
+                  call = "Soul Transfer -- 15 seconds, then a blast. Be out of it." },
+                { at = 2, kind = "caster", name = "Echo of Jawae", school = "spirit",
+                  hp = 240, castLen = 16, damage = 32, r = 7, art = "spike",
+                  call = "Both Echoes up -- burn them" },
+                { at = 3, kind = "caster", name = "Echo of Jawae", school = "spirit",
+                  hp = 240, castLen = 18, damage = 32, r = 7, art = "spike" },
                 { at = 20, kind = "line", name = "Soul Transfer", school = "spirit",
-                  where = "centre", cast = 4, width = 26, damage = 24 },
-                { at = 24, kind = "caster", name = "Echo of Nek'zali", school = "spirit",
-                  hp = 240, castLen = 15, damage = 32, r = 7, art = "spike",
-                  call = "Second Echo" },
+                  where = "centre", cast = 9, width = 26, damage = 30,
+                  call = "Soul Transfer again -- out of the blast" },
                 Every(8, 11, 3, {
                     kind = "soak", name = "Hungering Pyre", school = "fire",
                     cast = 3.2, r = 16, damage = 26,
