@@ -258,7 +258,7 @@ SC.soulcoiler = {
 ------------------------------------------------------------
 local function GreenGolem(name, dur, floor)
     return {
-        name = name, duration = dur, hpFloor = floor,
+        name = name, duration = dur, hpFloor = floor, side = 1,
         call = "Green golem -- pop every droplet",
         events = Timeline(
             Every(3, 5, 6, {
@@ -286,7 +286,7 @@ end
 
 local function RedGolem(name, dur, floor)
     return {
-        name = name, duration = dur, hpFloor = floor,
+        name = name, duration = dur, hpFloor = floor, side = 2,
         call = "Red golem -- everything here leaves a puddle",
         events = Timeline(
             Every(4, 12, 3, {
@@ -332,12 +332,46 @@ SC.sentinels = {
     title  = "Entombed Sentinels",
     intro  = "Swap sides at every intermission. Green orbs plus theirs make four.",
     bossHp = 5400,
+
+    -- TWO golems, forty yards apart, and they stay apart: the tanks hold
+    -- that gap for the whole fight and it is the encounter's first rule.
+    -- Neither walks.
+    --
+    -- The phases below are not the fight changing shape -- they are YOU
+    -- changing sides at each intermission, which is what lets your dot
+    -- stacks fall off. `side` on a phase says which golem your half of
+    -- the raid is standing on.
+    bosses = {
+        { name = "Green Golem", at = { x = -40, y = 10 },
+          colour = { 0.55, 1.00, 0.50 } },
+        { name = "Red Golem",   at = { x = 40,  y = 10 },
+          colour = { 1.00, 0.45, 0.40 } },
+    },
+
+    -- Vitriolic Stasis. The bar is not a kill timer here -- at the top it
+    -- heals the lower golem up to the higher, so the cost of letting the
+    -- bars diverge is exactly the size of the gap. See TickEnergy.
+    energy = { name = "Vitriolic Stasis", rate = 3.4, max = 100 },
+    evenHealth = { name = "Vitriolic Stasis" },
+
+    -- The other half of the raid, working on the golem you are not
+    -- standing on. Their rate is what yours has to match.
+    otherTeam = { dps = 20 },
+
+    -- "Standing in the middle to hit both bosses gives you both dots."
+    -- The one rule on this fight a single player can obey alone.
+    --
+    -- The range has to EXCEED half the gap between them or there is no
+    -- middle to punish -- at 44 against an 80-unit gap the band where
+    -- both reach you was empty, and the mechanic silently did nothing.
+    bothDots = { range = 52, dps = 5 },
+
     phases = {
-        GreenGolem("The Green Golem", 32, 72),
-        HelicalToxins("Intermission", 72),
-        RedGolem("The Red Golem", 32, 42),
-        HelicalToxins("Intermission", 42),
-        GreenGolem("The Green Golem", 30, 0),
+        GreenGolem("Your side: the Green Golem", 32, 72),
+        HelicalToxins("Intermission -- swap sides", 72),
+        RedGolem("Your side: the Red Golem", 32, 42),
+        HelicalToxins("Intermission -- swap sides", 42),
+        GreenGolem("Your side: the Green Golem", 30, 0),
     },
 }
 
@@ -626,6 +660,29 @@ SC.twinfangs = {
     intro  = "Everything green is a stack. Ten of them kills you.",
     bossHp = 4600,
     stacks = { name = "Eternal Venom", max = 11, heroicMax = 10 },
+
+    -- Two bosses, two health bars, and they do not share. Neither can be
+    -- moved, so neither walks -- the raid spreads loosely wherever it
+    -- pulled and stays there.
+    --
+    -- The twins' own names are the one thing on this fight still resting
+    -- on a caption rather than on the client; the guide page carries
+    -- that caveat, and it is the reason they are not spelled any more
+    -- confidently here than there.
+    bosses = {
+        { name = "Vexil", at = { x = -38, y = 16 },
+          colour = { 0.60, 1.00, 0.45 } },
+        { name = "Itras", at = { x = 38,  y = 16 },
+          colour = { 1.00, 0.40, 0.45 } },
+    },
+
+    -- Uncoiled Rot. Kill one first and the survivor gains 25% every four
+    -- seconds -- the one unavoidable damage source in this file, and it
+    -- earns that the same way the poison meter does: it is switched off
+    -- entirely by playing correctly. Bring both bars down together and
+    -- it never starts.
+    killTogether = { gainPct = 25, every = 4, dps = 1.6 },
+
     phases = {
         {
             name = "Vexil and Itras", duration = 46, hpFloor = 58,

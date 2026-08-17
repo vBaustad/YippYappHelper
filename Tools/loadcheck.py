@@ -2618,6 +2618,15 @@ def main():
             end
 
             -- Held fire, aimed at the centre where the boss stands.
+            --
+            -- Seeded, because these checks share one RNG stream and this
+            -- one had no margin: it finished the boss with about three
+            -- percent of the bar to spare, so ANY change to how many
+            -- random numbers an earlier check consumed re-rolled the
+            -- whole pull and it failed on a file it never touched.
+            -- Adding a second boss to the Twin Fangs did exactly that
+            -- and the failure surfaced on Nek'zali.
+            math.randomseed(20260817)
             T:Start("soulcoiler", false)
             S.countdown = 0
             local killed, adds = false, 0
@@ -2649,7 +2658,12 @@ def main():
             for _ = 1, #S.actors do adds = adds + 1 end
             T:Stop()
 
-            if not killed then return "sustained fire never killed the boss" end
+            if not killed then
+                return string.format(
+                    "sustained fire never killed the boss (phase %d/%d, hp %.0f/%.0f, running %s)",
+                    S.phaseIndex, #S.phases, S.bossActor.hp, S.bossActor.maxHp,
+                    tostring(S.running))
+            end
             return "ok:" .. math.floor(raidOnly)
         end
     """)(ns)
@@ -3132,6 +3146,165 @@ def main():
         print("  FAIL trainer corpses: %s" % corpses)
         failures.append(("trainer corpses", str(corpses)))
 
+    # Two bosses.
+    #
+    # Both of these fights are built on a rule about the RELATIONSHIP
+    # between two health bars, and each rule is worth failing on
+    # separately -- a second skull on the floor that nothing consults is
+    # decoration, which is exactly what the first version of the raid AI
+    # was before it got its own check.
+    two = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+
+            -- Both fights declare two, and both are shootable.
+            for _, id in ipairs({ "sentinels", "twinfangs" }) do
+                T:Start(id, false)
+                S.countdown = 0
+                if #S.bossActors ~= 2 then
+                    problems[#problems + 1] = id .. " built " ..
+                        #S.bossActors .. " bosses, not 2"
+                else
+                    -- Shoot each in turn from point-blank and check the
+                    -- bar that moves is the one aimed at.
+                    for i = 1, 2 do
+                        local b = S.bossActors[i]
+                        local other = S.bossActors[3 - i]
+                        local hpBefore, otherBefore = b.hp, other.hp
+                        -- Stand OUTSIDE the boss, on the line from the
+                        -- arena centre through it.
+                        --
+                        -- The harness pins the cursor at the centre, so
+                        -- the trainer recomputes aim from it every frame
+                        -- and whatever S.aim is set to here is discarded.
+                        -- Standing beside a boss and setting aim by hand
+                        -- fired at the middle of the room instead, which
+                        -- happened to cross Vexil and happened to miss
+                        -- Itras -- so one of the two "took no damage".
+                        local d = math.sqrt(b.x * b.x + b.y * b.y)
+                        local ox, oy = b.x / d, b.y / d
+                        for _ = 1, 40 do
+                            -- Kept alive and unstacked, or the Twin
+                            -- Fangs' poison meter ends the round during
+                            -- the first boss and the second is never
+                            -- shot at all -- which reads exactly like a
+                            -- boss that cannot be damaged.
+                            S.hp, S.stacks = 100, 0
+                            S.px, S.py = b.x + ox * 22, b.y + oy * 22
+                            S.firing = true
+                            -- The raid has to be silenced explicitly or
+                            -- this measures six allies picking their own
+                            -- targets rather than where the player is
+                            -- pointing -- and with two bosses on the
+                            -- floor they cheerfully shoot the other one.
+                            for _, ally in ipairs(S.allies) do ally.stagger = 999 end
+                            update(f, 0.05)
+                        end
+                        if b.hp >= hpBefore then
+                            problems[#problems + 1] = string.format(
+                                "%s: %s took no damage when shot", id, b.name)
+                        end
+                        -- The Sentinels' off-team damages the other one
+                        -- on purpose, so this only has to hold where
+                        -- there is no off-team.
+                        if not S.scenario.otherTeam and other.hp < otherBefore then
+                            problems[#problems + 1] = string.format(
+                                "%s: shooting %s also damaged %s", id, b.name, other.name)
+                        end
+                    end
+                end
+                T:Stop()
+            end
+
+            -- Vitriolic Stasis: a full bar refunds the gap, and refunds
+            -- nothing when the bars are level.
+            T:Start("sentinels", false)
+            S.countdown = 0
+            local a, b = S.bossActors[1], S.bossActors[2]
+            a.hp, b.hp = a.maxHp * 0.4, b.maxHp * 0.9
+            S.energy = 100
+            update(f, 0.05)
+            if a.hp <= a.maxHp * 0.4 + 0.01 then
+                problems[#problems + 1] =
+                    "Vitriolic Stasis did not heal the lower golem up"
+            end
+            -- And level bars cost nothing.
+            a.hp, b.hp = a.maxHp * 0.5, b.maxHp * 0.5
+            S.energy = 100
+            local missedBefore = S.failed
+            update(f, 0.05)
+            if S.failed > missedBefore then
+                problems[#problems + 1] =
+                    "Vitriolic Stasis punished a raid whose bars were level"
+            end
+            T:Stop()
+
+            -- Both dots: only in the middle, never on a side.
+            --
+            -- Summed frame by frame rather than read off the health bar
+            -- at the end. Every other mechanic on the fight is also
+            -- landing during these windows, so a single before/after
+            -- reading measures the round, not the rule; resetting to full
+            -- each frame and adding up what was taken isolates it.
+            local function costAt(px, py)
+                local total = 0
+                for _ = 1, 60 do
+                    S.hp = 100
+                    S.px, S.py = px, py
+                    -- Held still: the raid AI does not move the player,
+                    -- but a live round pushes them off a mark otherwise.
+                    update(f, 0.05)
+                    total = total + (100 - S.hp)
+                end
+                return total
+            end
+            T:Start("sentinels", false)
+            S.countdown = 0
+            local onSide = costAt(S.bossActors[1].x, S.bossActors[1].y)
+            local mid = costAt(0, 10)
+            T:Stop()
+            -- A real margin, not a hair. Both windows take incidental
+            -- damage from everything else on the floor, so "slightly
+            -- more" would pass on noise alone.
+            if mid < onSide * 1.5 + 5 then
+                problems[#problems + 1] = string.format(
+                    "standing between both golems cost %.1f against %.1f on a side",
+                    mid, onSide)
+            end
+
+            -- Uncoiled Rot: only after one dies, and never while both live.
+            T:Start("twinfangs", false)
+            S.countdown = 0
+            S.stacks = 0
+            S.hp = 100
+            for _ = 1, 20 do S.stacks = 0; update(f, 0.05) end
+            local bothAlive = S.rot
+            S.bossActors[2].hp = 0
+            for _ = 1, 60 do S.stacks = 0; update(f, 0.05) end
+            local rotting = S.rot
+            T:Stop()
+            if bothAlive ~= nil then
+                problems[#problems + 1] = "Uncoiled Rot ran while both Fangs were alive"
+            end
+            if not rotting or rotting <= 0 then
+                problems[#problems + 1] = "killing one Fang first started no rot"
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format("ok:two bars each take their own fire; stasis refunds the gap;"
+                .. " the middle costs %.1f against %.1f on a side;"
+                .. " rot runs %.1fs after a first kill", mid, onSide, rotting)
+        end
+    """)(ns)
+    if two and str(two).startswith("ok:"):
+        print("  ok   trainer two bosses: %s" % str(two)[3:])
+    else:
+        print("  FAIL trainer two bosses: %s" % two)
+        failures.append(("trainer two bosses", str(two)))
+
     # Ranged and healers hold still.
     #
     # The formation used to rotate wholesale with the boss's facing,
@@ -3250,17 +3423,30 @@ def main():
                     for _ = 1, math.ceil((budget + 60) / 0.05) do
                         S.hp, S.firing, S.energy = 100, true, 0
                         local ph = S.phases[S.phaseIndex]
-                        local before = S.bossActor and S.bossActor.hp
+                        -- Snapshotted PER BOSS, by index.
+                        --
+                        -- Sampling S.bossActor alone was wrong the moment
+                        -- a fight could have two: on the Sentinels that
+                        -- pointer switches to the other golem when the
+                        -- phase swaps your side, and comparing one
+                        -- golem's health against the other's read as the
+                        -- boss taking damage through its own immunity.
+                        local before = {}
+                        for i, b in ipairs(S.bossActors) do before[i] = b.hp end
                         update(f, 0.05)
                         if S.phaseIndex > reached then reached = S.phaseIndex end
-                        if ph and ph.bossImmune and S.bossActor then
+                        if ph and ph.bossImmune then
                             immuneTested = true
-                            if S.bossActor.hp < (before or 0) then immuneLeak = true end
+                            for i, b in ipairs(S.bossActors) do
+                                if before[i] and b.hp < before[i] then
+                                    immuneLeak = true
+                                end
+                            end
                         end
                         -- Kept alive so the round is not cut short by the
                         -- player dying in phase one.
-                        if S.bossActor then
-                            S.bossActor.hp = math.max(S.bossActor.hp, 1)
+                        for _, b in ipairs(S.bossActors) do
+                            b.hp = math.max(b.hp, 1)
                         end
                         if not S.running then break end
                     end

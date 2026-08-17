@@ -313,15 +313,24 @@ end
 local hp = MakeBar(150, 12, f, 0.3, 0.85, 0.35)
 hp:SetPoint("TOPRIGHT", -PAD - 26, -16)
 
-local bossBar = MakeBar(150, 10, f, C.boss[1], C.boss[2], C.boss[3])
-bossBar:SetPoint("TOPRIGHT", hp, "BOTTOMRIGHT", 0, -5)
+-- One per boss. The second is hidden for the five fights that have one,
+-- and the energy bar is re-anchored under whichever is last when a round
+-- starts -- an anchor to a hidden frame still reserves its space, which
+-- left a gap in the header on every other boss.
+local bossBar = {}
+for i = 1, 2 do
+    bossBar[i] = MakeBar(150, 10, f, C.boss[1], C.boss[2], C.boss[3])
+    bossBar[i]:SetPoint("TOPRIGHT", i == 1 and hp or bossBar[i - 1],
+        "BOTTOMRIGHT", 0, -5)
+end
+bossBar[2]:Hide()
 
 -- The encounter's own timer, when it has one. Yellow, and its own bar
 -- rather than a number in the score line: it is a thing that fills while
 -- you are busy elsewhere, and a number at the foot of the screen is
 -- exactly where nobody looks while that is happening.
 local energyBar = MakeBar(150, 10, f, 1.0, 0.80, 0.15)
-energyBar:SetPoint("TOPRIGHT", bossBar, "BOTTOMRIGHT", 0, -5)
+energyBar:SetPoint("TOPRIGHT", bossBar[1], "BOTTOMRIGHT", 0, -5)
 energyBar:Hide()
 
 -- Bloodlust. A phase you are meant to empty every cooldown into is worth
@@ -388,6 +397,13 @@ if ns.ApplyTextShadow then ns.ApplyTextShadow(phaseText) end
 local debuffText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 if ns.ApplyTextShadow then ns.ApplyTextShadow(debuffText) end
 
+-- Standing where both Sentinels can reach you. Its own string rather
+-- than a debuff line, because it is not a thing you were GIVEN -- it is
+-- a thing you are currently doing, and it stops the instant you move.
+local bothDotsText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+if ns.ApplyTextShadow then ns.ApplyTextShadow(bothDotsText) end
+bothDotsText:Hide()
+
 local resultText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 resultText:SetPoint("TOP", bigText, "BOTTOM", 0, -8)
 resultText:SetWidth(ARENA_PX - 80)
@@ -453,7 +469,7 @@ local S = {
     phaseIndex = 1, phaseTime = 0, phases = nil,
     energy = 0, carrying = nil,
     heroic = false, countdown = 0, flash = 0, callUntil = 0,
-    scenario = nil, boss = nil, bossActor = nil,
+    scenario = nil, boss = nil, bossActor = nil, bossActors = {},
     debuffs = {}, corpses = {},
 }
 T.state = S
@@ -599,29 +615,44 @@ for i = 1, 6 do
     allyTex[i].label = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 end
 
--- The boss token. Upright, never rotated: a spinning skull reads as a
+-- The boss tokens. Upright, never rotated: a spinning skull reads as a
 -- loading spinner, and the health bar in the header already says
 -- everything a ring around it would have hinted at.
-local bossSkull = arena:CreateTexture(nil, "OVERLAY", nil, 4)
-bossSkull:SetTexture(ART.skull)
-
--- Which way it is looking.
 --
--- The facing decides where every frontal goes, and until now the only
--- way to know it was to watch where the last cone fired -- which is
--- after the fact, and on a boss that turns deliberately it is the one
--- piece of state worth reading ahead. The skull itself stays upright,
--- because a rotating skull reads as a loading spinner, so the arrow
--- carries the direction on its own.
-local bossFace = arena:CreateTexture(nil, "OVERLAY", nil, 5)
-bossFace:SetTexture(ART.dart)
+-- TWO of everything, because two of these fights have two bosses.
+-- Entombed Sentinels and the Twin Fangs are both built on a rule about
+-- the RELATIONSHIP between two health bars -- keep them level, kill them
+-- together -- and a trainer with one boss token could not state either
+-- rule, let alone score it. See SetupBoss.
+local MAX_BOSSES = 2
+local bossSkull, bossFace, bossWard, bossWardRing = {}, {}, {}, {}
+local bossLabel = {}
+for i = 1, MAX_BOSSES do
+    bossSkull[i] = arena:CreateTexture(nil, "OVERLAY", nil, 4)
+    bossSkull[i]:SetTexture(ART.skull)
 
+    -- Which way it is looking.
+    --
+    -- The facing decides where every frontal goes, and until now the only
+    -- way to know it was to watch where the last cone fired -- which is
+    -- after the fact, and on a boss that turns deliberately it is the one
+    -- piece of state worth reading ahead. The skull itself stays upright,
+    -- because a rotating skull reads as a loading spinner, so the arrow
+    -- carries the direction on its own.
+    bossFace[i] = arena:CreateTexture(nil, "OVERLAY", nil, 5)
+    bossFace[i]:SetTexture(ART.dart)
 
--- The ward it hides behind while a phase says it cannot be hurt.
-local bossWard = arena:CreateTexture(nil, "ARTWORK", nil, 4)
-bossWard:SetTexture(ART.swirl)
-local bossWardRing = arena:CreateTexture(nil, "ARTWORK", nil, 5)
-bossWardRing:SetTexture(ART.ring)
+    -- The ward it hides behind while a phase says it cannot be hurt.
+    bossWard[i] = arena:CreateTexture(nil, "ARTWORK", nil, 4)
+    bossWard[i]:SetTexture(ART.swirl)
+    bossWardRing[i] = arena:CreateTexture(nil, "ARTWORK", nil, 5)
+    bossWardRing[i]:SetTexture(ART.ring)
+
+    -- Named on the floor, not only in the header. With two skulls in the
+    -- room "the one on 40%" is a bar; "Vexil" is the thing you are
+    -- looking at, and the guide talks about them by name throughout.
+    bossLabel[i] = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+end
 
 ------------------------------------------------------------
 -- Corpses
@@ -756,11 +787,139 @@ local function TickEnergy(dt)
     local phase = CurrentPhase()
     local rate = (phase and phase.energyRate) or e.rate or 0
     S.energy = math.min(e.max or 100, S.energy + rate * dt)
-    if S.energy >= (e.max or 100) then
-        S.hp = 0
-        callOut:SetTextColor(1, 0.3, 0.3)
-        callOut:SetText(e.name .. " reached full energy -- the raid wipes")
-        S.callUntil = S.time + 2
+    if S.energy < (e.max or 100) then return end
+
+    -- What a full bar DOES is not the same on every boss, and treating
+    -- it as "the raid wipes" everywhere would have made the Sentinels'
+    -- bar a second kill timer instead of the thing it actually is.
+    local even = S.scenario.evenHealth
+    if even then
+        -- Vitriolic Stasis. It heals the lower golem up to the higher,
+        -- so a side that raced ahead did that damage for nothing -- and
+        -- the punishment is exactly the size of the gap you let open.
+        -- Nobody dies, the round simply gets longer, which is what the
+        -- guide describes and what makes "keep them even" worth doing.
+        S.energy = 0
+        local lo, hi
+        for _, b in ipairs(S.bossActors) do
+            if not lo or b.hp < lo.hp then lo = b end
+            if not hi or b.hp > hi.hp then hi = b end
+        end
+        if lo and hi and hi.hp > lo.hp then
+            local gap = hi.hp - lo.hp
+            lo.hp = hi.hp
+            S.flash = 0.5
+            Hurt(0, ("%s -- %s healed back up to %s"):format(
+                even.name or "Vitriolic Stasis", lo.name, hi.name))
+        else
+            Credit(("%s -- level, so it healed nothing"):format(
+                even.name or "Vitriolic Stasis"))
+        end
+        return
+    end
+
+    S.hp = 0
+    callOut:SetTextColor(1, 0.3, 0.3)
+    callOut:SetText(e.name .. " reached full energy -- the raid wipes")
+    S.callUntil = S.time + 2
+end
+
+--- The survivor's ramp when its partner dies first.
+---
+--- Uncoiled Rot is the one damage source in this file that the player
+--- cannot dodge, and it earns that the same way the Twin Fangs' poison
+--- meter does: it only exists because of a decision the player made, and
+--- not making it is entirely within their control. Bringing both bars
+--- down together switches it off completely.
+local function TickUncoiledRot(dt)
+    local rule = S.scenario and S.scenario.killTogether
+    if not rule then return end
+    local dead, alive
+    for _, b in ipairs(S.bossActors) do
+        if b.hp <= 0 then dead = b else alive = b end
+    end
+    if not (dead and alive) then
+        S.rot = nil
+        return
+    end
+    if not S.rot then
+        S.rot = 0
+        Hurt(0, ("%s died first -- %s is gaining %d%% every %d seconds"):format(
+            dead.name, alive.name, rule.gainPct or 25, rule.every or 4))
+    end
+    -- Grows in steps rather than smoothly, so the pressure is something
+    -- you can hear arriving rather than a slope.
+    S.rot = S.rot + dt
+    local steps = math.floor(S.rot / (rule.every or 4)) + 1
+    S.hp = math.max(0, S.hp - steps * (rule.dps or 1.6) * dt)
+    S.flash = math.max(S.flash, 0.12)
+end
+
+--- The half of the raid you cannot see, chipping away at the other boss.
+---
+--- This is what turns "keep their health even" from a rule in a guide
+--- into a job. The other team damages their golem at a steady, knowable
+--- rate; your side's bar is the one you control. Fall behind or race
+--- ahead and Vitriolic Stasis refunds the difference -- which is the
+--- guide's own complaint about a side that races.
+---
+--- The floor still applies, so the off-team cannot push a phase on your
+--- behalf while you are busy elsewhere.
+local function TickOtherTeam(dt)
+    local rule = S.scenario and S.scenario.otherTeam
+    if not rule or #S.bossActors < 2 then return end
+    local phase = CurrentPhase()
+    if phase and phase.bossImmune then return end
+    for _, b in ipairs(S.bossActors) do
+        if b ~= S.bossActor and b.hp > 0 then
+            local floor = ((phase and phase.hpFloor) or 0) / 100 * b.maxHp
+            b.hp = math.max(floor, b.hp - (rule.dps or 22) * dt)
+        end
+    end
+end
+
+--- Both golems' dots, for standing where you can hit both.
+---
+--- "Standing in the middle to hit both bosses gives you both dots" is
+--- the Sentinels' reason the raid splits at all, and it is the only rule
+--- on that fight a single player can obey on their own. Also avoidable
+--- by construction: pick a side.
+---
+--- Deliberately a slow burn rather than a hit. It is a dot in the
+--- fight and it should feel like one -- something you notice you have
+--- been taking, not something that goes off.
+local function TickBothDots(dt)
+    local rule = S.scenario and S.scenario.bothDots
+    if not rule or #S.bossActors < 2 then
+        bothDotsText:Hide()
+        return
+    end
+    local n = 0
+    for _, b in ipairs(S.bossActors) do
+        if b.hp > 0 and dist(S.px, S.py, b.x, b.y) <= (rule.range or 46) then
+            n = n + 1
+        end
+    end
+    if n < 2 then
+        bothDotsText:Hide()
+        S.bothDotsSince = nil
+        return
+    end
+    S.hp = math.max(0, S.hp - (rule.dps or 4) * dt)
+    S.flash = math.max(S.flash, 0.10)
+    -- Named on screen, because chip damage with no label is the one
+    -- thing this trainer is not allowed to have. The player has to be
+    -- able to see why their health is sliding and what stops it.
+    local s = scale()
+    bothDotsText:SetPoint("CENTER", arena, "CENTER",
+        S.px * s, (S.py + PLAYER_R * 6) * s)
+    bothDotsText:SetText("|cffff6644BOTH DOTS -- pick a side|r")
+    bothDotsText:Show()
+    -- Scored once per stay, not once per frame, or a player who parked
+    -- in the middle would end the round with four hundred misses.
+    if not S.bothDotsSince then
+        S.bothDotsSince = S.time
+        Hurt(0, "You are in range of both golems -- that is both dots")
     end
 end
 
@@ -1048,30 +1207,9 @@ end
 --- It still moves, because the raid moves and the floor keeps changing.
 ---
 --- The boss also WALKS off bad ground rather than only turning on it.
-local function UpdateBossPosition(dt)
-    local b = S.bossActor
-    if not b then return end
-    b.facing = b.facing or TANK_ANGLE
-
-    local rx, ry = RaidCentre()
-
-    if S.scenario and S.scenario.bossFollowsTank then
-        -- Vashnik: the PLAYER steers, because where the boss stands
-        -- picks the altars. Faces the player, who is leading it.
-        local dx, dy = S.px - b.x, S.py - b.y
-        if (dx * dx + dy * dy) > 16 then b.facing = atan2(dy, dx) end
-        local gx, gy = clampToArena(S.px, S.py, ARENA_R - BOSS_LEASH)
-        local mx, my = gx - b.x, gy - b.y
-        local d = math.sqrt(mx * mx + my * my)
-        local step = BOSS_MOVE_SPEED * dt
-        if d <= step then
-            b.x, b.y = gx, gy
-        elseif d > 0.001 then
-            b.x, b.y = b.x + mx / d * step, b.y + my / d * step
-        end
-        return
-    end
-
+--- Turn one boss toward the cleanest cone. Shared by the single-boss
+--- path below and by the two-boss fights, which turn but never walk.
+local function AimBoss(b, dt, rx, ry)
     -- Re-aimed on a cadence rather than every frame, so the cone holds
     -- still long enough to be read and to be stood behind.
     if not b.reaimAt or S.time >= b.reaimAt then
@@ -1108,6 +1246,46 @@ local function UpdateBossPosition(dt)
     else
         b.facing = b.facing + (diff > 0 and step or -step)
     end
+end
+
+local function UpdateBossPosition(dt)
+    local b = S.bossActor
+    if not b then return end
+    b.facing = b.facing or TANK_ANGLE
+
+    local rx, ry = RaidCentre()
+
+    -- Two bosses: they TURN but they do not walk, and both guides say so
+    -- outright. The Twin Fangs "cannot be moved", and the Sentinels are
+    -- held forty yards apart by the tanks for the whole fight -- a golem
+    -- that stepped off a puddle would be quietly undoing the one rule
+    -- the encounter is built on.
+    if #S.bossActors > 1 then
+        for _, bi in ipairs(S.bossActors) do
+            bi.facing = bi.facing or TANK_ANGLE
+            if bi.hp > 0 then AimBoss(bi, dt, rx, ry) end
+        end
+        return
+    end
+
+    if S.scenario and S.scenario.bossFollowsTank then
+        -- Vashnik: the PLAYER steers, because where the boss stands
+        -- picks the altars. Faces the player, who is leading it.
+        local dx, dy = S.px - b.x, S.py - b.y
+        if (dx * dx + dy * dy) > 16 then b.facing = atan2(dy, dx) end
+        local gx, gy = clampToArena(S.px, S.py, ARENA_R - BOSS_LEASH)
+        local mx, my = gx - b.x, gy - b.y
+        local d = math.sqrt(mx * mx + my * my)
+        local step = BOSS_MOVE_SPEED * dt
+        if d <= step then
+            b.x, b.y = gx, gy
+        elseif d > 0.001 then
+            b.x, b.y = b.x + mx / d * step, b.y + my / d * step
+        end
+        return
+    end
+
+    AimBoss(b, dt, rx, ry)
 
     -- A phase can call it somewhere. The intermission drags Nek'zali
     -- onto the well to channel, which is also what makes her immune --
@@ -1166,6 +1344,22 @@ end
 --- same thing about casters -- kick order, priority target, stop the
 --- cast -- so a caster is worth crossing the room for and an add
 --- wandering past is not.
+--- The boss an ally falls back to when the floor is clear.
+---
+--- Nearest LIVING one, so on the two-boss fights the raid does not all
+--- pile onto whichever happens to be first in the list -- and so a dead
+--- Fang stops attracting fire that should be going into its partner.
+local function NearestBoss(x, y)
+    local best, bestD
+    for _, b in ipairs(S.bossActors) do
+        if b.hp > 0 then
+            local d = dist(x, y, b.x, b.y)
+            if not bestD or d < bestD then best, bestD = b, d end
+        end
+    end
+    return best or S.bossActor
+end
+
 local function AllyTarget(ally)
     -- The tank holds the boss and does not chase adds. One fewer body on
     -- the pack, and it keeps the formation legible.
@@ -1181,7 +1375,7 @@ local function AllyTarget(ally)
             end
         end
     end
-    return best or S.bossActor
+    return best or NearestBoss(ally.x, ally.y)
 end
 
 --- Put a couple of allies on collection duty.
@@ -3080,6 +3274,17 @@ KINDS.imbibe = {
 -- The boss
 ------------------------------------------------------------
 
+--- Build the boss, or bosses, a scenario asks for.
+---
+--- `sc.bosses` is a list of { name, at = {x, y}, colour }. Without it a
+--- scenario gets exactly one, positioned as before, and every
+--- single-boss code path downstream keeps reading `S.bossActor` -- which
+--- is always the FIRST of the list, so the tank still has something to
+--- hold and `bossFollowsTank` still has something to walk.
+---
+--- The pool of health is split between them rather than duplicated. Two
+--- bosses each carrying the full bar would make these two fights twice
+--- the length of the other five for no reason the guide gives.
 local function SetupBoss(sc)
     -- Off the middle when the middle is a mechanic. Nek'zali is tanked
     -- at the entrance precisely because nothing may stand in the Soul
@@ -3088,43 +3293,93 @@ local function SetupBoss(sc)
     local sx, sy = 0, 0
     if sc.well then sx, sy = 0, 46 end
     if sc.bossStart then sx, sy = sc.bossStart.x, sc.bossStart.y end
-    S.bossActor = {
-        x = sx, y = sy,
-        maxHp = sc.bossHp or 1400,
-        hp = sc.bossHp or 1400,
-        r = 13,
-    }
+
+    wipe(S.bossActors)
+    local list = sc.bosses
+    if not list then
+        list = { { name = sc.title, at = { x = sx, y = sy } } }
+    end
+    local share = (sc.bossHp or 1400) / #list
+    for i, def in ipairs(list) do
+        S.bossActors[i] = {
+            index = i,
+            name = def.name or ("Boss " .. i),
+            colour = def.colour,
+            x = (def.at and def.at.x) or sx,
+            y = (def.at and def.at.y) or sy,
+            maxHp = share, hp = share,
+            r = 13,
+        }
+    end
+    S.bossActor = S.bossActors[1]
+end
+
+--- Every boss still worth shooting. Empty during an immune phase, which
+--- is what makes HitScan's bullets pass straight through them.
+local function LiveBosses()
+    local phase = CurrentPhase()
+    if phase and phase.bossImmune then return {} end
+    return S.bossActors
 end
 
 local function DrawBoss(s)
-    local b = S.bossActor
-    if not b then
-        bossSkull:Hide(); bossFace:Hide()
-        return
-    end
-    local f = b.facing or 0
     local phase = CurrentPhase()
     local immune = phase and phase.bossImmune
+    local named = #S.bossActors > 1
 
-    if immune then
-        -- Greyed and behind a turning ward, because "your damage is
-        -- doing nothing right now" is the single most useful thing the
-        -- screen can say during an intermission -- and a boss that
-        -- merely stopped losing health said it far too quietly.
-        put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 0.62, 0.66, 0.74 }, 0.85)
-        put(bossWard, "swirl", b.x, b.y, b.r * 3.4, s, { 0.55, 0.75, 1.0 },
-            0.75, S.time * 1.4)
-        put(bossWardRing, "ring", b.x, b.y, b.r * 3.4, s, { 0.55, 0.75, 1.0 }, 0.85)
-        bossFace:Hide()
-    else
-        bossWard:Hide()
-        bossWardRing:Hide()
-        put(bossSkull, "skull", b.x, b.y, b.r * 2.2, s, { 1, 0.93, 0.90 }, 1)
-        -- Small, and tucked against the skull. Far enough out it reads
-        -- as a separate object floating nearby; this way it is plainly
-        -- part of the boss and plainly points somewhere.
-        put(bossFace, "dart", b.x + math.cos(f) * (b.r + 1),
-            b.y + math.sin(f) * (b.r + 1), 8, s, C.boss, 1, f + SPRITE_FACING)
+    for i = 1, MAX_BOSSES do
+        local b = S.bossActors[i]
+        if not b then
+            bossSkull[i]:Hide(); bossFace[i]:Hide()
+            bossWard[i]:Hide(); bossWardRing[i]:Hide()
+            bossLabel[i]:Hide()
+        else
+            local f = b.facing or 0
+            if immune then
+                -- Greyed and behind a turning ward, because "your damage is
+                -- doing nothing right now" is the single most useful thing the
+                -- screen can say during an intermission -- and a boss that
+                -- merely stopped losing health said it far too quietly.
+                put(bossSkull[i], "skull", b.x, b.y, b.r * 2.2, s,
+                    { 0.62, 0.66, 0.74 }, 0.85)
+                put(bossWard[i], "swirl", b.x, b.y, b.r * 3.4, s,
+                    { 0.55, 0.75, 1.0 }, 0.75, S.time * 1.4)
+                put(bossWardRing[i], "ring", b.x, b.y, b.r * 3.4, s,
+                    { 0.55, 0.75, 1.0 }, 0.85)
+                bossFace[i]:Hide()
+            elseif b.hp <= 0 then
+                -- Dead, and still on the floor. On the Twin Fangs that is
+                -- the whole point: the survivor's rot is running BECAUSE
+                -- this one went down first, and a skull that vanished
+                -- would take the reason with it.
+                put(bossSkull[i], "skull", b.x, b.y, b.r * 2.0, s,
+                    { 0.40, 0.38, 0.42 }, 0.6)
+                bossFace[i]:Hide()
+                bossWard[i]:Hide(); bossWardRing[i]:Hide()
+            else
+                bossWard[i]:Hide()
+                bossWardRing[i]:Hide()
+                put(bossSkull[i], "skull", b.x, b.y, b.r * 2.2, s,
+                    b.colour or { 1, 0.93, 0.90 }, 1)
+                -- Small, and tucked against the skull. Far enough out it reads
+                -- as a separate object floating nearby; this way it is plainly
+                -- part of the boss and plainly points somewhere.
+                put(bossFace[i], "dart", b.x + math.cos(f) * (b.r + 1),
+                    b.y + math.sin(f) * (b.r + 1), 8, s, C.boss, 1,
+                    f + SPRITE_FACING)
+            end
+
+            if named then
+                bossLabel[i]:SetPoint("CENTER", arena, "CENTER",
+                    b.x * s, (b.y - b.r * 1.9) * s)
+                bossLabel[i]:SetText(b.name)
+                local c = b.colour or { 0.85, 0.85, 0.9 }
+                bossLabel[i]:SetTextColor(c[1], c[2], c[3], b.hp > 0 and 1 or 0.45)
+                bossLabel[i]:Show()
+            else
+                bossLabel[i]:Hide()
+            end
+        end
     end
 end
 
@@ -3156,21 +3411,23 @@ end
 
 --- Every live thing a bullet can hit, boss included.
 local function HitScan(shot)
-    local b = S.bossActor
     local phase = S.phases and S.phases[S.phaseIndex]
-    if phase and phase.bossImmune then b = nil end
-    if b and b.hp > 0 and dist(shot.x, shot.y, b.x, b.y) <= b.r + SHOT_R then
-        -- A phase's health floor. Damage stops at it, exactly as a real
-        -- encounter does -- you burn the boss to the transition and it
-        -- goes there, you do not skip the intermission by hitting hard.
-        --
-        -- Without this the whole rebuild was decorative: with the trigger
-        -- held, phase one killed the boss outright and every later phase
-        -- was unreachable, in a round that still looked completely
-        -- normal from the outside.
-        local floor = ((phase and phase.hpFloor) or 0) / 100 * b.maxHp
-        b.hp = math.max(floor, b.hp - shot.damage)
-        return true
+    if not (phase and phase.bossImmune) then
+        for _, b in ipairs(S.bossActors) do
+            if b.hp > 0 and dist(shot.x, shot.y, b.x, b.y) <= b.r + SHOT_R then
+                -- A phase's health floor. Damage stops at it, exactly as a real
+                -- encounter does -- you burn the boss to the transition and it
+                -- goes there, you do not skip the intermission by hitting hard.
+                --
+                -- Without this the whole rebuild was decorative: with the trigger
+                -- held, phase one killed the boss outright and every later phase
+                -- was unreachable, in a round that still looked completely
+                -- normal from the outside.
+                local floor = ((phase and phase.hpFloor) or 0) / 100 * b.maxHp
+                b.hp = math.max(floor, b.hp - shot.damage)
+                return true
+            end
+        end
     end
     for _, a in ipairs(S.actors) do
         if a.enemy and not a.dead and dist(shot.x, shot.y, a.x, a.y) <= a.r + SHOT_R then
@@ -3445,6 +3702,13 @@ local function EnterPhase(i)
     end
 
     local p = CurrentPhase()
+    -- Which golem the player's half of the raid is standing on. The
+    -- Sentinels' phases are not the fight changing -- they are YOU
+    -- changing sides -- so the boss the formation holds, the frontals
+    -- come from and the tank faces has to change with them.
+    if p and p.side and S.bossActors[p.side] then
+        S.bossActor = S.bossActors[p.side]
+    end
     if p then
         phaseText:SetTextColor(1, 0.85, 0.35)
         phaseText:SetText(p.name or "")
@@ -3479,10 +3743,15 @@ local function Finish(victory)
         bigText:SetTextColor(1, 0.85, 0.3)
         bigText:SetText("SURVIVED")
     end
-    local b = S.bossActor
-    resultText:SetText(("%d of %d mechanics handled  (%d%%)\nYour health: %d%%   Boss: %d%%")
+    local bossLine = {}
+    for _, bi in ipairs(S.bossActors) do
+        bossLine[#bossLine + 1] = ("%s: %d%%"):format(
+            #S.bossActors > 1 and bi.name or "Boss",
+            math.floor(bi.hp / bi.maxHp * 100))
+    end
+    resultText:SetText(("%d of %d mechanics handled  (%d%%)\nYour health: %d%%   %s")
         :format(S.passed, total, pct, math.floor(S.hp),
-            b and math.floor(b.hp / b.maxHp * 100) or 0))
+            table.concat(bossLine, "   ")))
     callOut:SetText("")
 end
 
@@ -3519,6 +3788,9 @@ local function Update(_, elapsed)
     S.time = S.time + elapsed
     S.phaseTime = S.phaseTime + elapsed
     TickEnergy(elapsed)
+    TickOtherTeam(elapsed)
+    TickUncoiledRot(elapsed)
+    TickBothDots(elapsed)
     MovePlayer(elapsed)
 
     UpdateBossPosition(elapsed)
@@ -3576,9 +3848,29 @@ local function Update(_, elapsed)
     hp.text:SetText(math.floor(S.hp) .. "%")
 
     local b = S.bossActor
-    if b then
-        bossBar:SetValue(b.hp / b.maxHp * 100)
-        bossBar.text:SetText(("Boss  %d%%"):format(math.floor(b.hp / b.maxHp * 100)))
+    for i = 1, 2 do
+        local bi = S.bossActors[i]
+        if bi then
+            local pct = bi.hp / bi.maxHp * 100
+            bossBar[i]:Show()
+            bossBar[i]:SetValue(pct)
+            bossBar[i].text:SetText(("%s  %d%%"):format(
+                #S.bossActors > 1 and bi.name or "Boss", math.floor(pct)))
+            -- The gap between the two bars is the mechanic on the
+            -- Sentinels, so the bar that is AHEAD says so in colour
+            -- rather than leaving it to be read off two lengths.
+            if S.scenario and S.scenario.evenHealth and #S.bossActors > 1 then
+                local other = S.bossActors[3 - i]
+                local ahead = (bi.hp / bi.maxHp) < (other.hp / other.maxHp) - 0.08
+                if ahead then
+                    bossBar[i]:SetStatusBarColor(1.0, 0.45, 0.25)
+                else
+                    bossBar[i]:SetStatusBarColor(C.boss[1], C.boss[2], C.boss[3])
+                end
+            end
+        else
+            bossBar[i]:Hide()
+        end
     end
 
     if S.flash > 0 then
@@ -3619,7 +3911,11 @@ local function Update(_, elapsed)
     scoreText:SetText(("|cff44ff66%d handled|r   |cffff4444%d missed|r   |cff888888%ds left|r%s%s")
         :format(S.passed, S.failed, math.ceil(left), energyLine, stackLine))
 
-    if b and b.hp <= 0 and not (phase and phase.bossImmune) then
+    local allDown = #S.bossActors > 0
+    for _, bi in ipairs(S.bossActors) do
+        if bi.hp > 0 then allDown = false end
+    end
+    if allDown and not (phase and phase.bossImmune) then
         Finish(true)
     elseif S.hp <= 0 then
         Finish(false)
@@ -3696,6 +3992,8 @@ function T:Start(bossId, heroic)
     S.phases = PhasesOf(sc)
     S.phaseIndex, S.phaseTime = 1, 0
     S.energy, S.carrying = 0, nil
+    S.rot, S.bothDotsSince = nil, nil
+    bothDotsText:Hide()
 
     ReleaseInput()
     -- Belt and braces on the overlay: Finish clears it, but a round can
@@ -3720,8 +4018,21 @@ function T:Start(bossId, heroic)
     end
     hp:SetValue(MAX_HP)
     hp.text:SetText("100%")
-    bossBar:SetValue(100)
-    bossBar.text:SetText("Boss  100%")
+    for i = 1, 2 do
+        local bi = S.bossActors[i]
+        bossBar[i]:SetShown(bi ~= nil)
+        bossBar[i]:SetStatusBarColor(C.boss[1], C.boss[2], C.boss[3])
+        bossBar[i]:SetValue(100)
+        if bi then
+            bossBar[i].text:SetText(
+                (#S.bossActors > 1 and bi.name or "Boss") .. "  100%")
+        end
+    end
+    -- Under whichever boss bar is actually on screen; see the note where
+    -- these are built.
+    energyBar:ClearAllPoints()
+    energyBar:SetPoint("TOPRIGHT", bossBar[#S.bossActors > 1 and 2 or 1],
+        "BOTTOMRIGHT", 0, -5)
     callOut:SetText("")
     countText:SetText("")
     resultText:SetText("")
