@@ -1623,6 +1623,11 @@ local function AllyGoal(ally, index)
     --    crosswind partner and the number game both ask the PLAYER to
     --    reach a specific ally, and an ally that keeps walking turns a
     --    reaction test into a chase.
+    -- Somewhere they have been SENT, during a pairing mechanic. Checked
+    -- before `hold`, which freezes an ally where it stands -- and where
+    -- it stands is the formation around the boss, so a raid told to pair
+    -- up simply stayed in a heap under the skull and paired with nobody.
+    if ally.meetSpot then return ally.meetSpot[1], ally.meetSpot[2] end
     if ally.hold then return ally.x, ally.y end
 
     -- 3. Goalie: get between it and what it is walking at.
@@ -3509,16 +3514,45 @@ KINDS.meet = {
         a.target = S.allies[math.random(#S.allies)]
         a.target.marked = true
         if a.labels then
-            -- The Sentinels puzzle: your number plus theirs must make
-            -- four. Everyone else gets a number that does not work, so
-            -- the answer is arithmetic rather than "follow the glow".
-            a.mine = math.random(1, 3)
+            -- The Sentinels puzzle, DELIBERATELY STAGED rather than
+            -- randomised.
+            --
+            -- Randomised, it did not teach the mechanic -- it hid it.
+            -- Five allies held station in a heap under the boss with
+            -- their numbers overlapping, nobody paired with anybody, and
+            -- the only way to find your partner was to walk into the
+            -- pile and read labels drawn on top of each other. The
+            -- lesson here is "your number plus theirs makes four", and
+            -- none of that was teaching it.
+            --
+            -- So: you are always 1 and your partner is always 3, your
+            -- partner walks to the MIDDLE and waits there, and the other
+            -- four pair off visibly in the open. The raid demonstrates
+            -- the mechanic instead of obscuring it.
+            a.mine = 1
             a.target.label = tostring(4 - a.mine)
+            a.target.meetSpot = { 0, 0 }
+
+            -- Everyone else, in pairs that add to four, parked in the
+            -- open where the pairing can actually be seen.
+            local rest = {}
             for _, ally in ipairs(S.allies) do
-                if not ally.marked then
-                    local wrong = math.random(1, 3)
-                    if wrong == 4 - a.mine then wrong = (wrong % 3) + 1 end
-                    ally.label = tostring(wrong)
+                if ally ~= a.target then rest[#rest + 1] = ally end
+            end
+            local PAIRS = { { "1", "3" }, { "2", "2" }, { "1", "3" } }
+            for i = 1, #rest, 2 do
+                local pairIdx = math.floor(i / 2) + 1
+                local nums = PAIRS[pairIdx] or { "2", "2" }
+                -- Spread around the rim, well away from the boss and
+                -- from each other.
+                local ang = math.pi * 0.25 + pairIdx * (math.pi * 0.55)
+                local px = math.cos(ang) * 58
+                local py = math.sin(ang) * 58
+                rest[i].label = nums[1]
+                rest[i].meetSpot = { px - 7, py }
+                if rest[i + 1] then
+                    rest[i + 1].label = nums[2]
+                    rest[i + 1].meetSpot = { px + 7, py }
                 end
             end
             a.target.marked = false
@@ -3527,22 +3561,42 @@ KINDS.meet = {
     Resolve = function(a)
         local tx, ty = AllyPos(a.target)
         if dist(S.px, S.py, tx, ty) <= (a.reach or 9) then
-            Credit(a.name .. " -- correct partner")
+            Credit(a.name .. " -- combined for four")
         else
-            Hurt(a.damage or 22, a.name)
+            Hurt(a.damage or 22,
+                a.name .. " -- you never reached the " .. (a.target.label or "?"))
         end
     end,
     Cleanup = function()
         for _, ally in ipairs(S.allies) do
             ally.marked = false; ally.label = nil; ally.hold = false
+            ally.meetSpot = nil
         end
         mineText:Hide()
     end,
     Draw = function(a, s)
         local tx, ty = AllyPos(a.target)
+        -- Live feedback on whether you are actually combined.
+        --
+        -- The verdict used to arrive only when the cast ended, so
+        -- standing on the correct partner looked exactly like standing
+        -- anywhere else -- which reads as "I matched with the right one
+        -- and nothing happened". Now the circle answers you while you
+        -- are in it.
+        local joined = dist(S.px, S.py, tx, ty) <= (a.reach or 9)
         put(V(a, 1, "ARTWORK", 2), "ring", tx, ty, (a.reach or 9) * 2, s,
-            { 0.4, 0.8, 1 }, a.labels and 0.25 or 0.9)
-        if a.mine then
+            joined and C.good or { 0.4, 0.8, 1 },
+            joined and 0.95 or (a.labels and 0.45 or 0.9))
+        if joined then
+            put(V(a, 2, "ARTWORK", 0), "disc", tx, ty, (a.reach or 9) * 2, s,
+                C.good, 0.20)
+        end
+        if a.mine and joined then
+            mineText:SetPoint("CENTER", arena, "CENTER",
+                S.px * s, (S.py + PLAYER_R * 7) * s)
+            mineText:SetText("|cff44ff66COMBINED -- stay here|r")
+            mineText:Show()
+        elseif a.mine then
             -- Your own count, and the answer you are looking for, over
             -- your head. Both halves: a bare number still leaves the
             -- player doing arithmetic under pressure the first time, and

@@ -386,8 +386,12 @@ local function VitriolicStasis(name, floor)
         healsWeaker = true,
         call = "Vitriolic Stasis -- your venom orbs plus theirs make FOUR",
         events = {
+            -- The guide's own note is that thirty seconds is plenty and
+            -- nobody should panic, so the cast is long and the circle is
+            -- generous. "The circles only have to touch. Do not try to
+            -- pixel-aim it."
             { at = 1, kind = "meet", name = "Vitriolic Stasis", school = "nature",
-              cast = 10, labels = true, reach = 9, damage = 30,
+              cast = 10, labels = true, reach = 14, damage = 30,
               -- Failing the combine is Cultivated Burst: a big hit and a
               -- dot that runs for the next minute.
               onMiss = { kind = "puddle", name = "Cultivated Burst",

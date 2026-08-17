@@ -3315,6 +3315,120 @@ def main():
         print("  FAIL trainer redraw: %s" % reshow)
         failures.append(("trainer redraw", str(reshow)))
 
+    # The Sentinels' number game has to be PLAYABLE.
+    #
+    # It was not. The raid held station in a heap under the boss with
+    # their numbers drawn on top of each other, nobody paired with
+    # anybody, and reaching the correct partner produced no visible
+    # result until the cast ended. Every one of those is checkable.
+    stasis = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+            local problems = {}
+            math.randomseed(3445)
+
+            T:Start("sentinels", false)
+            S.countdown = 0
+            local meet
+            for _ = 1, 1400 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -80
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+                for _, a in ipairs(S.actors) do
+                    if a.kind == "meet" then meet = a end
+                end
+                if meet then break end
+                if not S.running then break end
+            end
+            if not meet then T:Stop(); return "Vitriolic Stasis never cast" end
+
+            -- You are 1 and your partner is 3, every time.
+            if meet.mine ~= 1 or meet.target.label ~= "3" then
+                problems[#problems + 1] = string.format(
+                    "you were %s and your partner %s, not 1 and 3",
+                    tostring(meet.mine), tostring(meet.target.label))
+            end
+
+            -- Let them walk to their spots.
+            for _ = 1, 90 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -80
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+            end
+
+            -- The partner waits in the MIDDLE.
+            local pd = math.sqrt(meet.target.x ^ 2 + meet.target.y ^ 2)
+            if pd > 18 then
+                problems[#problems + 1] = string.format(
+                    "your partner ended %.0f from the middle instead of waiting there", pd)
+            end
+
+            -- And nobody is piled under a boss any more.
+            local underBoss = 0
+            for _, ally in ipairs(S.allies) do
+                for _, b in ipairs(S.bossActors) do
+                    if math.sqrt((ally.x - b.x) ^ 2 + (ally.y - b.y) ^ 2) < 22 then
+                        underBoss = underBoss + 1
+                    end
+                end
+            end
+            if underBoss > 1 then
+                problems[#problems + 1] = string.format(
+                    "%d allies were still stacked on a boss during the pairing", underBoss)
+            end
+
+            -- Everyone else is standing WITH somebody, adding to four.
+            local paired = 0
+            for _, ally in ipairs(S.allies) do
+                if ally ~= meet.target and ally.label then
+                    for _, other in ipairs(S.allies) do
+                        if other ~= ally and other.label
+                            and math.sqrt((ally.x - other.x) ^ 2 + (ally.y - other.y) ^ 2) < 22
+                            and (tonumber(ally.label) + tonumber(other.label)) == 4 then
+                            paired = paired + 1
+                            break
+                        end
+                    end
+                end
+            end
+            if paired < 4 then
+                problems[#problems + 1] = string.format(
+                    "only %d allies found a partner adding to four", paired)
+            end
+
+            -- And reaching the partner is worth something.
+            local before = S.passed
+            for _ = 1, 400 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = meet.target.x, meet.target.y
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+                if meet.dead or S.phaseIndex > 2 then break end
+                if not S.running then break end
+            end
+            local credited = S.passed > before
+            T:Stop()
+            if not credited then
+                problems[#problems + 1] =
+                    "standing on the correct partner scored nothing"
+            end
+
+            if #problems > 0 then return table.concat(problems, "; ") end
+            return string.format(
+                "ok:you are 1 and your partner 3 waiting in the middle;"
+                .. " %d others paired to four, none stacked on a boss", paired)
+        end
+    """)(ns)
+    if stasis and str(stasis).startswith("ok:"):
+        print("  ok   trainer stasis: %s" % str(stasis)[3:])
+    else:
+        print("  FAIL trainer stasis: %s" % stasis)
+        failures.append(("trainer stasis", str(stasis)))
+
     # Possession Barrage is ONE lane.
     #
     # It was built as a fan of four separate lines, which turns "keep
