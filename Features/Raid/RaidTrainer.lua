@@ -894,6 +894,19 @@ local function Credit(why)
     end
 end
 
+--- A knockback the player rides out, as a list of segments.
+---
+--- Segments rather than one vector, because the mechanic that needed
+--- this reverses halfway: Sszorak's gale carries you across the room and
+--- the cyst you hit throws you back the other way. One vector cannot
+--- turn around, and teleporting to the end position would hide the very
+--- thing being taught.
+---
+--- Each segment is { vx, vy, t } -- arena units per second, and seconds.
+local function Push(segments)
+    S.push, S.pushIndex = segments, 1
+end
+
 --- Debuffs the player is carrying, by name, with the time they lapse.
 ---
 --- The trainer had no notion of state that OUTLIVES a mechanic, and that
@@ -2249,6 +2262,15 @@ end
 local TUNNEL_R = 86
 local CYST_R   = 66
 local CYST_REACH = 13
+
+-- The gale. `lane` is the half-width of its corridor, matched to the
+-- pixel stack's 14 so a raid that stacked in the middle is already
+-- standing in it -- the two mechanics are one instruction heard twice.
+--
+-- One table rather than three locals on purpose: this file sits against
+-- Lua's 200-local ceiling for a main chunk, and every new name at this
+-- scope is spent from a budget that is nearly gone.
+local WIND = { lane = 16, speed = 150, burst = 95 }
 
 local tunnelTex, tunnelPip, cystTex = {}, {}, {}
 for i = 1, 3 do
@@ -4018,38 +4040,104 @@ KINDS.place = {
 ------------------------------------------------------------
 -- wind -- the payoff
 --
--- One tunnel blows, and the only safe place is the cyst opposite it. A
--- tunnel whose cyst was never placed has no safe place at all, which is
--- the honest consequence and the reason the placement phase matters.
+-- A gale blows out of one tunnel and straight across the room. The cyst
+-- opposite it is the only thing that stops you -- and it does not stop
+-- you by being a safe square to stand on. It bursts ON CONTACT and
+-- throws you back toward the boss, so the play is to be BETWEEN the
+-- tunnel and the cyst and let the wind deliver you into it.
+--
+-- This used to score whether you were standing ON the cyst when the wind
+-- landed, which is the one thing you must not do: arriving early pops it
+-- before the gale arrives and leaves nothing to catch the raid. So the
+-- corridor is the answer, the middle of the room is the obvious place to
+-- stand in it, and the pixel stack at the top of the intermission has
+-- already put you there. Two mechanics, one instruction.
+--
+-- Off the corridor, the gale still blows -- it just carries you past the
+-- cyst and into the rim, which is the trainer's version of going over
+-- the side.
 ------------------------------------------------------------
 KINDS.wind = {
     Init = function(a)
         a.tunnel = TunnelByOrder(a.step or 1)
         S.windStep = a.step or 1
+        local tn = a.tunnel
+        if tn then
+            a.dir = tn.angle + math.pi          -- out of the tunnel, across the room
+            a.ux, a.uy = math.cos(a.dir), math.sin(a.dir)
+            a.len = TUNNEL_R + CYST_R           -- tunnel mouth to the cyst marker
+        end
+    end,
+    Tick = function(a)
+        local tn = a.tunnel
+        if not tn or not tn.cyst then return end
+        -- Contact bursts it, so walking onto the cyst while the gale is
+        -- still winding up spends it for nothing. The old version of
+        -- this mechanic actively taught the mistake.
+        if dist(S.px, S.py, tn.cx, tn.cy) <= CYST_REACH then
+            tn.cyst, tn.burstEarly = false, true
+            Push({ { vx = -a.ux * WIND.burst, vy = -a.uy * WIND.burst, t = 0.4 } })
+            Hurt(a.touchDamage or 12,
+                "You burst the cyst opposite tunnel " .. tn.order .. " -- too early")
+        end
     end,
     Resolve = function(a)
-        local t = a.tunnel
-        if not t then return end
-        if not t.cyst then
-            Hurt(a.damage or 36, "No cyst opposite tunnel " .. t.order)
-        elseif dist(S.px, S.py, t.cx, t.cy) <= CYST_REACH + 3 then
-            Credit("Wind " .. t.order .. " -- rode the cyst")
+        local tn = a.tunnel
+        if not tn then return end
+
+        -- Where the player stands, measured down the gale: `along` is how
+        -- far downwind of the tunnel mouth, `side` how far off its axis.
+        local rx, ry = S.px - tn.x, S.py - tn.y
+        local along  = rx * a.ux + ry * a.uy
+        local side   = math.abs(-rx * a.uy + ry * a.ux)
+
+        local blowThrough = { { vx = a.ux * WIND.speed, vy = a.uy * WIND.speed, t = 0.7 } }
+
+        if not tn.cyst then
+            Push(blowThrough)
+            Hurt(a.damage or 36, tn.burstEarly
+                and ("Wind " .. tn.order .. " -- the cyst was already spent")
+                or  ("No cyst opposite tunnel " .. tn.order .. " -- nothing to catch you"))
+            return
+        end
+
+        if side > WIND.lane then
+            Push(blowThrough)
+            Hurt(a.damage or 36,
+                "Wind " .. tn.order .. " -- off the line, blown wide of the cyst")
+        elseif along >= a.len - CYST_REACH then
+            -- Downwind of the cyst already: the gale pushes you away
+            -- from the only thing that would have stopped you.
+            Push(blowThrough)
+            Hurt(a.damage or 36,
+                "Wind " .. tn.order .. " -- you were past the cyst, blown off")
         else
-            Hurt(a.damage or 36, "Wind " .. t.order .. " -- you were not on the cyst")
+            -- Carried into the cyst, which bursts and throws you back
+            -- toward the boss. Two segments, because that reversal is
+            -- the mechanic.
+            tn.cyst = false
+            Push({
+                { vx =  a.ux * WIND.speed,  vy =  a.uy * WIND.speed,  t = 0.45 },
+                { vx = -a.ux * WIND.burst, vy = -a.uy * WIND.burst, t = 0.5 },
+            })
+            Credit("Wind " .. tn.order .. " -- rode it into the cyst")
         end
     end,
     Cleanup = function() S.windStep = nil end,
     Draw = function(a, s)
-        local t = a.tunnel
-        if not t then return end
+        local tn = a.tunnel
+        if not tn then return end
         local p = castProgress(a)
-        -- A bar from the tunnel across the room, so which way it blows
-        -- is something you can see rather than something you remember.
-        putBar(V(a, 1, "OVERLAY", 1), t.x, t.y,
-            atan2(-t.y, -t.x), TUNNEL_R + CYST_R, 18, s,
-            C.tunnel, 0.18 + 0.3 * p)
-        local col = t.cyst and C.cyst or C.tunnelHot
-        put(V(a, 2, "ARTWORK", 2), "ring", t.cx, t.cy, CYST_REACH * 2, s, col, 1)
+        -- The corridor, tunnel mouth to cyst. Its WIDTH is the mechanic:
+        -- inside it the gale delivers you to the cyst, outside it the
+        -- gale delivers you to the rim.
+        putBar(V(a, 1, "ARTWORK", 0), tn.x, tn.y, a.dir, a.len, WIND.lane * 2, s,
+            tn.cyst and C.cyst or C.tunnelHot, 0.10 + 0.22 * p)
+        -- And its axis, so the direction reads before the corridor fills.
+        putBar(V(a, 2, "OVERLAY", 1), tn.x, tn.y, a.dir, a.len, 6, s,
+            C.tunnel, 0.2 + 0.45 * p)
+        put(V(a, 3, "ARTWORK", 2), "ring", tn.cx, tn.cy, CYST_REACH * 2, s,
+            tn.cyst and C.cyst or C.tunnelHot, 1)
     end,
 }
 
@@ -4424,6 +4512,7 @@ local function ReleaseInput()
     wipe(held)
     S.firing = false
     S.moving = false
+    S.push = nil
 end
 
 f:SetScript("OnShow", function() tinsert(UISpecialFrames, "YippYappRaidTrainer") end)
@@ -4463,6 +4552,29 @@ local function MovePlayer(dt)
         S.px = S.px + dx / len * PLAYER_SPEED * dt
         S.py = S.py + dy / len * PLAYER_SPEED * dt
         S.px, S.py = clampToArena(S.px, S.py, PLAYER_R)
+    end
+
+    -- A knockback in flight, advanced on top of walking rather than
+    -- replacing it, so a gale is something you lean against rather than
+    -- something that takes the keyboard away.
+    --
+    -- Clamped like every other kind of movement here: the arena has
+    -- always been a hard boundary, so being blown "off the platform" is
+    -- scored as a miss and felt as being pinned against the rim, out of
+    -- position for the wind five seconds later.
+    local seg = S.push and S.push[S.pushIndex]
+    if seg then
+        local step = math.min(dt, seg.t)
+        S.px = S.px + seg.vx * step
+        S.py = S.py + seg.vy * step
+        S.px, S.py = clampToArena(S.px, S.py, PLAYER_R)
+        seg.t = seg.t - step
+        if seg.t <= 0 then
+            S.pushIndex = S.pushIndex + 1
+            if not S.push[S.pushIndex] then S.push = nil end
+        end
+    elseif S.push then
+        S.push = nil
     end
 
     local cx, cy = CursorArena()

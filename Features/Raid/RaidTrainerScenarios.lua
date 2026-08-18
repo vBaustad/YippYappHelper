@@ -482,7 +482,7 @@ SC.sentinels = {
 ------------------------------------------------------------
 -- 3. The Lost Explorers               encounterID 3497
 --
--- Mor'zaki's bar is the kill timer and the fish is the only thing that
+-- Mor'zahi's bar is the kill timer and the fish is the only thing that
 -- resets it -- three times, because you cannot feed the same turtle
 -- twice. Icebound Flames is a genuine interrupt, which is what the
 -- caster verb was built for.
@@ -492,7 +492,7 @@ SC.explorers = {
     title  = "The Lost Explorers",
     intro  = "Break boxes, feed the fish, survive each empowered turtle.",
     bossHp = 5200,
-    energy = { name = "Mor'zaki", rate = 1.5, max = 100 },
+    energy = { name = "Mor'zahi", rate = 1.5, max = 100 },
     phases = {
         {
             name = "The Three Turtles", duration = 32, hpFloor = 74,
@@ -504,7 +504,7 @@ SC.explorers = {
                 }),
                 { at = 9, kind = "carry", name = "Fish", school = "frost",
                   to = "boss", reach = 20, window = 16, damage = 24, drainEnergy = 40,
-                  deliverCall = "Feed the fish to a turtle -- it resets Mor'zaki" },
+                  deliverCall = "Feed the fish to a turtle -- it resets Mor'zahi" },
                 Every(6, 13, 3, {
                     kind = "caster", name = "Icebound Flames", school = "frost",
                     hp = 120, castLen = 8, damage = 30, r = 5.5, art = "hex",
@@ -843,20 +843,24 @@ SC.sisterrag = {
         {
             name = "Intermission -- the winds", duration = 20, bossImmune = true,
             hpFloor = 58,
-            call = "Stack in the MIDDLE. Three winds, in the order the orbs showed.",
+            call = "Stack in the MIDDLE -- the gale carries the stack into the cyst.",
             events = Timeline(
                 { at = 2, kind = "stack", name = "Pixel stack", school = "frost",
                   atCentre = true, cast = 3.5, maxDist = 14, damage = 24,
                   call = "Everybody stacks in the middle" },
-                -- Three winds, in the order the orbs showed, each with
-                -- exactly one safe place: the cyst across from it.
+                -- Three winds, in the order the orbs showed. The safe
+                -- place is not the cyst -- touching it early bursts it --
+                -- it is the corridor BETWEEN the tunnel and the cyst,
+                -- which is where the pixel stack already left you.
                 { at = 6,  kind = "wind", name = "The Wind", school = "frost",
                   step = 1, cast = 3.5, damage = 36,
-                  call = "First wind -- to the cyst opposite the single orb" },
+                  call = "First wind -- stay between the single orb and its cyst" },
                 { at = 11, kind = "wind", name = "The Wind", school = "frost",
-                  step = 2, cast = 3.5, damage = 36, call = "Second wind" },
+                  step = 2, cast = 3.5, damage = 36,
+                  call = "Second wind -- let it carry you into the cyst" },
                 { at = 16, kind = "wind", name = "The Wind", school = "frost",
-                  step = 3, cast = 3.5, damage = 36, call = "Third wind" }
+                  step = 3, cast = 3.5, damage = 36,
+                  call = "Third wind -- do not walk onto the cyst, ride into it" }
             ),
         },
         SszorakPhase(36, 0),

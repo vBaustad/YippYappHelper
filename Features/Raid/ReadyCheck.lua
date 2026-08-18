@@ -1319,36 +1319,11 @@ local function QueueRefresh(delay)
     end)
 end
 
+--- Kept under its old name because four call sites read better for it,
+--- but there is no position left to restore: the shared host owns where
+--- this lands, and the ready check is the situation that takes the
+--- window off whatever else is holding it.
 local function ShowFrameAtSavedPos()
-    local db = DB()
-
-    -- Prefer new schema (point/relativePoint/x/y), fall back to the
-    -- legacy anchorLeft/anchorTop TOPLEFT-anchored pair, else center.
-    local point         = db.point
-    local relativePoint = db.relativePoint
-    local x, y          = db.x, db.y
-
-    if not point and db.anchorLeft and db.anchorTop then
-        point, relativePoint = "TOPLEFT", "TOPLEFT"
-        x, y = db.anchorLeft, db.anchorTop
-    end
-
-    if not point then
-        -- First-ever show: center the (expanded) window horizontally and
-        -- place it a bit above vertical center. ~600px approx height for
-        -- a 24-player expanded view; the user can drag to fine-tune.
-        local screenW = UIParent:GetWidth()
-        local screenH = UIParent:GetHeight()
-        local approxH = 600
-        point, relativePoint = "TOPLEFT", "TOPLEFT"
-        x = math.floor((screenW - WINDOW_WIDTH) / 2)
-        y = -math.floor((screenH - approxH) / 2)
-        db.point, db.relativePoint, db.x, db.y = point, relativePoint, x, y
-        db.anchorLeft, db.anchorTop = x, y
-    end
-
-    frame:ClearAllPoints()
-    frame:SetPoint(point, UIParent, relativePoint, x, y)
     ShowFrameInstant()
 end
 
@@ -1478,6 +1453,20 @@ local function addIDsTo(set, list, listRef)
     for _, id in ipairs(list) do
         if not set[id] then set[id] = true; table.insert(listRef, id) end
     end
+end
+
+-- The shared situation window. Top priority of the three: a ready check
+-- is a question being asked of you with a timer on it, so it takes the
+-- window from the dungeon notes or the after-key summary and hands it
+-- straight back when the check finishes.
+if ns.Hud then
+    ns.Hud:Register("readyCheck", frame, {
+        label    = "Ready Check",
+        priority = 30,
+        strata   = "FULLSCREEN_DIALOG",
+        toplevel = true,
+        preview  = function() Preview(true) end,   -- 24-player test roster
+    })
 end
 
 ns.ReadyCheck = {

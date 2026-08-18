@@ -746,7 +746,23 @@ function UI:Refresh()
     trainButton:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, railY)
     -- For Tools\loadcheck.py: the rail's one reflowed anchor.
     UI._lustTop, UI._lustText, UI._railY = lustBaseY - 16, lustText, railY
-    trainButton:SetShown(ns.RaidTrainer and ns.RaidTrainer:HasScenario(boss.id) or false)
+    -- PAUSED, not removed.
+    --
+    -- The arena is built and every fight in it runs, but getting a
+    -- mechanic subtly wrong there is worse than not offering it: a guide
+    -- that is vague sends you to look something up, while a trainer that
+    -- is confidently wrong teaches you the wrong reflex and you find out
+    -- in the raid. Several of them were wrong in exactly that way -- the
+    -- Frostfire explosion fired on the wrong half of the mechanic, the
+    -- Sentinels' raid ignored its own split -- and each was only caught
+    -- by somebody watching the real fight.
+    --
+    -- So the button is hidden while the written guides carry the load.
+    -- Flip this to bring it back; the scenarios, the checks and the
+    -- arena are all still here and still green.
+    local TRAINER_READY = false
+    trainButton:SetShown(TRAINER_READY
+        and ns.RaidTrainer and ns.RaidTrainer:HasScenario(boss.id) or false)
 
     ------------------------------------------------------------
     -- Body

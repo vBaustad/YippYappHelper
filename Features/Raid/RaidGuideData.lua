@@ -262,12 +262,17 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Break the Amani shields first. A held or tanked add is one that is "
-                    .. "not walking at the well.",
-                "Stuns, slows, roots and grips all work -- use them to build piles, "
-                    .. "not just to stop one add.",
-                "In the intermission, cleave the Echo and whatever is standing on the "
-                    .. "corpses together.",
+                "Shields first. A Restless Amani only fixates on the well while "
+                    .. "its shield holds -- break it and a tank can simply pick the add "
+                    .. "up.",
+                "Stuns, slows, roots and grips all work. Use them to build PILES "
+                    .. "rather than to stop one add: the intermission burns corpses, and "
+                    .. "you cannot burn a queue.",
+                "In the intermission, cleave the Echoes and the bodies together. "
+                    .. "It is the only cleanup window the fight gives you.",
+                "Phase two is the race. Hero lands here and her energy bar is the "
+                    .. "clock, so hold your cooldowns for it rather than spending them "
+                    .. "on the opener.",
             },
             HEALER = {
                 "Essence Rend is a dispel, but the void zone lands where that player "
@@ -375,11 +380,18 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Venom Coagulation first, every time, no exceptions.",
-                "Soak the droplets on your side, and keep out of the lane the far "
-                    .. "side's droplets travel down.",
-                "Watch your side's health against the other -- Vitriolic Stasis heals "
-                    .. "the weaker boss, so racing is wasted damage.",
+                "Venom Coagulation first, every time, no exceptions. It radiates "
+                    .. "damage for as long as it lives and it is the highest damage in "
+                    .. "the fight.",
+                "Soak the Toxic Droplets on your side as they land. On heroic, "
+                    .. "keep out of the lane the far side's droplets travel down after "
+                    .. "they are popped.",
+                "Watch your bar against the other side's. Vitriolic Stasis heals "
+                    .. "the weaker boss, so racing ahead is damage you hand straight "
+                    .. "back.",
+                "In the stasis itself your damage is worth nothing -- both take "
+                    .. "99% less. Combining your venom orbs quickly is the only thing "
+                    .. "that shortens it.",
             },
             HEALER = {
                 "Blighted Blood is a magic dispel and it goes out constantly.",
@@ -548,11 +560,16 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Boxes are a real assignment. Two or three of you, or the fish never "
-                    .. "shows up and Rallying Roar does.",
-                "You own the kick order on Iku's Icebound Flames.",
-                "Three health bars, one kill. Watch the other two as much as your own "
-                    .. "target.",
+                "Crate duty is a real assignment, two or three of you. One crate "
+                    .. "hides the fish, and a crate nobody breaks explodes for heavy "
+                    .. "raid damage.",
+                "You own the kick order on Iku's Icebound Flames. Cover it every "
+                    .. "cast.",
+                "Never let all three tortollans end up stacked -- they take 99% "
+                    .. "reduced damage together. Two in cleave range is fine.",
+                "Three health bars, one kill. If one has to die last, make it "
+                    .. "Gebbo: Iku throws a bomb that wipes the raid and Nama gains 100% "
+                    .. "damage a second.",
             },
             HEALER = {
                 "The box bleed stacks across everyone on cleanup duty. Expect chip "
@@ -669,11 +686,16 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "The adds ARE the fight. Nothing else you do matters if one reaches "
-                    .. "the pool.",
-                "Most of you go on blood -- it cannot be held, so it is pure damage.",
-                "Two or three take the shadow adds with slows, away from the raid. "
-                    .. "Whoever has a grip pulls the fire adds in one at a time.",
+                "The adds ARE the fight. Nothing else you do matters if one "
+                    .. "reaches the cavity in the middle.",
+                "Most of you go on blood. Clotting Venom cannot be held at all, "
+                    .. "and it splits when it dies, so it is pure damage until the floor "
+                    .. "is clear.",
+                "Do not kill two Burning Venoms together. Caustic Surge stacks, "
+                    .. "and that is a raid hit you chose to take -- hold one, or space "
+                    .. "the kills out.",
+                "Kill Shrouded Venoms where you do not need to stand. Each one "
+                    .. "bursts into a scatter of small zones that go off a moment later.",
             },
             HEALER = {
                 "Siphoning Infection cannot be healed off. Call those players into a "
@@ -794,11 +816,17 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Read the tunnel orbs before anything else happens. Everything in the "
-                    .. "intermission depends on getting that right.",
-                "Line your two-minute cooldowns up with the intermission's 30% amp. It "
-                    .. "is a clean, repeating timer.",
-                "Know which soak group you are in, and be in it.",
+                "Read the tunnel orbs before anything else happens. Everything in "
+                    .. "the maelstrom depends on getting that order right.",
+                "Get INTO the Mutilate cone when it is your half's turn. It "
+                    .. "splits between everyone it hits, and a thin cone is a dead "
+                    .. "target.",
+                "Line your two-minute cooldowns up with the 30% amp while he is "
+                    .. "dug in. It is a clean, repeating timer you can plan a whole pull "
+                    .. "around.",
+                "Know which half you are in and stay in it. On heroic it is being "
+                    .. "hit by two Mutilates in a row that kills you, not the cone "
+                    .. "itself.",
             },
             HEALER = {
                 "Constant raid damage all fight, plus a stacking physical debuff on "
@@ -937,12 +965,17 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "The three serpents in the middle are the priority. Every second they "
-                    .. "live is another line and more stacks on the raid.",
-                "Soak the globules near you, but do not hoover up other people's -- "
-                    .. "each one is a stack.",
-                "Both bosses have to die together, so watch the other target's health "
-                    .. "as closely as your own.",
+                "The serpents in the middle are the priority. Every second one "
+                    .. "lives is another Corrosive Spit and more stacks on the whole "
+                    .. "raid.",
+                "Soak the globules near you and do not hoover up anyone else's. "
+                    .. "Each one you take is a stack on you; each one left is a stack on "
+                    .. "everybody.",
+                "Ravenous Feast removes exactly ONE stack per cast however many "
+                    .. "of its three pops you stand in -- so take one, and get out "
+                    .. "before the next.",
+                "Both bosses have to die together. Watch the other bar as closely "
+                    .. "as your own target's.",
             },
             HEALER = {
                 "Watch stack counts, not just health. Somebody on 9 is in more danger "
@@ -1093,13 +1126,16 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Phase one: mobile ranged carry orbs into the pile. It is a real job, "
-                    .. "not a spare moment.",
-                "Phase two: break the mind-controlled players out fast, before they "
-                    .. "reach the edge.",
-                "Phase two: pool damage for the Eternal Nightfall shield, and cover "
-                    .. "the Wail of Terror interrupts on heroic.",
-                "Phase three: swap between the two bosses so they die together. One "
+                "Phase one: mobile ranged carry orbs into the pile in front of "
+                    .. "Zul'jin. It is a real job, not something you do in a spare "
+                    .. "moment.",
+                "Phase one: do not push him with a full floor of orbs. They all "
+                    .. "burst at once, and on heroic each one destroyed has already "
+                    .. "stacked a dot on you.",
+                "Phase two: break the mind-controlled players out fast, before "
+                    .. "they reach the edge -- then pool damage for the Eternal "
+                    .. "Nightfall shield.",
+                "Phase three: swap between the two so they die together. One "
                     .. "dying early enrages the other for 100% more damage.",
             },
             HEALER = {
@@ -1256,12 +1292,15 @@ G.bosses = {
 
         roles = {
             DAMAGER = {
-                "Orbs first, always. Nothing else you are doing outweighs an orb that "
-                    .. "is about to shatter.",
-                "The murlocs are the other real job. Hold them with stuns, slows and "
-                    .. "grips before they reach the bubble.",
-                "On mythic, kill the Bubblefin Frostscale first -- its shield makes "
+                "Orbs first, always. Nothing else you are doing outweighs a frost "
+                    .. "orb about to shatter, and one shatter usually ends the pull.",
+                "The murlocs are the other real job. Stun, slow and grip them "
+                    .. "before they reach the bubble and start turning into berserkers.",
+                "On mythic, kill the Bubblefin Frostscale first. Its shield makes "
                     .. "every murloc near it take 99% less damage.",
+                "The safe stretch of shoreline is readable well before the "
+                    .. "whirlpools land, so put your movement ability there early rather "
+                    .. "than sprinting for it.",
             },
             HEALER = {
                 "Drenched ticks on everybody all fight, underneath everything else.",

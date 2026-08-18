@@ -418,9 +418,14 @@ C_DelvesUI = { GetFactionForCompanion = function() return COMPANION_FACTION end,
                GetCurrentDelvesSeasonNumber = function() return 2 end }
 C_GossipInfo = { GetFriendshipReputation = function(id)
                      if id ~= COMPANION_FACTION then return nil end
+                     -- `texture` is the companion's face. Without it
+                     -- here the portrait resolver has nothing to read
+                     -- and every check about the medallion passes on
+                     -- the empty path, which is how the first version
+                     -- shipped a gold ring with a hole in it.
                      return { name = "Valeera Sanguinar", reaction = "Trusty Delve Companion",
                               standing = 1700, reactionThreshold = 1500,
-                              nextThreshold = 2500 }
+                              nextThreshold = 2500, texture = 4622270 }
                  end,
                  GetFriendshipReputationRanks = function(id)
                      if id ~= COMPANION_FACTION then return nil end
@@ -752,6 +757,12 @@ DIVERGENCES = (
 
 def is_version_divergence(err):
     return any(d in str(err) for d in DIVERGENCES)
+
+
+LC_DATA_FILES = [
+    os.path.join("Features", "Raid", "RaidGuideData.lua"),
+    os.path.join("Features", "Raid", "RaidTrainerScenarios.lua"),
+]
 
 
 def toc_files():
@@ -1350,6 +1361,515 @@ def main():
     else:
         print("  FAIL loot council: %s" % order)
         failures.append(("loot council order", str(order)))
+
+    # An equipped character, so the advisor has something to advise on.
+    #
+    # The client stubs return no equipment at all, which every check
+    # below would happily "pass" against: an empty doll produces an
+    # empty plan and an empty panel, and neither the budget arithmetic
+    # nor the layout is touched. Overriding ns:GetSlotInfo stubs exactly
+    # one thing -- the tooltip scan of a live item -- and leaves
+    # CanUpgradeItem, the plan walk, the rules and the render running
+    # for real above it.
+    #
+    # The set is deliberately lopsided: most of it sits on Veteran, at
+    # ranks spread across the track, with two slots on Champion. That
+    # gives the Veteran wallet more demand than it can meet, which is
+    # the only state in which the funded/unfunded split -- the thing the
+    # panel is built around -- actually exists.
+    fixture = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            if not (T and T.Veteran and T.Champion) then return "no gear tracks" end
+
+            -- slotID, track, current rank. Ranks below max so every
+            -- entry is a live upgrade candidate.
+            local SET = {
+                { 16, "Veteran",  2 },   -- Main Hand, priority 5
+                {  5, "Veteran",  1 },   -- Chest,     priority 4
+                {  7, "Veteran",  3 },   -- Legs,      priority 4
+                { 13, "Veteran",  1 },   -- Trinket 1, priority 4
+                { 11, "Veteran",  4 },   -- Ring 1,    priority 3
+                {  2, "Veteran",  5 },   -- Neck,      priority 2
+                {  1, "Champion", 1 },   -- Head,      priority 4
+                {  6, "Champion", 2 },   -- Waist,     priority 2
+                -- Adventurer is the only fixture track that is both
+                -- capped and has no uncapped quest-box income, so it is
+                -- the only one that can reach the reserve branch. Two
+                -- slots, because the reserve is sized per at-risk slot.
+                {  3, "Adventurer", 1 }, -- Shoulder,  priority 3
+                {  8, "Adventurer", 2 }, -- Feet,      priority 3
+                -- A slot parked at rank 1 of a track, with pieces on the
+                -- track below it to absorb the cheaper crests: that is
+                -- the shape ns:GetCrestWaste fires on, and without it
+                -- every check about where warnings sort passes because
+                -- no warning is ever produced.
+                { 15, "Hero", 1 },       -- Back,      priority 2
+            }
+            local bySlot = {}
+            for _, e in ipairs(SET) do
+                local levels = T[e[2]]
+                bySlot[e[1]] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Fixture]|h|r",
+                    ilvl = levels[e[3]], quality = 4, icon = 134400,
+                    track = e[2], rank = e[3], maxRank = #levels,
+                    crafted = false,
+                }
+            end
+
+            ns._realGetSlotInfo = ns.GetSlotInfo
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            if ns.InvalidateCrestPlans then ns:InvalidateCrestPlans() end
+
+            -- Prove the override actually reaches the advisor, or every
+            -- check below is testing the empty case with extra steps.
+            local live = 0
+            for _, si in ipairs(ns.SLOT_IDS or {}) do
+                if (ns:CanUpgradeItem(si.slot)) then live = live + 1 end
+            end
+            if live < 9 then
+                return "only " .. live .. " of 11 fixture slots read as upgradeable"
+            end
+            return "ok:" .. live
+        end
+    """)(ns)
+    if fixture and str(fixture).startswith("ok:"):
+        print("  ok   gear fixture: %s upgradeable slots across four crest tracks"
+              % str(fixture)[3:])
+    else:
+        print("  FAIL gear fixture: %s" % fixture)
+        failures.append(("gear fixture", str(fixture)))
+
+    # The crest budget, and the panel built on it.
+    #
+    # The old advisor asked "can I afford this" once per slot, from a
+    # fresh scan of the other fifteen, so sixteen slots held sixteen
+    # private opinions about one wallet -- and none of them answered the
+    # question a capped player actually has, which is which upgrades the
+    # crests in hand reach. ns:GetCrestPlan spends the budget once and
+    # records the order; these check that the record is internally
+    # consistent, because every string in the panel is derived from it.
+    plan = L.eval("""
+        function(ns)
+            if not ns.GetCrestPlan then return "GetCrestPlan absent" end
+
+            local checked = 0
+            for _, crest in ipairs(ns.CRESTS or {}) do
+                local p = ns:GetCrestPlan(crest.track)
+                if not p then return "no plan for " .. tostring(crest.track) end
+                if p.slotCount == 0 then
+                    -- Nothing on this track; there is no budget to test.
+                else
+                    checked = checked + 1
+
+                    -- Demand must equal what the walk actually queued.
+                    -- These are computed by different loops, so a drift
+                    -- between them means one of the two is lying.
+                    if #p.steps * p.cost ~= p.demand then
+                        return crest.track .. ": " .. #p.steps .. " ranks at "
+                            .. p.cost .. " is not the stated demand " .. p.demand
+                    end
+
+                    -- The walk must be monotonic in cost and must never
+                    -- mark a step paid after an unpaid one -- the panel
+                    -- draws a single rule at that boundary, so a second
+                    -- crossing would put funded rows below the line.
+                    local prev, seenUnpaid = 0, false
+                    for i, st in ipairs(p.steps) do
+                        if st.cumulative ~= prev + p.cost then
+                            return crest.track .. ": step " .. i
+                                .. " jumps to " .. st.cumulative .. " from " .. prev
+                        end
+                        prev = st.cumulative
+                        if st.paid and seenUnpaid then
+                            return crest.track .. ": step " .. i
+                                .. " is affordable after one that is not"
+                        end
+                        if not st.paid then seenUnpaid = true end
+                        -- paid implies funded: held is a subset of budget.
+                        if st.paid and not st.funded then
+                            return crest.track .. ": step " .. i
+                                .. " is paid but not funded"
+                        end
+                    end
+
+                    -- The affordable count is what the panel prints in
+                    -- its header, so it must match the steps the walk
+                    -- actually marked payable, not a separate division.
+                    if p.paidSteps ~= math.min(p.affordableNow, #p.steps) then
+                        return crest.track .. ": header says "
+                            .. p.affordableNow .. " affordable, the plan paid for "
+                            .. p.paidSteps .. " of " .. #p.steps
+                    end
+
+                    -- Priority must actually drive the order: the first
+                    -- rank bought cannot go to a slot that a higher
+                    -- priority slot was also waiting on.
+                    local first = p.steps[1]
+                    if first then
+                        local topPri = ns.SLOT_PRIORITY[first.slotID] or 2
+                        for slotID, sum in pairs(p.slots) do
+                            if sum.wantedRanks > 0 and (sum.priority or 2) > topPri then
+                                return crest.track .. ": spent first on "
+                                    .. first.slotName .. " while "
+                                    .. sum.slotName .. " ranked higher"
+                            end
+                        end
+                    end
+
+                    -- Per-slot totals have to reconcile with the steps.
+                    for slotID, sum in pairs(p.slots) do
+                        if sum.paidRanks * p.cost ~= sum.paidCost then
+                            return crest.track .. "/" .. sum.slotName
+                                .. ": " .. sum.paidRanks .. " paid ranks priced at "
+                                .. sum.paidCost
+                        end
+                        if sum.paidRanks > sum.wantedRanks then
+                            return crest.track .. "/" .. sum.slotName
+                                .. ": paid for more ranks than it wants"
+                        end
+                    end
+                end
+            end
+            if checked == 0 then return "no track had anything to upgrade" end
+            return "ok:" .. checked
+        end
+    """)(ns)
+    if plan and str(plan).startswith("ok:"):
+        print("  ok   crest plan: %s tracks, spend order is priority-first and the "
+              "affordable line is where the steps say" % str(plan)[3:])
+    else:
+        print("  FAIL crest plan: %s" % plan)
+        failures.append(("crest plan", str(plan)))
+
+    # The season cap is not the ceiling for Veteran.
+    #
+    # Quest-box crests do not count against `useTotalEarnedForMaxQty`,
+    # so a Veteran track reading 300/300 can still be handed a couple of
+    # hundred more this week. Reading the cap alone had the addon tell a
+    # capped player to hoard against a wall they were about to walk
+    # through. The plan has to carry that headroom separately -- folding
+    # it into the affordable count would be a different lie.
+    caps = L.eval("""
+        function(ns)
+            if not ns.GetUncappedCrestIncome then
+                return "GetUncappedCrestIncome absent"
+            end
+            local vet = ns:GetCrestPlan("Veteran")
+            if not vet then return "no Veteran plan" end
+
+            -- The fixture has Veteran at 300 of 300 earned.
+            if not vet.seasonCapped then
+                return "Veteran at 300/300 does not report as capped"
+            end
+            if (vet.uncapped or 0) <= 0 then
+                return "a capped Veteran track reports no uncapped income, so the "
+                    .. "panel will tell the player to hoard"
+            end
+            -- Headroom must stay OUT of the spendable budget: it is an
+            -- upper bound over weeklies the addon cannot see the state
+            -- of, and spending against it would be inventing crests.
+            if vet.budget ~= vet.held + vet.seasonEarnable then
+                return "uncapped headroom leaked into the spendable budget"
+            end
+            local perUpgrade = vet.cost
+            if perUpgrade > 0 and vet.affordableNow ~= math.floor(vet.held / perUpgrade) then
+                return "affordable count does not match the crests actually held"
+            end
+
+            -- A track with no such income must not claim any.
+            local champ = ns:GetCrestPlan("Champion")
+            if champ and (champ.uncapped or 0) ~= 0 then
+                return "Champion claims uncapped income it does not have"
+            end
+            -- And Champion at 180/300 must not read as capped, or the
+            -- capped branch is just answering yes to everything.
+            if champ and champ.seasonCapped then
+                return "Champion at 180 of 300 reports as capped"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if caps == "ok":
+        print("  ok   crest caps: a capped Veteran track still reports its uncapped "
+              "quest-box headroom, and the headroom stays out of the budget")
+    else:
+        print("  FAIL crest caps: %s" % caps)
+        failures.append(("crest caps", str(caps)))
+
+    # Don't plan the wallet to zero on a track that cannot refill.
+    #
+    # This is the reported failure: crests all spent on deep upgrades,
+    # then a capped week with nothing left to put on a new drop -- which
+    # is the piece most worth upgrading, because its slot's high-water
+    # mark is already paid for. A reserve is only correct where income
+    # has actually stopped, so the interesting half of this check is
+    # that tracks which still earn do NOT hold anything back.
+    reserve = L.eval("""
+        function(ns)
+            local adv = ns:GetCrestPlan("Adventurer")
+            if not adv then return "no Adventurer plan" end
+            if not adv.seasonCapped then
+                return "the fixture's capped track does not read as capped"
+            end
+            if (adv.uncapped or 0) ~= 0 then
+                return "Adventurer claims uncapped income, so the reserve branch "
+                    .. "is unreachable and this check is vacuous"
+            end
+            if (adv.reserve or 0) <= 0 then
+                return "a capped track with no income reserved nothing -- the "
+                    .. "player can still plan down to their last crest"
+            end
+            -- A reserve that eats the wallet is the same paralysis with
+            -- extra steps.
+            if adv.spendable < adv.cost then
+                return "the reserve left " .. adv.spendable
+                    .. ", which cannot buy a single " .. adv.cost .. "-crest rank"
+            end
+            if adv.reserve + adv.spendable ~= adv.held then
+                return "reserve plus spendable is " .. (adv.reserve + adv.spendable)
+                    .. ", not the " .. adv.held .. " actually held"
+            end
+            -- The header prints affordableNow; it must count spendable
+            -- crests, or the panel offers upgrades its own list withholds.
+            if adv.affordableNow ~= math.floor(adv.spendable / adv.cost) then
+                return "the header advertises " .. adv.affordableNow
+                    .. " upgrades from a spendable " .. adv.spendable
+            end
+
+            -- Veteran is capped too, but the quest boxes keep paying, so
+            -- holding crests back there would be hoarding against a
+            -- wallet that refills on its own.
+            local vet = ns:GetCrestPlan("Veteran")
+            if vet and (vet.reserve or 0) ~= 0 then
+                return "Veteran held crests back despite uncapped income still coming"
+            end
+            -- Champion is not capped at all.
+            local champ = ns:GetCrestPlan("Champion")
+            if champ and (champ.reserve or 0) ~= 0 then
+                return "an uncapped track held crests back"
+            end
+            return "ok:" .. adv.reserve
+        end
+    """)(ns)
+    if reserve and str(reserve).startswith("ok:"):
+        print("  ok   crest reserve: a capped track with no income holds %s back; "
+              "tracks that still earn hold nothing" % str(reserve)[3:])
+    else:
+        print("  FAIL crest reserve: %s" % reserve)
+        failures.append(("crest reserve", str(reserve)))
+
+    # A crest spent above what your content drops is banked by the slot's
+    # high-water mark; one spent below it is overtaken by the next piece
+    # that falls there. The advisor used to warn hardest about the first
+    # kind, which is exactly backwards.
+    sticky = L.eval("""
+        function(ns)
+            local ceiling = ns:GetDropCeiling()
+            if not ceiling or ceiling <= 0 then return "no drop ceiling" end
+            local checked = 0
+            for _, crest in ipairs(ns.CRESTS or {}) do
+                local p = ns:GetCrestPlan(crest.track)
+                if p and p.slotCount > 0 then
+                    if p.ceiling ~= ceiling then
+                        return crest.track .. " planned against a different ceiling"
+                    end
+                    for _, st in ipairs(p.steps) do
+                        checked = checked + 1
+                        if st.sticks ~= (st.toIlvl > ceiling) then
+                            return crest.track .. ": a rank landing at " .. st.toIlvl
+                                .. " against a " .. ceiling .. " ceiling is marked "
+                                .. tostring(st.sticks)
+                        end
+                    end
+                    for _, sum in pairs(p.slots) do
+                        if sum.stickyRanks > sum.paidRanks then
+                            return crest.track .. "/" .. sum.slotName
+                                .. ": more banked ranks than paid ones"
+                        end
+                    end
+                end
+            end
+            if checked == 0 then return "no ranks to classify" end
+            return "ok:" .. checked
+        end
+    """)(ns)
+    if sticky and str(sticky).startswith("ok:"):
+        print("  ok   watermark: %s planned ranks split correctly into banked "
+              "(above the drop ceiling) and overtaken" % str(sticky)[3:])
+    else:
+        print("  FAIL watermark: %s" % sticky)
+        failures.append(("watermark", str(sticky)))
+
+    # Most worth doing, first -- in both panels.
+    #
+    # The shell's Improvements list did not sort at all. It walked the
+    # equipment list, so the single slot actually worth spending on
+    # today drew below three rows of "hold crests", which is the exact
+    # opposite of what a ranked list is for. Both panels now read one
+    # ordering, so this checks the ordering AND that nothing has quietly
+    # gone back to slot order.
+    order = L.eval("""
+        function(ns)
+            if not ns.GetRankedRecommendations then
+                return "GetRankedRecommendations absent"
+            end
+            local list = ns:GetRankedRecommendations()
+            if #list < 4 then return "only " .. #list .. " rows to rank" end
+
+            -- The primary key must be monotonic. Anything else means a
+            -- tiebreak is escaping its bucket.
+            local prev, prevLabel = 0, nil
+            for _, r in ipairs(list) do
+                local o = ns.RECOMMEND_ORDER[r.recommendation] or 99
+                if o < prev then
+                    return "'" .. tostring(r.recommendation.label)
+                        .. "' sorted after '" .. tostring(prevLabel) .. "'"
+                end
+                prev, prevLabel = o, r.recommendation.label
+            end
+
+            -- Actionable advice must lead. If a row telling the player
+            -- to do nothing outranks one telling them to spend, the
+            -- list is worse than unsorted -- it looks authoritative.
+            local cut = ns.RECOMMEND_ACTIONABLE_MAX
+            if not cut then return "RECOMMEND_ACTIONABLE_MAX absent" end
+            local firstDoNothing, lastActionable = nil, nil
+            for i, r in ipairs(list) do
+                local o = ns.RECOMMEND_ORDER[r.recommendation] or 99
+                if o <= cut then lastActionable = i end
+                if o > cut and not firstDoNothing then firstDoNothing = i end
+            end
+            if firstDoNothing and lastActionable and lastActionable > firstDoNothing then
+                return "an actionable row at " .. lastActionable
+                    .. " sits below a wait-and-see row at " .. firstDoNothing
+            end
+
+            -- A "do not spend here" row must never outrank a "spend
+            -- here" one. This is the reported bug: the only red row on
+            -- the page sat at the top of a list where position already
+            -- means importance.
+            local dontSpend = {
+                [ns.RECOMMEND.WASTED_CREST] = true,
+                [ns.RECOMMEND.USE_LOWER_TRACK] = true,
+                [ns.RECOMMEND.BAD_INVESTMENT] = true,
+                [ns.RECOMMEND.SAVE_FOR_DROP] = true,
+            }
+            local firstWarning, warnCount = nil, 0
+            for i, r in ipairs(list) do
+                if dontSpend[r.recommendation] then
+                    warnCount = warnCount + 1
+                    if not firstWarning then firstWarning = i end
+                end
+                if firstWarning and (ns.RECOMMEND_ORDER[r.recommendation] or 99) <= cut then
+                    return "'" .. tostring(r.recommendation.label) .. "' at row " .. i
+                        .. " sits below a keep-crests-out warning at row " .. firstWarning
+                end
+            end
+
+            -- The fixture must actually produce one. Without a warning
+            -- row the loop above is a no-op that reports success, which
+            -- is how this check passed while the bug was live.
+            if warnCount == 0 then
+                return "no keep-crests-out row in the fixture -- the ordering "
+                    .. "check above cannot fire and proves nothing"
+            end
+
+            -- Sorting must be stable across calls, or the panel
+            -- reshuffles under the cursor on every refresh.
+            local first = {}
+            for i, r in ipairs(list) do first[i] = r.slotID end
+            local again = ns:GetRankedRecommendations()
+            for i, r in ipairs(again) do
+                if r.slotID ~= first[i] then
+                    return "row " .. i .. " changed slot between two identical calls"
+                end
+            end
+
+            -- And it must actually differ from equipment order, or the
+            -- reported bug would still be present and passing.
+            local slotOrder, k = {}, 0
+            for _, si in ipairs(ns.SLOT_IDS) do
+                for _, r in ipairs(list) do
+                    if r.slotID == si.slot then k = k + 1; slotOrder[k] = si.slot end
+                end
+            end
+            local identical = true
+            for i = 1, #first do
+                if first[i] ~= slotOrder[i] then identical = false break end
+            end
+            if identical then
+                return "the ranked list is still in equipment order"
+            end
+            return "ok:" .. #list
+        end
+    """)(ns)
+    if order and str(order).startswith("ok:"):
+        print("  ok   improvement order: %s rows, spend advice above every "
+              "keep-crests-out warning, stable between refreshes" % str(order)[3:])
+    else:
+        print("  FAIL improvement order: %s" % order)
+        failures.append(("improvement order", str(order)))
+
+    # The panel itself: render it and read the boxes back.
+    #
+    # This is the layout the report was about -- cards colliding and
+    # text running off the right edge. Rendering it here means the
+    # geometry below is measured, not assumed.
+    suggest = L.eval("""
+        function(ns)
+            if not ns.RefreshSuggestions then return "RefreshSuggestions absent" end
+            local ok, err = pcall(ns.RefreshSuggestions, ns)
+            if not ok then return "render failed: " .. tostring(err) end
+            local n = #(ns.SuggestEntries or {})
+            if n == 0 then return "the panel drew nothing at all" end
+            return "ok:" .. n
+        end
+    """)(ns)
+    if suggest and str(suggest).startswith("ok:"):
+        print("  ok   suggestions render: %s elements" % str(suggest)[3:])
+    else:
+        print("  FAIL suggestions render: %s" % suggest)
+        failures.append(("suggestions render", str(suggest)))
+
+    # Every drawn element, in one list, checked for overlap and overrun.
+    # Cards, budget headers and rules are separate pools stacked on one
+    # cursor, so a mis-measured header shows up as the next card sitting
+    # on top of it.
+    sug_boxes = L.eval("""
+        function(ns)
+            local out = {}
+            for _, f in ipairs(ns.SuggestEntries or {}) do
+                if f.IsShown and f:IsShown() and f._pts and f._pts[1] then
+                    local p = f._pts[1]
+                    local w = f._w or (f.GetWidth and f:GetWidth()) or 0
+                    local h = f._h or (f.GetHeight and f:GetHeight()) or 0
+                    -- FontStrings report their measured height; frames
+                    -- carry the height the layout gave them. Either way
+                    -- a zero-height element cannot collide, so skip it
+                    -- rather than reporting a phantom.
+                    if h > 0 then
+                        out[#out + 1] = string.format("%d,%d,%d,%d",
+                            math.floor(p.x or 0), math.floor(p.y or 0),
+                            math.floor(w), math.floor(h))
+                    end
+                end
+            end
+            return table.concat(out, ";")
+        end
+    """)(ns)
+    report("suggestions panel", parse(sug_boxes), 340 - 42)
+
+    L.eval("""
+        function(ns)
+            if ns._realGetSlotInfo then
+                ns.GetSlotInfo = ns._realGetSlotInfo
+                ns._realGetSlotInfo = nil
+            end
+            if ns.InvalidateCrestPlans then ns:InvalidateCrestPlans() end
+        end
+    """)(ns)
+
 
     # Sub-tab sync: the shell restores a remembered sub-tab on mount.
     # If it does not tell the page, the strip and the content disagree
@@ -2183,22 +2703,139 @@ def main():
                 return "drew " .. drawn .. " tier rows for " .. #tiers .. " tiers"
             end
 
-            -- And the empty state: no companion must not mean level 0.
+            ------------------------------------------------------------
+            -- The banner.
+            --
+            -- The card's surface is a cut of the game's own Journeys
+            -- companion row, in three slices: two caps at their native
+            -- width and a stretched middle. Stretching the whole thing
+            -- instead would pull the ornaments -- and the portrait baked
+            -- into the left cap -- out of shape with the card.
+            ------------------------------------------------------------
+            local card = ui.compCard
+            for _, part in ipairs({ "bgLeft", "bgMid", "bgRight" }) do
+                if not card[part] then
+                    return "the companion card has no " .. part .. " slice"
+                end
+            end
+            if not card.bannerOK then
+                return "the banner texture did not load, so the card fell back"
+            end
+
+            -- The caps must hold their own width. If either picks up an
+            -- anchor to the far edge it stretches with the card and the
+            -- ornament smears.
+            for _, pair in ipairs({ { "bgLeft", card.bgLeft, 103 },
+                                    { "bgRight", card.bgRight, 34 } }) do
+                local name, tex, want = pair[1], pair[2], pair[3]
+                if (tex._w or 0) ~= want then
+                    return name .. " is " .. tostring(tex._w) .. " wide, not " .. want
+                end
+            end
+
+            -- And the middle must be pinned to BOTH caps, or it does not
+            -- follow the card and leaves a gap at one end.
+            local left, right = false, false
+            for _, pt in ipairs(card.bgMid._pts or {}) do
+                if pt.rel == card.bgLeft then left = true end
+                if pt.rel == card.bgRight then right = true end
+            end
+            if not (left and right) then
+                return "the banner's middle is not anchored to both caps"
+            end
+
+            -- Every slice reads from one texture, so a mismatched
+            -- texcoord is the failure mode rather than a missing file --
+            -- and identical coords on two slices means one of them is
+            -- drawing the wrong part of the sheet.
+            local seen = {}
+            for _, part in ipairs({ "bgLeft", "bgMid", "bgRight" }) do
+                local c = card[part]._texCoord
+                if c then
+                    local key = table.concat(c, ",")
+                    if seen[key] then
+                        return part .. " draws the same slice as " .. seen[key]
+                    end
+                    seen[key] = part
+                end
+            end
+
+            -- And the empty state: no companion must not mean rank 0.
             local realGet = ns.Delves.GetCompanion
             ns.Delves.GetCompanion = function() return nil end
             local ok3 = pcall(page.Refresh, { content = host, width = 700, height = 620 })
             ns.Delves.GetCompanion = realGet
             if not ok3 then return "refresh failed with no companion" end
-            local txt = tostring(ui.compCard.level:GetText() or "")
-            if txt:match("0") then
-                return "an unknown companion rendered as level '" .. txt .. "'"
+            local txt = tostring(card.standing:GetText() or "")
+                .. tostring(card.name:GetText() or "")
+            if txt:match("rank 0") or txt:match("of 0") then
+                return "an unknown companion rendered as '" .. txt .. "'"
             end
+
+            -- The portrait is baked into the left cap, so the name has
+            -- to start clear of it or it is written across her face.
+            local nameX = nil
+            for _, pt in ipairs(card.name._pts or {}) do
+                if pt.rel == card.banner and tostring(pt.p or "") == "LEFT" then
+                    nameX = pt.x
+                end
+            end
+            if not nameX then
+                return "the name is not anchored to the banner's left edge"
+            end
+            if nameX < 103 then
+                return "the name starts at " .. nameX
+                    .. ", inside the 103px cap the portrait is baked into"
+            end
+
+            -- And it must BELONG to the banner, not merely be anchored
+            -- to it. A child frame draws over every region its parent
+            -- owns, so a name owned by the card sits behind the slices
+            -- and the button renders blank -- which is exactly what
+            -- shipped, and what no anchor check could have caught.
+            if card.name._parent ~= card.banner then
+                return "the name is parented to the card, so the banner "
+                    .. "draws on top of it"
+            end
+
+            -- Rank and progress belong on the panel BESIDE the banner,
+            -- not on top of it. Anchoring them to the banner's RIGHT
+            -- edge is what puts them there; anchored to its LEFT they
+            -- would sit over the art.
+            for _, pair in ipairs({ { "standing", card.standing },
+                                    { "track", card.track } }) do
+                local label, region = pair[1], pair[2]
+                local beside = false
+                local cur, guard = region, 0
+                while cur and guard < 4 do
+                    guard = guard + 1
+                    local up = nil
+                    for _, pt in ipairs(cur._pts or {}) do
+                        if pt.rel == card.banner then
+                            -- relP, not p: the first is the point on the
+                            -- BANNER being anchored to, the second is the
+                            -- region's own corner. Testing p asks which
+                            -- corner of the label is pinned, which says
+                            -- nothing about which side of the art it lands on.
+                            if tostring(pt.relP or ""):find("RIGHT") then beside = true end
+                        elseif pt.rel and pt.rel ~= card then
+                            up = pt.rel
+                        end
+                    end
+                    cur = up
+                end
+                if not beside then
+                    return label .. " is not placed beside the banner, so it "
+                        .. "draws over the art"
+                end
+            end
+
             return "ok"
         end
     """)(ns)
     if delves == "ok":
-        print("  ok   delves: companion read as a friendship rank, ladder shared "
-              "with Progression, empty state honest")
+        print("  ok   delves: companion banner slices at native cap widths with "
+              "a stretched middle; empty state honest")
     else:
         print("  FAIL delves: %s" % delves)
         failures.append(("delves", str(delves)))
@@ -5304,6 +5941,41 @@ def main():
     else:
         print("  FAIL trainer restart: %s" % restart)
         failures.append(("trainer restart", str(restart)))
+
+    # Glued string joins.
+    #
+    # Long guide lines are written as "..." .. "..." across several source
+    # lines, and if the first half does not end with a space the two words
+    # run together -- "reaches" .. "the cavity" renders as "reachesthe
+    # cavity". Nothing else here would ever catch it: the string is valid,
+    # the layout is fine, the page renders, and it is only wrong to a
+    # reader. Found by rewriting eight DPS blocks with a generator that
+    # forgot the trailing space.
+    glued = []
+    for rel in LC_DATA_FILES:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        lines = open(path, encoding="utf-8-sig").read().splitlines()
+        for i in range(len(lines) - 1):
+            nxt = lines[i + 1].lstrip()
+            if not nxt.startswith('.. "'):
+                continue
+            cur = lines[i].rstrip()
+            if not cur.endswith('"'):
+                continue
+            before = cur[:-1]
+            after = nxt[4:]
+            if before and after and before[-1].isalpha() and after[0].isalpha():
+                glued.append("%s:%d  ...%s | %s..."
+                             % (rel, i + 1, before[-18:], after[:18]))
+    if glued:
+        print("  FAIL glued joins: %d place(s) run two words together" % len(glued))
+        for g in glued[:5]:
+            print("       %s" % g)
+        failures.append(("glued joins", glued[0]))
+    else:
+        print("  ok   no glued string joins in the guide data")
 
     # Vashnik's altars. The claim is that WHERE THE PLAYER STANDS decides
     # which two altars empower, via a raid that follows them -- so the
