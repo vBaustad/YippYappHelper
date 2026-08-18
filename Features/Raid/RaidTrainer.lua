@@ -420,7 +420,7 @@ hurt:SetTexture(WHITE)
 hurt:SetVertexColor(1, 0, 0, 0)
 
 local callOut = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-callOut:SetPoint("TOP", arena, "TOP", 0, -28)
+callOut:SetPoint("TOP", arena, "TOP", 0, -34)
 if ns.ApplyTextShadow then ns.ApplyTextShadow(callOut) end
 
 -- The countdown, high up rather than dead centre.
@@ -440,8 +440,19 @@ if ns.ApplyTextShadow then ns.ApplyTextShadow(bigText) end
 -- Which phase you are in, under the countdown line. Announced on entry
 -- and then left up: a player who tabs back in mid-round should not have
 -- to infer the phase from what is on the floor.
-local phaseText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-phaseText:SetPoint("TOP", arena, "TOP", 0, -10)
+-- Which phase, and on the split fights WHICH SIDE YOU ARE ON.
+--
+-- This was small type pinned to the very top of the arena, which is the
+-- one place nobody looks while playing -- the eye lives on the dot. On
+-- the Sentinels that line is not decoration: it is the answer to "whose
+-- mechanics are these", and being unable to find it is being unable to
+-- play the boss.
+--
+-- Large, and brought down to just above the arena floor where the
+-- call-outs already are, so the two pieces of live instruction sit
+-- together instead of one being an afterthought at the ceiling.
+local phaseText = arena:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+phaseText:SetPoint("TOP", arena, "TOP", 0, -6)
 if ns.ApplyTextShadow then ns.ApplyTextShadow(phaseText) end
 
 -- What the player is currently carrying, over their own head.
@@ -637,9 +648,32 @@ local function HideSurplus(a)
     end
 end
 
+--- One pooled font string per actor, for ground labels.
+---
+--- Ground circles were telling the player what to do with colour alone,
+--- and on a fight with a big soak everyone takes AND small ones each
+--- person takes their own, colour cannot carry it -- both are "get in",
+--- and the difference is HOW MANY of you. A word in the middle of the
+--- circle says it outright.
+local labelPool = {}
+local function VLabel(a)
+    if not a.vislabel then
+        a.vislabel = table.remove(labelPool)
+            or arena:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    end
+    a.vislabel:Show()
+    return a.vislabel
+end
+
 local function releaseVis(a)
     for _, t in ipairs(a.vis or {}) do recycle(t) end
     a.vis = nil
+    if a.vislabel then
+        a.vislabel:Hide()
+        a.vislabel:SetText("")
+        labelPool[#labelPool + 1] = a.vislabel
+        a.vislabel = nil
+    end
 end
 
 --- Place a sprite in arena coordinates.
@@ -2538,6 +2572,22 @@ KINDS.soak = {
         -- Singed player is "not this one".
         local col = a.notMine and C.notMine or C.good
         DrawGroundCircle(a, s, col, 0.25, a.flashUntil and S.time < a.flashUntil)
+        -- What this circle wants, in words.
+        --
+        -- "Which do I soak and which do I leave" is the question this
+        -- boss kept failing to answer: an Unstable Miasma the whole side
+        -- piles into and a Toxic Droplet one person takes are both green
+        -- circles you stand in, and the only difference is how many of
+        -- you belong there.
+        local says = a.notMine and "NOT YOURS" or a.says
+        if says then
+            local t = VLabel(a)
+            t:SetPoint("CENTER", arena, "CENTER", a.x * s, a.y * s)
+            t:SetText(a.notMine and ("|cffffb84d" .. says .. "|r")
+                or ("|cff66ff99" .. says .. "|r"))
+        elseif a.vislabel then
+            a.vislabel:SetText("")
+        end
     end,
 }
 
@@ -3744,6 +3794,25 @@ KINDS.meet = {
             a.target.marked = false
         end
     end,
+    -- Combining is INSTANT.
+    --
+    -- It used to wait out the whole ten-second cast even after you were
+    -- standing on the right person, so the correct play was followed by
+    -- eight seconds of nothing and then a verdict -- which reads as the
+    -- game not having noticed. The real thing clears both debuffs the
+    -- moment the circles touch, and so does this.
+    --
+    -- The cast still exists as the DEADLINE. Miss it and Resolve does
+    -- what it always did.
+    Tick = function(a)
+        if a.resolved then return end
+        local tx, ty = AllyPos(a.target)
+        if dist(S.px, S.py, tx, ty) <= (a.reach or 9) then
+            a.resolved = true
+            a.dead = true
+            Credit(a.name .. " -- combined for four")
+        end
+    end,
     Resolve = function(a)
         local tx, ty = AllyPos(a.target)
         if dist(S.px, S.py, tx, ty) <= (a.reach or 9) then
@@ -4569,7 +4638,16 @@ local function EnterPhase(i)
         S.bossActor = S.bossActors[p.side]
     end
     if p then
-        phaseText:SetTextColor(1, 0.85, 0.35)
+        -- Tinted with the golem you are standing on, so the words and
+        -- the skull agree. "Which side am I" is answered by matching a
+        -- colour rather than by reading a name and remembering which of
+        -- the two it was.
+        local tint = p.side and S.bossActors[p.side] and S.bossActors[p.side].colour
+        if tint then
+            phaseText:SetTextColor(tint[1], tint[2], tint[3])
+        else
+            phaseText:SetTextColor(1, 0.85, 0.35)
+        end
         phaseText:SetText(p.name or "")
         if p.call then
             callOut:SetTextColor(1, 0.85, 0.3)

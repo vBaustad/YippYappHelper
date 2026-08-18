@@ -3750,13 +3750,21 @@ def main():
                     "only %d allies found a partner adding to four", paired)
             end
 
-            -- And reaching the partner is worth something.
+            -- And reaching the partner is worth something, IMMEDIATELY.
+            --
+            -- It used to wait out the whole ten-second cast even once
+            -- you were standing on the right person, so the correct play
+            -- was followed by eight seconds of nothing and then a
+            -- verdict -- which reads as the game not having noticed.
             local before = S.passed
+            local waited = 0
             for _ = 1, 400 do
                 S.hp, S.firing = 100, false
                 S.px, S.py = meet.target.x, meet.target.y
                 for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
                 update(f, 0.05)
+                waited = waited + 0.05
+                if S.passed > before then break end
                 if meet.dead or S.phaseIndex > 2 then break end
                 if not S.running then break end
             end
@@ -3765,6 +3773,9 @@ def main():
             if not credited then
                 problems[#problems + 1] =
                     "standing on the correct partner scored nothing"
+            elseif waited > 1.0 then
+                problems[#problems + 1] = string.format(
+                    "combining took %.1fs to register -- it should be on contact", waited)
             end
 
             if #problems > 0 then return table.concat(problems, "; ") end

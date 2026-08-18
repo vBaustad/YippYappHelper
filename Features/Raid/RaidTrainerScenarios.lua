@@ -321,10 +321,18 @@ local function BreathSide(name, dur, floor)
         name = name, duration = dur, hpFloor = floor, side = 2,
         call = "Breath side -- soak every droplet",
         events = Timeline(
-            Every(3, 5, 6, {
+            -- MANY, small, and scattered across the whole room.
+            --
+            -- The Breath of Ula'tek sprays them and they land
+            -- everywhere, not just on its own half -- which is why both
+            -- sides carry them. Each erupts on a 16-second fuse and one
+            -- player takes each one, so this is a floor of individual
+            -- errands rather than a thing the group does together. That
+            -- distinction is the one this boss kept failing to make.
+            Pack(3, 9, 3, 4, {
                 kind = "orb", name = "Toxic Droplet", school = "nature",
-                window = 12, damage = 20, r = 4, spikes = true,
-                call = "Toxic Droplets -- soak them, tanks first",
+                window = 16, damage = 20, r = 3.6, spikes = true,
+                call = "Toxic Droplets -- one each, they are everywhere",
             }),
             -- The highest damage in the fight, about once a minute, and
             -- it radiates the whole time it lives.
@@ -349,10 +357,17 @@ local function BloodSide(name, dur, floor)
         name = name, duration = dur, hpFloor = floor, side = 1,
         call = "Blood side -- soak the Miasma, then move to the edge",
         events = Timeline(
+            -- ONE big circle, and the entire Blood side stands in it.
+            --
+            -- Deliberately much larger than a droplet and labelled ALL
+            -- IN, because both are green circles you step into and the
+            -- only difference is how many of you belong there. Erupts
+            -- eight seconds after it marks somebody, splitting its
+            -- damage among everyone close enough.
             Every(4, 12, 3, {
                 kind = "soak", name = "Unstable Miasma", school = "blood",
-                cast = 3.4, r = 16, damage = 24,
-                call = "Unstable Miasma -- the whole side soaks",
+                cast = 8, r = 22, damage = 24, says = "ALL IN",
+                call = "Unstable Miasma -- the WHOLE side stacks in it",
             }),
             -- "Then get to the edge and stack, because what you just
             -- soaked comes back as puddles under all of you."
@@ -367,9 +382,10 @@ local function BloodSide(name, dur, floor)
                 cast = 4, minDist = 26, r = 13, life = 22, dps = 12, damage = 18,
                 call = "Blighted Blood -- take the dispel away from the group",
             }),
-            Every(6, 7, 4, {
+            -- The Breath's spray reaches this side of the room too.
+            Pack(6, 11, 2, 3, {
                 kind = "orb", name = "Toxic Droplet", school = "nature",
-                window = 10, damage = 18, r = 4, spikes = true,
+                window = 16, damage = 18, r = 3.6, spikes = true,
             })
         ),
     }
