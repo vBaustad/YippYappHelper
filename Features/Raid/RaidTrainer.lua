@@ -1509,19 +1509,44 @@ local function UpdateBossPosition(dt)
         return
     end
 
-    if S.scenario and S.scenario.bossFollowsTank then
-        -- Vashnik: the PLAYER steers, because where the boss stands
-        -- picks the altars. Faces the player, who is leading it.
-        local dx, dy = S.px - b.x, S.py - b.y
-        if (dx * dx + dy * dy) > 16 then b.facing = atan2(dy, dx) end
-        local gx, gy = clampToArena(S.px, S.py, ARENA_R - BOSS_LEASH)
-        local mx, my = gx - b.x, gy - b.y
-        local d = math.sqrt(mx * mx + my * my)
+    -- Vashnik: the TANK walks him a fixed route, and the player follows.
+    --
+    -- He used to walk to the PLAYER, on the reasoning that where he
+    -- stands picks the two fountains so the player should steer. In
+    -- practice that is not a mechanic, it is a leash -- the boss trailed
+    -- you around the room, the raid trailed the boss, and the rotation
+    -- the guide actually prescribes never happened because nothing was
+    -- driving it but where you happened to wander.
+    --
+    -- A tank route is what the fight has. He stops between two
+    -- fountains, is drunk from, and is walked to the next pair, so
+    -- "always pick up a fountain you did not just use" plays out on its
+    -- own and the player's job is to keep up and handle what spawns.
+    local route = S.scenario and S.scenario.tankRoute
+    if route and S.altars then
+        local period = route.every or 17
+        local n = #S.altars
+        -- Parked BETWEEN a pair, so those two are the nearest and the
+        -- third is not -- which is the whole reason the route exists.
+        local leg = math.floor(S.time / period) % n
+        local a1 = S.altars[leg + 1]
+        local a2 = S.altars[(leg + 1) % n + 1]
+        local mx, my = (a1.x + a2.x) / 2, (a1.y + a2.y) / 2
+        local d0 = math.sqrt(mx * mx + my * my)
+        local gx, gy = 0, 0
+        if d0 > 0.001 then
+            gx, gy = mx / d0 * (route.radius or 42), my / d0 * (route.radius or 42)
+        end
+        local dx, dy = gx - b.x, gy - b.y
+        local d = math.sqrt(dx * dx + dy * dy)
         local step = BOSS_MOVE_SPEED * dt
         if d <= step then
             b.x, b.y = gx, gy
         elseif d > 0.001 then
-            b.x, b.y = b.x + mx / d * step, b.y + my / d * step
+            b.x, b.y = b.x + dx / d * step, b.y + dy / d * step
+            -- Facing where he is being walked, so the raid can read the
+            -- move coming rather than discovering it.
+            b.facing = atan2(dy, dx)
         end
         return
     end
@@ -3175,6 +3200,41 @@ KINDS.chaser = {
                     r = a.deathPuddle, life = 12, dps = 10,
                     where = { x = a.x, y = a.y } })
         end
+        -- Umbral Ejection. A Shrouded Venom does not leave one puddle --
+        -- it bursts into a scatter of small zones that go off and are
+        -- gone, so the floor is briefly littered rather than
+        -- permanently ruined. Where you kill it still matters; it just
+        -- matters for a few seconds instead of forever.
+        if a.deathBurst then
+            local e = a.deathBurst
+            for k = 1, (e.count or 6) do
+                local ang = math.random() * math.pi * 2
+                local rad = math.random() * (e.spread or 22)
+                Spawn({
+                    kind = "dodge", name = e.name or "Umbral Ejection",
+                    school = a.school, cast = e.cast or 1.6,
+                    r = e.r or 5, damage = e.damage or 12,
+                    where = { x = a.x + math.cos(ang) * rad,
+                              y = a.y + math.sin(ang) * rad },
+                })
+            end
+        end
+        -- Caustic Surge. A Burning Venom explodes on death and hits the
+        -- whole raid, and the effect STACKS -- which is the entire
+        -- reason the guide says not to kill two of them together. So the
+        -- blast is cheap on its own and expensive in quick succession,
+        -- and the message names which of those just happened.
+        if a.deathBlast then
+            local e = a.deathBlast
+            local recent = (S.time - (S.lastBlast or -99)) < (e.window or 6)
+            S.lastBlast = S.time
+            if recent then
+                Hurt((e.damage or 12) * (e.stackMult or 3),
+                    (e.name or a.name) .. " -- two died together, it STACKED")
+            else
+                Hurt(e.damage or 12, e.name or a.name)
+            end
+        end
     end,
     -- Tinted by school too, so Vashnik's Burning Venoms are visibly the
     -- fire adds rather than three purple blobs you have to name.
@@ -3615,6 +3675,28 @@ KINDS.spread = {
         else
             Hurt(a.damage or 20, a.name .. " clipped the raid")
         end
+        -- What erupts FROM YOU when the aura expires.
+        --
+        -- Plague Froth does not fire waves across the room from
+        -- somewhere else -- four clumps burst out of the marked player
+        -- in the cardinal directions, which is why the answer is to be
+        -- away from everyone AND to step off the cross afterwards. It
+        -- was modelled as unrelated walls crossing the arena on their
+        -- own timer, so neither half pointed at the other.
+        if a.erupts then
+            local e = a.erupts
+            for k = 0, 3 do
+                local dir = k * (math.pi / 2)
+                Spawn({
+                    kind = "projectile", name = e.name or (a.name .. " wave"),
+                    school = a.school, dir = dir,
+                    cast = e.cast or 0.9, speed = e.speed or 34,
+                    r = e.r or 9, damage = e.damage or 18,
+                    where = { x = S.px + math.cos(dir) * (e.offset or 12),
+                              y = S.py + math.sin(dir) * (e.offset or 12) },
+                })
+            end
+        end
     end,
     Draw = function(a, s)
         local p = castProgress(a)
@@ -4001,10 +4083,12 @@ KINDS.imbibe = {
                     -- is a mechanic from a different encounter.
                     for k = 1, alt.stacks + 1 do
                         Spawn({
-                            kind = "chaser", name = "Burning Venom",
+                            fromImbibe = true, kind = "chaser", name = "Burning Venom",
                             school = "fire", art = "blob", goal = "centre",
                             speed = 8, hp = 72, r = 5.5, damage = 22, life = 26,
-                            deathPuddle = 10, feeds = 20,
+                            feeds = 20,
+                            deathBlast = { damage = 12, window = 6, stackMult = 3,
+                                           name = "Caustic Surge" },
                             where = { x = alt.x + (k - 2) * 9, y = alt.y },
                         })
                     end
@@ -4012,17 +4096,22 @@ KINDS.imbibe = {
                     -- Shrouded Venom. The guide's note on these is not
                     -- "dodge something" -- it is "kill them where you
                     -- are not standing", because each one drops a circle
-                    -- where it dies. So they are adds with a death
-                    -- puddle, and the lesson is where you fight them.
+                    -- where it dies. Umbral Ejection scatters SEVERAL
+                    -- small zones that go off and are gone, so the floor
+                    -- is briefly littered rather than permanently
+                    -- ruined -- and the lesson is still where you fight
+                    -- them, for a few seconds instead of forever.
                     --
                     -- They were a bare `dodge` telegraph before, which
                     -- taught neither half of that.
                     for k = 1, alt.stacks do
                         Spawn({
-                            kind = "chaser", name = "Shrouded Venom",
+                            fromImbibe = true, kind = "chaser", name = "Shrouded Venom",
                             school = "shadow", art = "hex", goal = "centre",
                             speed = 9, hp = 70, r = 5.5, damage = 22, life = 26,
-                            deathPuddle = 13, feeds = 20,
+                            feeds = 20,
+                            deathBurst = { count = 7, r = 5, spread = 24,
+                                           damage = 12, name = "Umbral Ejection" },
                             where = { x = alt.x + (k - 1.5) * 10, y = alt.y },
                         })
                     end
@@ -4033,7 +4122,7 @@ KINDS.imbibe = {
                     -- makes "keep killing until the floor is clear" a
                     -- deadline rather than tidiness.
                     Spawn({
-                        kind = "chaser", name = "Clotting Venom",
+                        fromImbibe = true, kind = "chaser", name = "Clotting Venom",
                         school = "blood", art = "hex", goal = "centre",
                         speed = 10, hp = 90, r = 6, damage = 24, life = 26,
                         splits = alt.stacks, feeds = 20,
@@ -5027,6 +5116,7 @@ function T:Start(bossId, heroic)
     S.energy, S.carrying = 0, nil
     S.rot, S.bothDotsSince = nil, nil
     S.element, S.volleyFlip, S.raiseQueue = nil, nil, nil
+    S.lastBlast = nil
     ResetShown()
     mineText:Hide()
     S.allyClears, S.lastClear, S.clearingWho = nil, nil, nil

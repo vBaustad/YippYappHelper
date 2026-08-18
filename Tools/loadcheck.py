@@ -5355,41 +5355,72 @@ def main():
                 return nil
             end
 
-            settle(S.altars[1], 220)
-            if stacksOf(S.altars[1]) ~= 2 then
+            -- The TANK's route decides which pair is lit, not the player.
+            --
+            -- This check used to walk the player to an altar and assert
+            -- the empowerment followed them. That was the old design and
+            -- it was wrong about the fight: the boss trailed the player
+            -- around the room and the guide's rotation never happened,
+            -- because nothing drove it but where somebody wandered. He
+            -- is walked a fixed route between the fountains now, so what
+            -- is worth asserting is that the pair actually ROTATES and
+            -- that every fountain gets a turn at being the dormant one.
+            local dormant, bad = {}, nil
+            for _ = 1, 1400 do
+                S.hp, S.firing, S.energy = 100, false, 0
+                if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+                S.px, S.py = 0, -80
+                update(f, 0.05)
+                bad = bad or shapeIsWrong()
+                for _, alt in ipairs(S.altars) do
+                    if alt.stacks == 0 then dormant[alt.name] = true end
+                end
+                if not S.running then break end
+            end
+            local rested = 0
+            for _ in pairs(dormant) do rested = rested + 1 end
+            if bad then T:Stop(); return "on the tank's route: " .. bad end
+            if rested < 3 then
                 T:Stop()
-                return string.format("stood at the %s altar and it took %d stacks, not 2",
-                    S.altars[1].name, stacksOf(S.altars[1]))
-            end
-            local bad = shapeIsWrong()
-            if bad then T:Stop(); return "at the first altar: " .. bad end
-
-            settle(S.altars[2], 220)
-            if stacksOf(S.altars[2]) ~= 2 then
-                T:Stop()
-                return string.format("walked to the %s altar but %s still held the empowerment",
-                    S.altars[2].name, S.altars[1].name)
+                return string.format(
+                    "only %d of 3 fountains ever went dormant -- the route is not rotating",
+                    rested)
             end
 
-            bad = shapeIsWrong()
-            if bad then T:Stop(); return "at the second altar: " .. bad end
-
-            -- And Imbibe must actually pay out, in the schools that are lit.
-            local lit = {}
-            for _, alt in ipairs(S.altars) do
-                if alt.stacks > 0 then lit[alt.school] = true end
-            end
+            -- And Imbibe must pay out only in the schools lit AT THE
+            -- TIME, judged when each mechanic first appears.
+            --
+            -- Snapshotting the lit pair once and checking every actor
+            -- against it was fine while the player parked next to an
+            -- altar and nothing moved. The tank now walks a rotation, so
+            -- an add spawned perfectly legally from a then-lit fountain
+            -- is still on the floor after the route has moved on -- and
+            -- the old form read that as a dormant altar firing.
             local spawned, wrongSchool = 0, nil
+            local seen = {}
             for _ = 1, 700 do
                 S.hp, S.firing = 100, false
                 S.energy = 0
                 if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
-                S.px, S.py = S.altars[2].x * 0.75, S.altars[2].y * 0.75
+                S.px, S.py = 0, -80
                 update(f, 0.05)
+                local litNow = {}
+                for _, alt in ipairs(S.altars) do
+                    if alt.stacks > 0 then litNow[alt.school] = true end
+                end
                 for _, act in ipairs(S.actors) do
-                    if act.school and (act.kind == "chaser" or act.kind == "dodge") then
+                    -- Only what Imbibe itself put on the floor.
+                    --
+                    -- A Clotting Venom splits when killed, and its
+                    -- halves arrive whenever that happens -- which is
+                    -- routinely after the tank has walked on and blood
+                    -- has gone dormant. They are children of a spawn
+                    -- that was legal at the time, not a dormant fountain
+                    -- firing.
+                    if act.fromImbibe and not seen[act] then
+                        seen[act] = true
                         spawned = spawned + 1
-                        if not lit[act.school] then wrongSchool = act.school end
+                        if not litNow[act.school] then wrongSchool = act.school end
                     end
                 end
                 if not S.running then break end

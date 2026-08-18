@@ -620,8 +620,12 @@ SC.explorers = {
 -- Vapor -- the same shape as Nek'zali's well, because it is the same
 -- idea: the bar is a record of what you let through.
 --
--- Plague Rot is a spread and THEN waves, eight seconds later: walk out,
--- then dodge.
+-- Plague Froth marks players, hurts anyone within a few yards of them
+-- for eight seconds, and then bursts into FOUR clumps that travel out
+-- of that player in the cardinal directions. So it is one mechanic in
+-- two beats -- get away from the group, then step off your own cross --
+-- and not, as it was modelled here, a spread plus unrelated walls
+-- crossing the room on their own timer.
 --
 -- THE THREE PHASES BELOW ARE NOT ENCOUNTER PHASES. Vashnik is one phase
 -- with three fountains, and the guide says so; its `shape` field reads
@@ -640,7 +644,10 @@ SC.vashnik = {
     intro  = "Two fountains at a time. Nothing may reach the pool.",
     bossHp = 3600,
     altars = true,
-    bossFollowsTank = true,
+    -- The tank walks him between the fountains on a fixed rotation, and
+    -- the raid moves with him. He does NOT follow the player: see the
+    -- note on tankRoute in UpdateBossPosition.
+    tankRoute = { every = 17, radius = 42 },
     well   = true,
     -- Toxic Vapor grows with every drink AND with every add that gets
     -- through. The tick is slow on purpose: leaks are what fill it, and
@@ -656,19 +663,11 @@ SC.vashnik = {
                     call = "Imbibe -- the two nearest fountains empower",
                 }),
                 Every(9, 19, 3, {
-                    kind = "spread", name = "Plague Rot", school = "nature",
-                    cast = 4, minDist = 28, damage = 22,
+                    kind = "spread", name = "Plague Froth", school = "nature",
+                    cast = 8, minDist = 28, damage = 22,
+                    erupts = { name = "Plague Wave", cast = 0.9, speed = 34,
+                               r = 9, damage = 18, offset = 12 },
                     call = "Plague Rot -- walk out, the waves follow",
-                }),
-                Every(17, 19, 3, {
-                    kind = "wave", name = "Plague wave", school = "nature",
-                    speed = 46, width = 17, damage = 18,
-                    call = "Plague waves incoming -- move out of their path",
-                }),
-                Every(18, 19, 3, {
-                    kind = "wave", name = "Plague wave", school = "nature",
-                    speed = 46, width = 17, damage = 18,
-                    call = "Second wave right behind it",
                 }),
                 Every(14, 16, 3, {
                     kind = "soak", name = "Malignant Catalyst", school = "shadow",
@@ -698,13 +697,10 @@ SC.vashnik = {
                     kind = "imbibe", name = "Imbibe", cast = 3.2,
                 }),
                 Every(10, 15, 2, {
-                    kind = "spread", name = "Plague Rot", school = "nature",
-                    cast = 4, minDist = 28, damage = 22,
-                }),
-                Every(18, 15, 2, {
-                    kind = "wave", name = "Plague wave", school = "nature",
-                    speed = 46, width = 17, damage = 18,
-                    call = "Plague wave crossing -- step out of its path",
+                    kind = "spread", name = "Plague Froth", school = "nature",
+                    cast = 8, minDist = 28, damage = 22,
+                    erupts = { name = "Plague Wave", cast = 0.9, speed = 34,
+                               r = 9, damage = 18, offset = 12 },
                 }),
                 Every(13, 16, 2, {
                     kind = "soak", name = "Malignant Catalyst", school = "shadow",
@@ -726,19 +722,11 @@ SC.vashnik = {
                     call = "Imbibe -- two more fountains live",
                 }),
                 Every(8, 14, 3, {
-                    kind = "spread", name = "Plague Rot", school = "nature",
-                    cast = 3.6, minDist = 28, damage = 22,
+                    kind = "spread", name = "Plague Froth", school = "nature",
+                    cast = 8, minDist = 28, damage = 22,
+                    erupts = { name = "Plague Wave", cast = 0.9, speed = 34,
+                               r = 9, damage = 18, offset = 12 },
                     call = "Plague Rot -- walk out, the waves follow",
-                }),
-                Every(16, 14, 3, {
-                    kind = "wave", name = "Plague wave", school = "nature",
-                    speed = 48, width = 17, damage = 18,
-                    call = "Plague waves incoming -- move out of their path",
-                }),
-                Every(17, 14, 3, {
-                    kind = "wave", name = "Plague wave", school = "nature",
-                    speed = 48, width = 17, damage = 18,
-                    call = "Second wave right behind it",
                 }),
                 Every(11, 13, 3, {
                     kind = "leech", name = "Siphoning Infection", school = "blood",

@@ -243,30 +243,11 @@ end
 local frame = CreateFrame("Frame", "YippYappReadyCheck", UIParent, "BackdropTemplate")
 frame:SetSize(WINDOW_WIDTH, 240)
 frame:SetScale(0.85)
-frame:SetFrameStrata("FULLSCREEN_DIALOG")
-frame:SetToplevel(true)
-frame:SetClampedToScreen(true)
-frame:SetMovable(true)
 frame:EnableMouse(true)
-frame:RegisterForDrag("LeftButton")
-frame:SetScript("OnDragStart", frame.StartMoving)
-frame:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-    local db = DB()
-    -- Save the frame's current anchor state directly. More robust than
-    -- GetLeft/GetTop subtraction, which can get the wrong sign or be
-    -- off by effective-scale when UIParent ≠ frame scale.
-    local point, _, relativePoint, x, y = self:GetPoint()
-    if point then
-        db.point          = point
-        db.relativePoint  = relativePoint
-        db.x              = x
-        db.y              = y
-        -- Keep legacy fields in sync so an old-schema read still works.
-        db.anchorLeft = x
-        db.anchorTop  = y
-    end
-end)
+-- Position, strata and dragging moved to the shared situation window in
+-- Core/Hud.lua, which this registers itself with at the bottom of the
+-- file. The 0.85 scale stays here: it is how this window is drawn, not
+-- where it sits, and the host reserves room for the scaled size.
 frame:SetBackdrop({
     bgFile   = "Interface\\Buttons\\WHITE8x8",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
