@@ -3621,12 +3621,41 @@ def main():
                 end
             end
             T:Stop()
+            -- And a mechanic on one golem's side is only handled by
+            -- that side. The far half used to abandon its golem every
+            -- time a circle landed on yours, take a mechanic that was
+            -- never theirs, and walk back.
+            local crossed = 0
+            T:Start("sentinels", false)
+            S.countdown = 0
+            for _ = 1, 900 do
+                S.hp, S.firing = 100, false
+                S.px, S.py = 0, -80
+                for _, b in ipairs(S.bossActors) do b.hp = b.maxHp end
+                update(f, 0.05)
+                for _, a in ipairs(S.allies) do
+                    local g = a.goalSoak
+                    if g then
+                        local own = S.bossActors[a.side]
+                        local other = S.bossActors[3 - a.side]
+                        local dOwn = math.sqrt((g.x - own.x) ^ 2 + (g.y - own.y) ^ 2)
+                        local dOther = math.sqrt((g.x - other.x) ^ 2 + (g.y - other.y) ^ 2)
+                        if dOther < dOwn then crossed = crossed + 1 end
+                    end
+                end
+            end
+            T:Stop()
+            if crossed > 0 then
+                return string.format(
+                    "allies took a mechanic on the other golem's side %d times", crossed)
+            end
+
             local held = samples > 0 and (onSide / samples) or 0
             if held < 0.75 then
                 return string.format(
                     "allies were on their own golem only %.0f%% of the time", held * 100)
             end
-            return string.format("ok:%d/%d across the two golems, on-side %.0f%% (phase %d)",
+            return string.format("ok:%d/%d across the two golems, on-side %.0f%%, no cross-side mechanics (phase %d)",
                 sideOne, sideTwo, held * 100, phaseAt)
         end
     """)(ns)

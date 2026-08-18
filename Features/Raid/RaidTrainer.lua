@@ -1117,6 +1117,10 @@ local ALLY_FIRE_CD  = 0.8
 -- killing the boss -- anything generous here makes the player a
 -- spectator at their own encounter.
 local ALLY_DAMAGE   = 3
+-- How far melee and the tank step in and out while swinging, and how
+-- fast. Cosmetic only -- see the note in the ally draw.
+local SWING_REACH  = 2.6
+local SWING_RATE   = 5.5
 -- How far they stand off what they are shooting. Closer for an add than
 -- for the boss, so a pack spawning visibly pulls the raid over to it.
 local ALLY_STANDOFF = 44
@@ -1766,9 +1770,29 @@ local function AllyGoal(ally, index)
         return ally.orbTarget.x, ally.orbTarget.y
     end
 
-    -- 5. A group mechanic.
+    -- 5. A group mechanic -- ON THIS ALLY'S SIDE.
+    --
+    -- The Sentinels' raid is split, and so are its mechanics: an
+    -- Unstable Miasma dropped on the Blood side is the Blood side's
+    -- problem, and the six allies all sprinting to whichever soak
+    -- appeared undid the split every time one landed. The far half
+    -- would abandon its golem, take a mechanic that was never theirs,
+    -- and walk back.
+    --
+    -- Judged by which boss the mechanic is nearer, which is the same
+    -- thing the fight means by "your side". Only on scenarios that
+    -- actually split -- the Twin Fangs and the Coiled Altar have two
+    -- bosses and one undivided raid.
+    local splitSides = S.scenario and S.scenario.splitSides and #S.bossActors > 1
+    local myBoss = splitSides and AllyBoss(ally) or nil
+    local farBoss = splitSides and S.bossActors[3 - (ally.side or 1)] or nil
     for _, a in ipairs(S.actors) do
-        if not a.dead and not a.resolved then
+        local mine = true
+        if farBoss then
+            mine = dist(a.x, a.y, myBoss.x, myBoss.y)
+                <= dist(a.x, a.y, farBoss.x, farBoss.y)
+        end
+        if mine and not a.dead and not a.resolved then
             if a.kind == "soak" and (
                     a.soakBy == "tank" and ally.role == "TANK"
                     or a.soakBy == "melee"
@@ -4323,8 +4347,35 @@ local function DrawDots(s)
         -- the information; where an ally is aiming is not, and the
         -- player keeps the one rotating sprite so their own facing still
         -- reads.
-        put(t, ROLE_ART[a.role] or "hex", a.x, a.y, ALLY_R * 3.1, s, col, 0.95)
-        t.label:SetPoint("CENTER", arena, "CENTER", a.x * s, a.y * s + 13)
+        -- Melee and the tank SWING.
+        --
+        -- Six sprites frozen in place around a boss read as furniture,
+        -- not as a raid -- the ranged genuinely do stand still, but a
+        -- melee holding station looked identical to one that had given
+        -- up. A small step in and out along the line to whatever it is
+        -- hitting is enough to make the group look alive.
+        --
+        -- Applied at DRAW time only, deliberately. It must not move the
+        -- body every mechanic in the file measures distances against:
+        -- a soak that resolved on a sprite's swing rather than on its
+        -- position would be unwinnable and invisible.
+        local ax, ay = a.x, a.y
+        if (a.role == "TANK" or a.role == "MELEE") and a.stagger <= 0 then
+            local tgt = a.target
+            if tgt then
+                local dx, dy = tgt.x - a.x, tgt.y - a.y
+                local d = math.sqrt(dx * dx + dy * dy)
+                if d > 0.001 then
+                    -- Staggered per ally so the group does not pulse in
+                    -- unison, which reads as a heartbeat rather than as
+                    -- several people fighting.
+                    local swing = math.sin(S.time * SWING_RATE + i * 1.7) * SWING_REACH
+                    ax, ay = a.x + dx / d * swing, a.y + dy / d * swing
+                end
+            end
+        end
+        put(t, ROLE_ART[a.role] or "hex", ax, ay, ALLY_R * 3.1, s, col, 0.95)
+        t.label:SetPoint("CENTER", arena, "CENTER", ax * s, ay * s + 13)
         t.label:SetText(a.label or "")
     end
 

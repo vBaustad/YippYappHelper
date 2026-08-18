@@ -438,6 +438,14 @@ SC.sentinels = {
     -- standing on. Their rate is what yours has to match.
     otherTeam = { dps = 20 },
 
+    -- The raid is SPLIT, and so are its mechanics: a soak on the Blood
+    -- side is the Blood side's problem. Without this the far half
+    -- abandoned its golem every time a circle landed on yours, took a
+    -- mechanic that was never theirs, and walked back. The Twin Fangs
+    -- and the Coiled Altar have two bosses and one undivided raid, so
+    -- they do not set it.
+    splitSides = true,
+
     -- "Standing in the middle to hit both bosses gives you both dots."
     -- The one rule on this fight a single player can obey alone.
     --
