@@ -77,40 +77,181 @@ end
 -- offset on one edge is exactly the bug that had the Consumables surface
 -- hanging 22px off the page, that was the dimension worth resolving.
 --
--- Only the common case: both a left-ish and a right-ish anchor onto the
--- same parent. Anything else falls back, so a resolved number is either
--- right or absent, never invented.
-local function edgeX(pts, side)
-    for _, p in ipairs(pts or {}) do
-        local point = tostring(p.p or "")
-        if point:find(side, 1, true) or point == side then
-            return p.x, p.rel
+------------------------------------------------------------
+-- Layout, solved rather than guessed.
+--
+-- The old version answered GetWidth from ONE level of anchors and
+-- returned 700 for anything it could not work out. That was enough for
+-- "do these two boxes overlap", which only needs relative positions --
+-- and wrong for anything that depends on how wide something actually
+-- is. A guide card about 530 wide in game reported 168, so every
+-- paragraph inside it wrapped roughly three times too often and every
+-- measured height inflated to match.
+--
+-- This resolves a rect properly: WIDTH first, from the anchor graph,
+-- walking to whatever a region is anchored to and on up to the screen;
+-- HEIGHT afterwards, because a wrapped string's height cannot be known
+-- until its width is. Hence two passes rather than one.
+--
+-- Coordinates here are TOP-DOWN (y grows downward), converted once at
+-- the anchor. WoW's own origin is bottom-left, and carrying both
+-- conventions through a solver is how sign errors get in. Checks that
+-- want raw anchor offsets still read _pts directly, which is what the
+-- overlap checks do.
+------------------------------------------------------------
+local SOLVE_W, SOLVE_H = 1024, 768
+
+-- Bumped whenever geometry changes, so a resolved rect can be cached
+-- within a pass and dropped the moment anything moves. Without it a page
+-- that re-lays out would keep its first answer forever.
+local LAYOUT_GEN = 0
+local function layoutChanged() LAYOUT_GEN = LAYOUT_GEN + 1 end
+
+local function fracX(point)
+    point = tostring(point or "")
+    if point:find("LEFT", 1, true) then return 0 end
+    if point:find("RIGHT", 1, true) then return 1 end
+    return 0.5
+end
+local function fracY(point)
+    point = tostring(point or "")
+    if point:find("TOP", 1, true) then return 0 end
+    if point:find("BOTTOM", 1, true) then return 1 end
+    return 0.5
+end
+
+local resolveRect
+-- Defined with the font metrics below; declared here because the
+-- solver above them needs both to size a string.
+local metricsOf, plainText
+
+--- The rect an anchor point is measured against.
+local function relRect(p, self, depth)
+    local rel = p and p.rel or self._parent
+    if rel == self then rel = self._parent end
+    if type(rel) ~= "table" then return 0, 0, SOLVE_W, SOLVE_H end
+    return resolveRect(rel, depth + 1)
+end
+
+--- Spread of anchor points along one axis, as (lowest, highest) pairs of
+--- {fraction of this region, absolute position}. Two anchors at
+--- different fractions pin a size.
+local function spread(pts, self, depth, isX)
+    local lo, hi
+    for _, p in ipairs(pts) do
+        local rl, rt, rw, rh = relRect(p, self, depth)
+        local at, f
+        if isX then
+            at = rl + fracX(p.relP) * rw + (p.x or 0)
+            f = fracX(p.p)
+        else
+            at = rt + fracY(p.relP) * rh - (p.y or 0)
+            f = fracY(p.p)
         end
+        if not lo or f < lo.f then lo = { f = f, at = at } end
+        if not hi or f > hi.f then hi = { f = f, at = at } end
+    end
+    if lo and hi and (hi.f - lo.f) > 0.01 then
+        local got = (hi.at - lo.at) / (hi.f - lo.f)
+        if got > 0 then return got end
     end
     return nil
 end
 
-function Region.GetWidth(self)
-    if self._w then return self._w end
-    local lx, lrel = edgeX(self._pts, "LEFT")
-    local rx, rrel = edgeX(self._pts, "RIGHT")
-    if lx and rx then
-        local parent = lrel or rrel or self._parent
-        if parent and parent ~= self and parent.GetWidth then
-            local pw = parent:GetWidth()
-            if pw and pw > 0 then
-                local w = pw + rx - lx
-                if w > 0 then return w end
-            end
+--- left, top, width, height -- absolute, y growing downward.
+function resolveRect(self, depth)
+    depth = depth or 0
+    if type(self) ~= "table" then return 0, 0, SOLVE_W, SOLVE_H end
+    if self._rectGen == LAYOUT_GEN and self._rect then
+        local r = self._rect
+        return r[1], r[2], r[3], r[4]
+    end
+    -- Cycles are legal in WoW (two frames anchored to each other) and
+    -- unresolvable here; depth also stops a chain that is merely long.
+    if depth > 24 or self._solving then
+        return 0, 0, self._w or SOLVE_W, self._h or SOLVE_H
+    end
+    self._solving = true
+
+    local pts = self._pts or {}
+
+    -- PASS ONE: width.
+    local w = self._w
+    if not w and self._all then
+        local _, _, aw = resolveRect(self._all, depth + 1)
+        w = aw
+    end
+    if not w and #pts >= 2 then w = spread(pts, self, depth, true) end
+    if not w and self._type == "FontString" then
+        w = #plainText(self) * metricsOf(self).w
+    end
+    if not w then
+        -- The PARENT's width, not a constant. A frame with one anchor
+        -- and no size is nearly always a container being filled, and 700
+        -- was a number that happened to be near the truth once.
+        local _, _, pw = relRect(pts[1], self, depth)
+        w = pw
+    end
+
+    -- PASS TWO: height, which for text needs the width settled above.
+    local h = self._h
+    if not h and self._all then
+        local _, _, _, ah = resolveRect(self._all, depth + 1)
+        h = ah
+    end
+    if not h and #pts >= 2 then h = spread(pts, self, depth, false) end
+    if not h and self._type == "FontString" then
+        local m = metricsOf(self)
+        local text = plainText(self)
+        if text == "" then
+            h = 0
+        elseif self._wrap == false or not w or w <= 0 then
+            h = m.h
+        else
+            h = math.max(1, math.ceil((#text * m.w) / w)) * m.h
         end
     end
-    return 700
+    if not h then
+        local _, _, _, ph = relRect(pts[1], self, depth)
+        h = ph
+    end
+
+    -- Position, from the first anchor.
+    local left, top
+    if pts[1] then
+        local rl, rt, rw, rh = relRect(pts[1], self, depth)
+        left = rl + fracX(pts[1].relP) * rw + (pts[1].x or 0) - fracX(pts[1].p) * w
+        top = rt + fracY(pts[1].relP) * rh - (pts[1].y or 0) - fracY(pts[1].p) * h
+    elseif self._all then
+        left, top = resolveRect(self._all, depth + 1)
+    else
+        left, top = relRect(nil, self, depth)
+    end
+
+    self._solving = nil
+    self._rect = { left, top, w, h }
+    self._rectGen = LAYOUT_GEN
+    return left, top, w, h
 end
-function Region.GetHeight(self) return self._h or 480 end
+
+function Region.GetWidth(self)
+    local _, _, w = resolveRect(self)
+    return w
+end
+function Region.GetHeight(self)
+    local _, _, _, h = resolveRect(self)
+    return h
+end
 function Region.GetSize(self) return self:GetWidth(), self:GetHeight() end
-function Region.SetWidth(self, w) self._w = w; return self end
-function Region.SetHeight(self, h) self._h = h; return self end
-function Region.SetSize(self, w, h) self._w = w; self._h = h; return self end
+function Region.SetWidth(self, w)
+    self._w = w; layoutChanged(); return self
+end
+function Region.SetHeight(self, h)
+    self._h = h; layoutChanged(); return self
+end
+function Region.SetSize(self, w, h)
+    self._w = w; self._h = h; layoutChanged(); return self
+end
 function Region.GetFrameLevel(self) return self._lvl or 1 end
 function Region.SetFrameLevel(self, l) self._lvl = l; return self end
 -- Recorded, not discarded. There are no pixels here, but "these two
@@ -144,7 +285,9 @@ function Region.GetTextColor(self)
     return c[1], c[2], c[3], c[4]
 end
 function Region.GetText(self) return self._text or "" end
-function Region.SetText(self, t) self._text = t; return self end
+function Region.SetText(self, t)
+    self._text = t; layoutChanged(); return self
+end
 -- Font metrics, close enough to catch a wrapping bug.
 --
 -- These were a flat eight pixels a character and a flat twelve pixels
@@ -170,7 +313,7 @@ local FONT_METRICS = {
 }
 local FONT_DEFAULT = { w = 6.4, h = 14 }
 
-local function metricsOf(self)
+function metricsOf(self)
     return FONT_METRICS[self._font or ""] or FONT_DEFAULT
 end
 
@@ -185,7 +328,7 @@ function Region.GetFontObject(self) return self._font end
 function Region.SetWordWrap(self, on) self._wrap = on and true or false; return self end
 
 --- Visible length, with colour escapes removed: they occupy no space.
-local function plainText(self)
+function plainText(self)
     return (self._text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
 end
 
@@ -235,13 +378,18 @@ function Region.SetPoint(self, p, rel, relP, x, y)
     end
     table.insert(self._pts, { p = p, relP = relP, x = x or 0, y = y or 0,
                               rel = rel or self._parent })
+    layoutChanged()
     return self
 end
-function Region.ClearAllPoints(self) self._pts = nil; self._all = nil; return self end
+function Region.ClearAllPoints(self)
+    self._pts = nil; self._all = nil; layoutChanged(); return self
+end
 -- Recorded rather than ignored. It used to fall through to the no-op
 -- catch-all, which meant a full-bleed background had no geometry at all
 -- and any check that asked about one got a silent wrong answer.
-function Region.SetAllPoints(self, rel) self._all = rel or self._parent; return self end
+function Region.SetAllPoints(self, rel)
+    self._all = rel or self._parent; layoutChanged(); return self
+end
 function Region.IsObjectType(self, t) return t == self._type end
 function Region.GetObjectType(self) return self._type or "Frame" end
 function Region.GetRegions(self) return end
@@ -5761,6 +5909,72 @@ def main():
         print("  FAIL trainer cysts: %s" % twostage)
         failures.append(("trainer cysts", str(twostage)))
 
+    # The utility advisor knows the dungeons people are actually running.
+    #
+    # This is the failure it already had once: the data was written for
+    # one keystone pool, the pool rolled over, and the window went quiet
+    # in every dungeon without anything looking broken. There is no error
+    # to catch -- ShowForCurrentInstance simply returns when the map is
+    # not in the table -- so the only way to notice is to ask.
+    utility = L.eval("""
+        function(ns)
+            local d = ns.UTILITY_DUNGEONS
+            if not d then return "UtilityData.lua published nothing" end
+            if not ns.UTILITY_BUILT_AT then return "no build date on the utility data" end
+
+            local n, thin = 0, {}
+            for mapID, entry in pairs(d) do
+                n = n + 1
+                if not entry.header or entry.header == "" then
+                    return mapID .. " has no header"
+                end
+                if not entry.lead or not entry.description then
+                    return entry.header .. " is missing its lead or description"
+                end
+                -- Thirteen classes, because a class with no entry shows
+                -- an empty window to whoever plays it.
+                local classes = 0
+                for _ in pairs(entry.byClass or {}) do classes = classes + 1 end
+                if classes ~= 13 then
+                    table.insert(thin, string.format("%s has %d classes", entry.header, classes))
+                end
+                for class, list in pairs(entry.byClass or {}) do
+                    if #list == 0 then
+                        return entry.header .. ": " .. class .. " has no abilities at all"
+                    end
+                    for _, raw in ipairs(list) do
+                        local id = type(raw) == "table" and raw.id or raw
+                        if type(id) ~= "number" then
+                            return entry.header .. ": " .. class .. " has a malformed entry"
+                        end
+                    end
+                end
+            end
+            if n == 0 then return "the utility data is empty" end
+            if #thin > 0 then return table.concat(thin, "; ") end
+
+            -- And the preview has to land on something real, which is
+            -- exactly what broke last time.
+            if ns.UtilityAdvisor and ns.UtilityAdvisor.ShowTest then
+                ns.UtilityAdvisor:ShowTest()
+                local shown = ns.UtilityAdvisor._lastShownMapID
+                if not shown or not d[shown] then
+                    return "the preview samples a dungeon the data does not have"
+                end
+                if ns.UtilityAdvisor.Hide then ns.UtilityAdvisor:Hide() end
+            end
+
+            return string.format("ok:%d dungeons, 13 classes each, built %s",
+                n, ns.UTILITY_BUILT_AT)
+        end
+    """)(ns)
+    if utility and str(utility).startswith("ok:"):
+        print("  ok   utility advisor: every dungeon is complete and the preview lands (%s)"
+              % str(utility)[3:])
+    else:
+        print("  FAIL utility advisor: %s" % utility)
+        failures.append(("utility advisor", str(utility)))
+
     # Every panel of the situation window can be raised from chat.
     #
     # The three windows it hosts cannot be summoned in normal play -- you
@@ -6314,6 +6528,75 @@ def main():
     else:
         print("  FAIL trainer restart: %s" % restart)
         failures.append(("trainer restart", str(restart)))
+
+    # The layout solver itself.
+    #
+    # Everything that measures text rests on this, and when it was wrong
+    # it was wrong QUIETLY: a guide card about 530 wide in game resolved
+    # to 168, so paragraphs wrapped three times too often, every measured
+    # height inflated to match, and no check noticed because they all
+    # compared inflated numbers against each other.
+    #
+    # Two claims, because the failure had two halves. Widths must come
+    # out near the truth, and heights must respond to how much text there
+    # actually is -- a stub that returns a constant satisfies neither and
+    # looks fine from the outside.
+    solver = L.eval("""
+        function(ns)
+            local UI = ns.RaidGuideUI
+            if not (UI and UI.BuildInto) then return "no guide UI" end
+            local host = CreateFrame("Frame")
+            host:SetSize(760, 520)
+            YippYappHelperDB = { raidGuide = { boss = "soulcoiler", role = "DAMAGER" } }
+            UI:BuildInto(host); UI:Refresh(); UI:SetPage(1)
+
+            local card = (UI._cards or {})[1]
+            if not card then return "no cards drawn" end
+            local w = card:GetWidth()
+
+            -- The reading column is the host minus the rail, its gutter
+            -- and a scrollbar, so a card lands somewhere near two thirds
+            -- of the page. Generous bounds on purpose: this is guarding
+            -- against 168 and against a constant, not pinning a pixel.
+            if w < host:GetWidth() * 0.45 then
+                return string.format(
+                    "a guide card resolved to %.0f of a %.0f page -- widths are"
+                    .. " collapsing again", w, host:GetWidth())
+            end
+            if w > host:GetWidth() then
+                return string.format("a guide card resolved to %.0f, wider than its"
+                    .. " %.0f page", w, host:GetWidth())
+            end
+
+            -- And height has to follow the text. Same font, same width,
+            -- one string much longer than the other.
+            local fs = host:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            fs:SetWidth(200)
+            fs:SetText("short")
+            local lo = fs:GetStringHeight()
+            fs:SetText(string.rep("a good deal more text than that ", 12))
+            local hi = fs:GetStringHeight()
+            if not (hi > lo * 2) then
+                return string.format(
+                    "a string twelve times longer measured %.0f against %.0f --"
+                    .. " wrapping is not reaching the height", hi, lo)
+            end
+
+            -- Wrap off means one line however long it is.
+            fs:SetWordWrap(false)
+            local flat = fs:GetStringHeight()
+            if flat >= hi then
+                return "SetWordWrap(false) still measured as wrapped"
+            end
+            return string.format("ok:card %.0f of %.0f page; %.0f -> %.0f as text grows,"
+                .. " %.0f with wrap off", w, host:GetWidth(), lo, hi, flat)
+        end
+    """)(ns)
+    if solver and str(solver).startswith("ok:"):
+        print("  ok   layout solver: %s" % str(solver)[3:])
+    else:
+        print("  FAIL layout solver: %s" % solver)
+        failures.append(("layout solver", str(solver)))
 
     # Glued string joins.
     #
