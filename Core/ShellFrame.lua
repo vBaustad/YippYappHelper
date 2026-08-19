@@ -72,6 +72,42 @@ end
 -- away the moment the fight ends rather than the request being lost.
 local closePending = false
 
+------------------------------------------------------------
+-- Closing while the client is refusing Hide
+--
+-- The window is only protected once a page with secure tiles has been
+-- mounted -- Mythic+ or Teleports -- so `securePages` records whether
+-- that has happened rather than assuming it. Before it does, an
+-- ordinary Hide works mid-fight and there is nothing to work around.
+--
+-- After it does, insecure code cannot hide the window at all. What CAN
+-- is a secure handler: a snippet running inside the restricted
+-- environment may hide a frame it holds a reference to, in combat, the
+-- same way a state driver hides an action bar. So the X button gets an
+-- invisible secure button laid over it, and the click goes there.
+--
+-- Laid over rather than made from the template. A frame inheriting a
+-- secure handler template is itself protected, and a protected child is
+-- what makes its parent protected -- building one into the window
+-- unconditionally would protect the window for people who never open
+-- either page, and take their combat dragging away to fix a problem
+-- they do not have. It is created when the window is already protected
+-- and not before.
+--
+-- Only the button. A slash command or a minimap click still cannot
+-- close the window mid-fight: the snippet needs a real click on the
+-- handler to run, and Click() on a protected button is itself blocked.
+-- Those keep the deferral, and the notice now says where the X is.
+--
+-- Escape is left alone deliberately. Routing it here means an override
+-- binding, and clearing an override binding is blocked in combat too --
+-- so a window closed mid-fight would go on swallowing Escape until the
+-- fight ended, and the game menu with it. A key that stops working is
+-- worse than a key that does nothing.
+------------------------------------------------------------
+local securePages = false
+local closer
+
 local combatGuard = CreateFrame("Frame")
 combatGuard:RegisterEvent("PLAYER_REGEN_DISABLED")
 combatGuard:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -190,6 +226,12 @@ local function Build()
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 2, 2)
     close:SetScript("OnClick", function() ns.Shell:Close() end)
     frame.closeButton = close
+    -- A rebuild drops the old button, so the overlay that sat on it has
+    -- to be rebuilt too rather than pointing at a frame nobody can see.
+    if closer then
+        closer = nil
+        Shell:EnableCombatClose()
+    end
 
     -- The medallion lives on its own frame above the background, not as
     -- a texture on the window.
@@ -907,19 +949,58 @@ function Shell:DiscardChrome()
     if wasShown then self:Open(page) end
 end
 
+--- Puts the secure overlay on the X, so a click closes mid-fight.
+---
+--- Called when a page with secure tiles is mounted, which is the moment
+--- the window becomes protected and the moment the overlay stops being
+--- a cost to everyone else. Attributes and frame refs cannot be set on
+--- a protected frame in combat, so a call that lands mid-fight does
+--- nothing and the next page mount picks it up.
+function Shell:EnableCombatClose()
+    securePages = true
+    if closer or not frame or not frame.closeButton then return end
+    if InCombatLockdown() then return end
+
+    -- Guarded because the whole window rides on it. If the template is
+    -- ever missing the frame is not built, the X keeps the plain path,
+    -- and the deferral below is what closes the window -- which is the
+    -- behaviour that was there before this existed. An error here would
+    -- take the rest of Build with it.
+    local built, made = pcall(CreateFrame, "Button", "YippYappShellCloser",
+        frame, "SecureHandlerClickTemplate")
+    if not built or not made then return end
+
+    closer = made
+    closer:SetAllPoints(frame.closeButton)
+    closer:SetFrameLevel(frame.closeButton:GetFrameLevel() + 5)
+    closer:SetFrameRef("shell", frame)
+    closer:SetAttribute("_onclick", [[ self:GetFrameRef("shell"):Hide() ]])
+    -- The button underneath never sees the mouse again, so its hover
+    -- state is driven from here. Without this the X goes dead-looking
+    -- the moment the overlay appears, which reads as the button having
+    -- broken rather than having been reinforced.
+    closer:SetScript("OnEnter", function()
+        if frame and frame.closeButton then frame.closeButton:LockHighlight() end
+    end)
+    closer:SetScript("OnLeave", function()
+        if frame and frame.closeButton then frame.closeButton:UnlockHighlight() end
+    end)
+    return closer
+end
+
 --- Closes the window, or promises to as soon as combat ends.
 ---
---- Hiding is as protected as showing once a secure page has been mounted
---- (see the note above registerSpecialFrame), so calling Hide here
---- mid-fight would trade one blocked-action error for another.
---- Remembering the request instead means the X button and Escape still
---- do what they look like they do, one fight later.
+--- The deferral is for the paths that cannot be made to work in combat
+--- at all -- /yh, the minimap button, anything script-driven -- and only
+--- while the window is protected. Until a secure page has been mounted
+--- the plain Hide is allowed mid-fight and there is no reason to make
+--- anyone wait for it.
 function Shell:Close()
     if not frame then return end
-    if InCombatLockdown() and frame:IsShown() then
+    if securePages and InCombatLockdown() and frame:IsShown() then
         closePending = true
         if ns.CombatNotice then
-            ns.CombatNotice("can't close in combat — it will close itself when the fight ends.")
+            ns.CombatNotice("can't close from a command in combat — click the X, or it will close itself when the fight ends.")
         end
         return
     end

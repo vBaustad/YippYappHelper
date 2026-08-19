@@ -416,7 +416,25 @@ function Region.SetScript(self, e, fn) self._scripts = self._scripts or {}; self
 function Region.GetLeft(self) return 0 end
 function Region.GetNormalTexture(self) return NewRegion("Texture") end
 function Region.GetParent(self) return self._parent end
-function Region.GetAttribute(self) return nil end
+-- Attributes and frame refs are stored rather than swallowed. The
+-- window's combat close is a secure handler -- a frame ref to the shell
+-- and an "_onclick" snippet that hides it -- and with a GetAttribute
+-- that always answered nil there was no way to tell a wired-up handler
+-- from one that had never been given its snippet.
+function Region.SetAttribute(self, k, v)
+    self._attr = self._attr or {}
+    self._attr[k] = v
+end
+function Region.GetAttribute(self, k)
+    return self._attr and self._attr[k] or nil
+end
+function Region.SetFrameRef(self, k, f)
+    self._frefs = self._frefs or {}
+    self._frefs[k] = f
+end
+function Region.GetFrameRef(self, k)
+    return self._frefs and self._frefs[k] or nil
+end
 function Region.GetNumPoints(self) return 0 end
 -- Reports what was actually set, which it did not used to: it returned
 -- a fixed TOPLEFT 0,0 whatever the frame had been anchored to. Anything
@@ -2828,6 +2846,75 @@ def main():
     else:
         print("  FAIL run journal: %s" % journal)
         failures.append(("run journal", str(journal)))
+
+    # Closing the window mid-fight. Once a page with secure tiles has
+    # been mounted the window is protected and insecure code cannot hide
+    # it at all, so the X carries a secure handler that can. Two halves
+    # to get wrong: the handler has to actually be wired to the window,
+    # and everything that CANNOT be made to work in combat -- the slash
+    # command, the minimap -- has to keep deferring rather than silently
+    # doing nothing. And before any secure page is mounted, none of this
+    # should apply: a plain Hide is allowed and nobody should be made to
+    # wait for the fight to end.
+    combatclose = L.eval("""
+        function(ns)
+            local Shell = ns.Shell
+            if not (Shell and Shell.Close and Shell.EnableCombatClose) then
+                return "shell close absent"
+            end
+            local realCombat = InCombatLockdown
+            local fighting = false
+            InCombatLockdown = function() return fighting end
+
+            local function finish(msg)
+                InCombatLockdown = realCombat
+                return msg
+            end
+
+            -- Unprotected window: combat is no reason to defer.
+            local ok, err = pcall(Shell.Open, Shell)
+            if not ok then return finish("open failed: " .. tostring(err)) end
+            if not Shell:IsOpen() then return finish("window did not open") end
+            fighting = true
+            Shell:Close()
+            if Shell:IsOpen() then
+                return finish("a window with no secure page was made to wait")
+            end
+
+            -- Now the case that needs the handler.
+            fighting = false
+            pcall(Shell.Open, Shell)
+            Shell:EnableCombatClose()
+            local closer = _G.YippYappShellCloser
+            if not closer then return finish("no secure closer was built") end
+            local snippet = closer:GetAttribute("_onclick")
+            if type(snippet) ~= "string" or not snippet:find("Hide", 1, true) then
+                return finish("closer has no snippet that hides anything")
+            end
+            if closer:GetFrameRef("shell") ~= _G.YippYappShell then
+                return finish("closer does not hold the window it closes")
+            end
+
+            -- The paths that cannot run a snippet keep their promise.
+            fighting = true
+            Shell:Close()
+            if not Shell:IsOpen() then
+                return finish("a protected window was hidden by insecure code")
+            end
+            fighting = false
+            FireEvent("PLAYER_REGEN_ENABLED")
+            if Shell:IsOpen() then
+                return finish("the deferred close never happened")
+            end
+            return finish("ok")
+        end
+    """)(ns)
+    if combatclose == "ok":
+        print("  ok   combat close: the X carries a secure handler, and only "
+              "the paths that cannot use it still wait for the fight")
+    else:
+        print("  FAIL combat close: %s" % combatclose)
+        failures.append(("combat close", str(combatclose)))
 
     # Sub-tab sync: the shell restores a remembered sub-tab on mount.
     # If it does not tell the page, the strip and the content disagree

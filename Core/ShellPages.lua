@@ -47,6 +47,15 @@ local function Adapt(def)
             local f = ns[def.frameKey]
             if not f then return end
 
+            -- Mounting this page is what makes the window protected --
+            -- its tiles are SecureActionButtonTemplate frames, and a
+            -- frame holding a protected frame is protected itself -- so
+            -- it is also the moment the window needs a way to close
+            -- during a fight. See the note in Core\ShellFrame.lua.
+            if def.secure and Shell.EnableCombatClose then
+                Shell:EnableCombatClose()
+            end
+
             f.inAppMode = true
             if def.appMode and type(ns[def.appMode]) == "function" then
                 if def.sizeless then
@@ -167,6 +176,8 @@ Adapt({
 })
 
 Adapt({
+    -- Secure: its dungeon teleport tiles are action buttons.
+    secure = true,
     id = "mythicplus", label = "Mythic+", order = 70,
     accent = { 0.0, 0.83, 1.0 },
     frameKey = "MythicPlusFrame",
@@ -200,6 +211,8 @@ Adapt({
 })
 
 Adapt({
+    -- Secure: its dungeon teleport tiles are action buttons.
+    secure = true,
     id = "teleports", label = "Teleports", order = 90,
     accent = { 0.53, 0.8, 1.0 },
     frameKey = "TeleportFrame",

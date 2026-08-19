@@ -1,5 +1,28 @@
 # YippYapp Helper - Changelog
 
+## v3.1.1 - Closing the window in combat (2026-08-19)
+
+### Fixed
+- **The X closes the window mid-fight.** Once the Mythic+ or Teleports
+  page has been opened, the window holds secure action tiles and a frame
+  holding a protected frame is protected itself, so the client refuses
+  to hide it and the close had to wait for the fight to end. The X now
+  carries a secure handler, which is allowed to hide a frame it holds a
+  reference to in combat -- the same mechanism that hides an action bar
+  on a state driver.
+- **A window with no secure page open no longer waits either.** Before
+  Mythic+ or Teleports has been mounted nothing about the window is
+  protected and an ordinary hide is legal mid-fight, but the close was
+  deferred anyway, on the assumption rather than the fact.
+- `/yh`, the minimap button and anything else script-driven still close
+  at the end of the fight, because a snippet only runs off a real click
+  and clicking a protected button from code is blocked in turn. The
+  notice says where the X is rather than only promising to close later.
+- Escape is unchanged and still does nothing mid-fight. Making it work
+  means an override binding, and those cannot be cleared in combat
+  either, so a window closed during a pull would go on swallowing
+  Escape -- and the game menu with it -- until the fight ended.
+
 ## v3.1.0 - The raid guide, the boss trainer, and healer trinkets (2026-08-19)
 
 ### Raid
