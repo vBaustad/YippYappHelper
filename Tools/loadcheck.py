@@ -113,8 +113,6 @@ function Region.SetHeight(self, h) self._h = h; return self end
 function Region.SetSize(self, w, h) self._w = w; self._h = h; return self end
 function Region.GetFrameLevel(self) return self._lvl or 1 end
 function Region.SetFrameLevel(self, l) self._lvl = l; return self end
-function Region.GetStringHeight(self) return 12 end
-function Region.GetStringWidth(self) return 60 end
 -- Recorded, not discarded. There are no pixels here, but "these two
 -- things were painted the same colour" is a claim about the code's
 -- own numbers and is perfectly decidable -- and it is exactly the claim
@@ -147,13 +145,67 @@ function Region.GetTextColor(self)
 end
 function Region.GetText(self) return self._text or "" end
 function Region.SetText(self, t) self._text = t; return self end
--- A crude proxy for font metrics: no real glyph widths here, but code
--- that lays out against measured text has to get SOMETHING that grows
--- with the string, or every such branch collapses to its zero case and
--- reads as tested. Colour escapes do not occupy space.
+-- Font metrics, close enough to catch a wrapping bug.
+--
+-- These were a flat eight pixels a character and a flat twelve pixels
+-- high, which made every wrap invisible: a paragraph that ran to three
+-- lines in game measured one line here, so a page that advances its
+-- cursor by measured height -- which is most of this addon -- packed its
+-- cards as if nothing wrapped and the harness saw no overlap. The bug
+-- and the check disagreed, and the check won.
+--
+-- Not real glyph widths: no font files here, and per-character widths
+-- vary. What matters is that the numbers GROW WITH THE FONT and that
+-- height depends on the width the string was given, because that is the
+-- relationship every layout bug of this kind is made of. Averages taken
+-- from WoW's default fonts at their usual sizes.
+local FONT_METRICS = {
+    GameFontNormalSmall  = { w = 5.4, h = 12 },
+    GameFontNormal       = { w = 6.4, h = 14 },
+    GameFontNormalLarge  = { w = 8.2, h = 18 },
+    GameFontNormalHuge   = { w = 11.0, h = 24 },
+    GameFontHighlight    = { w = 6.4, h = 14 },
+    GameFontHighlightSmall = { w = 5.4, h = 12 },
+    GameFontDisable      = { w = 6.4, h = 14 },
+}
+local FONT_DEFAULT = { w = 6.4, h = 14 }
+
+local function metricsOf(self)
+    return FONT_METRICS[self._font or ""] or FONT_DEFAULT
+end
+
+function Region.SetFontObject(self, f)
+    self._font = (type(f) == "string") and f or self._font
+    return self
+end
+function Region.GetFontObject(self) return self._font end
+-- Wrapping is ON unless something turns it off, which is WoW's default
+-- and the case that matters -- a title with wrap off is exactly the
+-- thing that must NOT be measured as three lines.
+function Region.SetWordWrap(self, on) self._wrap = on and true or false; return self end
+
+--- Visible length, with colour escapes removed: they occupy no space.
+local function plainText(self)
+    return (self._text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+end
+
 function Region.GetStringWidth(self)
-    local t = (self._text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-    return #t * 8
+    return #plainText(self) * metricsOf(self).w
+end
+
+--- Height AFTER wrapping to whatever width the string was given.
+---
+--- This is the whole point of the exercise. A layout that asks how tall
+--- a paragraph is, and is always told one line, cannot overlap in the
+--- model however badly it overlaps on screen.
+function Region.GetStringHeight(self)
+    local m = metricsOf(self)
+    local text = plainText(self)
+    if text == "" then return 0 end
+    local width = self._w
+    if self._wrap == false or not width or width <= 0 then return m.h end
+    local lines = math.max(1, math.ceil((#text * m.w) / width))
+    return lines * m.h
 end
 function Region.GetAtlas(self) return self._atlas end
 function Region.SetAtlas(self, a) self._atlas = a; return true end
@@ -215,9 +267,71 @@ function NewRegion(kind, parent)
 end
 
 function Region.CreateTexture(self, n, layer) return NewRegion("Texture", self) end
-function Region.CreateFontString(self, n, layer) return NewRegion("FontString", self) end
+function Region.CreateFontString(self, n, layer, template)
+    local r = NewRegion("FontString", self)
+    r._font = template
+    return r
+end
 function Region.CreateMaskTexture(self) return NewRegion("MaskTexture", self) end
 function Region.CreateAnimationGroup(self) return NewRegion("AnimationGroup", self) end
+
+-- Events, really registered and really dispatched.
+--
+-- RegisterEvent used to fall through to the CamelCase no-op, which made
+-- everything a module does at login untestable here: two of the three
+-- panels of the situation window build themselves on PLAYER_LOGIN, so
+-- under this harness they simply never existed -- indistinguishable from
+-- a module that had broken.
+local eventFrames, tracked = {}, {}
+
+function Region.RegisterEvent(self, event)
+    self._events = self._events or {}
+    self._events[event] = true
+    if not tracked[self] then
+        tracked[self] = true
+        eventFrames[#eventFrames + 1] = self
+    end
+    return self
+end
+
+function Region.UnregisterEvent(self, event)
+    if self._events then self._events[event] = nil end
+    return self
+end
+
+function Region.UnregisterAllEvents(self)
+    self._events = nil
+    return self
+end
+
+function Region.IsEventRegistered(self, event)
+    return (self._events and self._events[event]) and true or false
+end
+
+--- Fires one event at every frame listening for it.
+---
+--- Returns how many handlers ran and a list of the ones that threw, so
+--- a check can tell "nothing happened" from "nothing was listening".
+---
+--- Each handler is pcall-ed, because an event reaches EVERY module that
+--- registered for it: one of them touching a Blizzard global this file
+--- has not stubbed would otherwise abort a check about something else
+--- entirely. The failures are returned rather than swallowed -- a caller
+--- that cares can insist on an empty list.
+function FireEvent(event, ...)
+    local n, errs = 0, {}
+    for _, fr in ipairs(eventFrames) do
+        if fr._events and fr._events[event] then
+            local h = fr._scripts and fr._scripts.OnEvent
+            if h then
+                n = n + 1
+                local ok, err = pcall(h, fr, event, ...)
+                if not ok then errs[#errs + 1] = tostring(err) end
+            end
+        end
+    end
+    return n, errs
+end
 
 function CreateFrame(kind, name, parent, template)
     local f = NewRegion(kind or "Frame", parent)
@@ -1142,7 +1256,22 @@ def main():
 
     bis_n = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cardIdx) or 0 end")(ns)
     bis_pool = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cards) or {} end")(ns)
-    report("BiS stat priority cards", parse(pool_rects(bis_pool, bis_n)), None)
+    report("BiS cards (Catalyst note, then stat priority)",
+           parse(pool_rects(bis_pool, bis_n)), None)
+
+    # The Catalyst note is drawn in the doll's middle column, in the gap
+    # between the two runs of slot icons -- and that gap is measured off
+    # iconSize, which scales with the region. So it closes the moment the
+    # icons grow, which is exactly the class of arithmetic that left a
+    # whole empty row under the doll for as long as it did.
+    #
+    # Cards and icons are both parented to the page's content frame, so
+    # the two pools land in one group and comparing them is fair.
+    icon_n = L.eval("function(ns) return (ns.BisUI and ns.BisUI._iconIdx) or 0 end")(ns)
+    icon_pool = L.eval("function(ns) return (ns.BisUI and ns.BisUI._icons) or {} end")(ns)
+    report("BiS Catalyst note clears the doll's slots",
+           parse(pool_rects(bis_pool, bis_n))
+           + parse(pool_rects(icon_pool, icon_n)), None)
 
     # The Mythic+ Home cards. Two columns that each flow their own stack,
     # so the failure worth catching is a column cursor that does not
@@ -1263,9 +1392,20 @@ def main():
                     print("  FAIL %s: %s" % (label, msg))
                     failures.append((label, msg))
                     break
-                # No region width: the cards live in a scroll frame whose
-                # width the stub reports as the page's, and overlap is
-                # the claim worth making here.
+                # Overlap only, and deliberately.
+                #
+                # A vertical fit assertion was tried here and taken out
+                # again: the cards sit inside a ScrollFrame, so content
+                # taller than the view scrolls rather than being lost,
+                # and the check failed on every page for a thing that is
+                # not a defect.
+                #
+                # It also could not have been trusted even where it did
+                # apply. The stub under-resolves widths -- a card that is
+                # about 530 wide in game reports 168 -- so paragraphs
+                # wrap about three times too often and every measured
+                # height is inflated to match. Fixing that means a real
+                # two-pass layout solver, not a better guess.
                 boxes = parse(pool_rects(guide_pool, n))
                 if len(boxes) < 2 and want > 0:
                     msg = "page %d drew %d cards" % (page, len(boxes))
@@ -5529,7 +5669,13 @@ def main():
 
             --- Play a round. `follow` walks to whatever the mechanic
             --- currently wants; otherwise the player never moves.
-            local function play(follow)
+            ---
+            --- `onCyst` plays it the way the old version of the wind
+            --- rewarded: place everything correctly, then stand ON the
+            --- cyst when the gale lands. Contact bursts a cyst, so that
+            --- is the mistake, and this file has to be able to tell the
+            --- two plays apart or the correction is not being tested.
+            local function play(follow, onCyst)
                 T:Start("sisterrag", false)
                 S.countdown = 0
                 local orders = {}
@@ -5548,8 +5694,22 @@ def main():
                     if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
                     if follow then
                         for _, a in ipairs(S.actors) do
-                            if (a.kind == "place" or a.kind == "wind") and a.tunnel then
+                            if a.kind == "place" and a.tunnel then
+                                -- The cyst is dropped on the marker
+                                -- across the room from its tunnel.
                                 S.px, S.py = a.tunnel.cx, a.tunnel.cy
+                            elseif a.kind == "wind" and a.tunnel then
+                                -- And ridden from BETWEEN the tunnel and
+                                -- that marker. The middle of the room is
+                                -- on the line between them, which is why
+                                -- the pixel stack put everyone there.
+                                if onCyst then
+                                    S.px, S.py = a.tunnel.cx, a.tunnel.cy
+                                else
+                                    S.px, S.py = 0, 0
+                                end
+                            elseif a.kind == "stack" then
+                                S.px, S.py = 0, 0
                             end
                         end
                     end
@@ -5570,6 +5730,7 @@ def main():
 
             local good, err = play(true)
             if err then return err end
+            local onCyst = play(true, true)
             local bad = play(false)
 
             if good.placed == 0 then
@@ -5583,8 +5744,14 @@ def main():
                     "doing the preparation missed %d and ignoring it missed %d -- it changes nothing",
                     good.missed, bad.missed)
             end
-            return string.format("ok:%d cysts placed, %d misses against %d",
-                good.placed, good.missed, bad.missed)
+            if good.missed >= onCyst.missed then
+                return string.format(
+                    "riding the corridor missed %d and standing on the cyst missed %d -- contact is not bursting it",
+                    good.missed, onCyst.missed)
+            end
+            return string.format(
+                "ok:%d cysts placed, %d misses riding it against %d standing on it and %d ignoring it",
+                good.placed, good.missed, onCyst.missed, bad.missed)
         end
     """)(ns)
     if twostage and str(twostage).startswith("ok:"):
@@ -5593,6 +5760,194 @@ def main():
     else:
         print("  FAIL trainer cysts: %s" % twostage)
         failures.append(("trainer cysts", str(twostage)))
+
+    # Every panel of the situation window can be raised from chat.
+    #
+    # The three windows it hosts cannot be summoned in normal play -- you
+    # cannot start a ready check to see where it sits -- so "/yh test" is
+    # the only way to look at one without finishing a keystone. Two of
+    # them also build themselves at PLAYER_LOGIN, which is exactly the
+    # wiring most likely to rot silently, so this fires that event and
+    # then drives the command for real rather than calling the API
+    # underneath it.
+    panels = L.eval("""
+        function(ns)
+            if not ns.Hud then return "the situation window is not loaded" end
+            if FireEvent("PLAYER_LOGIN") == 0 then
+                return "nothing was listening for PLAYER_LOGIN"
+            end
+
+            local order, modes = ns.Hud:Modes()
+            local seen = {}
+            for _, id in ipairs(order) do seen[id] = true end
+            for _, want in ipairs({ "readyCheck", "mplusCompletion", "utilityAdvisor" }) do
+                if not seen[want] then
+                    return want .. " never registered with the situation window"
+                end
+            end
+
+            local host = _G.YippYappHud
+            local yh = SlashCmdList.YIPPYAPPHELPER
+            if not yh then return "no /yh handler" end
+
+            local tried = 0
+            for _, id in ipairs(order) do
+                local m = modes[id]
+                if not m.aliases or #m.aliases == 0 then
+                    return id .. " registered no chat alias, so nobody can raise it"
+                end
+                -- Every alias, and the id itself, has to reach the panel.
+                for _, word in ipairs(m.aliases) do
+                    if ns.Hud:Find(word) ~= id then
+                        return string.format("alias %s resolves to %s, not %s",
+                            word, tostring(ns.Hud:Find(word)), id)
+                    end
+                end
+                if ns.Hud:Find(id) ~= id then return id .. " cannot be found by its own id" end
+
+                -- And the command has to put it on screen at its own size.
+                yh("test " .. m.aliases[1])
+                if ns.Hud:Visible() ~= id then
+                    return string.format("/yh test %s raised %s",
+                        m.aliases[1], tostring(ns.Hud:Visible()))
+                end
+                if not host:IsShown() then
+                    return string.format("/yh test %s left the window hidden", m.aliases[1])
+                end
+                -- tonumber because GetScale is not stubbed and falls
+                -- through to the no-op, which returns the frame itself.
+                local w  = math.floor(tonumber(host:GetWidth()) or 0)
+                local pw = math.floor((tonumber(m.panel:GetWidth()) or 0)
+                    * (tonumber(m.panel:GetScale()) or 1))
+                if math.abs(w - pw) > 1 then
+                    return string.format("%s: window is %dpx wide for a %dpx panel", id, w, pw)
+                end
+                tried = tried + 1
+            end
+
+            yh("test off")
+            if ns.Hud:Visible() or host:IsShown() then
+                return "/yh test off left something on screen"
+            end
+            if ns.Hud:Find("wobble") ~= nil then return "an unknown word matched a panel" end
+
+            return string.format("ok:%d panels, each raised by name and dismissed", tried)
+        end
+    """)(ns)
+    if panels and str(panels).startswith("ok:"):
+        print("  ok   panels: every panel of the shared window is testable from chat (%s)"
+              % str(panels)[3:])
+    else:
+        print("  FAIL panels: %s" % panels)
+        failures.append(("panels", str(panels)))
+
+    # The gale moves you, and where it moves you is the mechanic.
+    #
+    # "Stack between the wind and the cyst" is not a position check --
+    # standing still and being scored is what the old version did. The
+    # gale has to CARRY you: into the cyst if you were in its corridor,
+    # which bursts and throws you back toward the boss, and into the rim
+    # if you were not. So this drives one gale twice and looks at where
+    # the player was left, because a knockback that scores correctly and
+    # moves nobody would pass a scoring test and teach nothing.
+    gale = L.eval("""
+        function(ns)
+            local T, S = ns.RaidTrainer, ns.RaidTrainer.state
+            local f = ns.RaidTrainerFrame
+            local update = f._scripts.OnUpdate
+
+            --- Play until the first gale lands with the player parked
+            --- either in its corridor or well off the axis, then let the
+            --- knockback finish and report where they were left.
+            local function ride(inCorridor)
+                T:Start("sisterrag", false)
+                S.countdown = 0
+                local settle, credited, dist0 = nil, nil, nil
+                for step = 1, math.ceil(160 / 0.05) do
+                    S.hp = 100
+                    if S.bossActor then S.bossActor.hp = S.bossActor.maxHp end
+
+                    local wind
+                    if not settle then
+                        for _, a in ipairs(S.actors) do
+                            if a.kind == "place" and a.tunnel then
+                                S.px, S.py = a.tunnel.cx, a.tunnel.cy
+                            elseif a.kind == "stack" then
+                                S.px, S.py = 0, 0
+                            elseif a.kind == "wind" and a.tunnel and a.ux then
+                                wind = a
+                                if inCorridor then
+                                    -- The middle of the room, which is on
+                                    -- the line from the tunnel to its cyst.
+                                    S.px, S.py = 0, 0
+                                else
+                                    -- The same way down the room, 30 units
+                                    -- off the axis: not stacked.
+                                    S.px, S.py = -a.uy * 30, a.ux * 30
+                                end
+                            end
+                        end
+                    end
+
+                    local wasResolved = wind and wind.resolved
+                    local p0, f0 = S.passed, S.failed
+                    update(f, 0.05)
+
+                    if wind and wind.resolved and not wasResolved then
+                        credited = S.passed > p0
+                        if not credited and S.failed == f0 then
+                            return nil, "the gale neither credited nor faulted"
+                        end
+                        dist0 = math.sqrt(S.px * S.px + S.py * S.py)
+                        settle = step + 20   -- let the push play out
+                    end
+                    if settle and step >= settle then
+                        return {
+                            credited = credited,
+                            moved = math.abs(math.sqrt(S.px * S.px + S.py * S.py) - dist0),
+                            out = math.sqrt(S.px * S.px + S.py * S.py),
+                        }
+                    end
+                    if not S.running and S.phaseIndex < #(S.phases or {}) then
+                        S.running, S.hp = true, 100
+                    end
+                    if not S.running then break end
+                end
+                T:Stop()
+                return nil, "no gale ever landed"
+            end
+
+            local rode, err = ride(true)
+            if err then return err end
+            local wide, err2 = ride(false)
+            if err2 then return err2 end
+            T:Stop()
+
+            if not rode.credited then
+                return "standing in the corridor was not credited"
+            end
+            if wide.credited then
+                return "standing 30 units off the axis was credited anyway"
+            end
+            if rode.moved < 5 then
+                return string.format(
+                    "the gale credited but barely moved anyone (%.0f units)", rode.moved)
+            end
+            if wide.out <= rode.out then
+                return string.format(
+                    "off the line left you at %.0f and riding it left you at %.0f -- the wrong way round",
+                    wide.out, rode.out)
+            end
+            return string.format("ok:rode it to %.0f from centre, blown wide to %.0f",
+                rode.out, wide.out)
+        end
+    """)(ns)
+    if gale and str(gale).startswith("ok:"):
+        print("  ok   trainer gale: the wind carries you -- into the cyst, or into the rim (%s)"
+              % str(gale)[3:])
+    else:
+        print("  FAIL trainer gale: %s" % gale)
+        failures.append(("trainer gale", str(gale)))
 
     # The raid plays to the assignment, not to instinct.
     #
