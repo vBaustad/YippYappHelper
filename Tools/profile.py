@@ -35,11 +35,19 @@ from lupa import LuaRuntime                       # noqa: E402
 import loadcheck as LC                            # noqa: E402
 
 
-def build():
-    """A loaded addon, in a fresh Lua state."""
+def build(track_regions=False, stub_anchors=True):
+    """A loaded addon, in a fresh Lua state.
+
+    `track_regions` registers every region so Tools/render.py can walk
+    the tree. `stub_anchors` silences the anchor recorder, which is
+    right for measuring garbage and wrong for drawing -- the renderer
+    needs exactly the anchors this throws away.
+    """
     L = LuaRuntime(unpack_returned_tuples=False)
     L.execute("_G = _G or _ENV")
     L.execute(LC.PRELUDE)
+    if track_regions:
+        L.execute("_TRACK_REGIONS = true")
     ns = L.eval("{}")
     run_lua = L.eval("""
         function(src, name, ns)
@@ -72,12 +80,13 @@ def build():
     #
     # In the client these are C functions and allocate no Lua garbage at
     # all, so a no-op is much closer to the truth than the recorder is.
-    L.execute("""
-        local mt = getmetatable(UIParent)
-        rawset(mt, "SetPoint", function(self) return self end)
-        rawset(mt, "ClearAllPoints", function(self) return self end)
-        rawset(mt, "SetAllPoints", function(self) return self end)
-    """)
+    if stub_anchors:
+        L.execute("""
+            local mt = getmetatable(UIParent)
+            rawset(mt, "SetPoint", function(self) return self end)
+            rawset(mt, "ClearAllPoints", function(self) return self end)
+            rawset(mt, "SetAllPoints", function(self) return self end)
+        """)
     return L, ns, load_secs
 
 

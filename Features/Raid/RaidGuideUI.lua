@@ -358,6 +358,9 @@ function UI:BuildInto(parent)
 
     host = CreateFrame("Frame", nil, parent)
     host:SetAllPoints(parent)
+    -- For Tools/render.py, same convention as UI._cards: the one handle
+    -- it needs to find this page and open the frames above it.
+    UI._host = host
 
     ------------------------------------------------------------
     -- Boss list
