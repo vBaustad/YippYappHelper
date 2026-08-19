@@ -109,3 +109,114 @@ So this is one insertion point, not a feature threaded through the page.
 - The journal index is built lazily and throttled on failure — see
   `GetJournalItemLink`. A picker opening for the first time may need to
   handle "not indexed yet" rather than showing an empty list.
+
+---
+
+## Crest advice: rebuild around promotion, not per-rank greed
+
+**Status:** specced from a live panel that gave contradictory advice. The
+cheap corrections are done; the model changes are not.
+
+The Improvements list told a +10 / Heroic-raid character to spend 160
+Champion crests, in an order that put two rows under "Spend here first",
+reported a 200-crest wallet as 160, and warned that one 302 trinket would be
+overtaken while staying silent about a weapon in exactly the same position.
+Chasing each of those found one engine that cannot express what it knows.
+
+### The four structural causes
+
+**The cascade means one fact per slot.** `ns:GetRecommendation` is nine rules
+that return early, so which fact a slot gets to state depends on rule order,
+not importance. `isFirst` returns at the top of rules 6-8 before the
+`overtaken` branch three lines below is ever reached — which is exactly why
+the weapon and the trinket, in identical positions, got opposite advice.
+
+**Every wallet plans alone.** `GetCrestPlan` is per-track and the panel merges
+by label, so five independent plans each contribute a "first" and a
+priority-2 Wrist can outrank two priority-4 trinkets.
+
+**Scarcity is declared, not derived.** `preciousCrests` / `freeCrests` are
+static per-profile lists. The real income model — which content pays which
+crest — is `ns.PROGRESSION.CREST_SOURCES`, and nothing reads it.
+
+**Two ceilings disagree.** `GetDropCeiling` uses the raid track's entry level
+and excludes the vault; `GetReplacementRisk` uses the raid track's max and
+folds the vault in. So "will this stick" is judged against one number and "is
+this slot at risk" against another, 10 item levels apart.
+
+### The model that replaces it
+
+**Score, don't cascade.** Every slot gets a score and a *set* of applicable
+facts; the label comes from the score band and the reason names the one or
+two facts moving it most. A row can then say "yes, but temporary" instead of
+having to pick.
+
+**Plan once, globally.** One order over all slots, annotated with which wallet
+pays. Only one row can say "do this first".
+
+**The drop band replaces the single ceiling.** Two numbers, not one: the
+lowest and highest item level the player's own content hands out. For a
+Heroic / +10 character that is 305 (raid entry) and 311 (end of dungeon).
+Three bands follow, and they are the whole scoring model:
+
+| Band | A crest buys |
+| --- | --- |
+| below the low drop | rental stats only — the mark it sets is dead on arrival |
+| between low and high | mark value: cashes in when the weaker source fills the slot |
+| above the high drop | permanent item level |
+
+`GetDropCeiling` already computes both numbers and throws the low one away.
+
+**Rank 6 is a breakpoint, not a rank.** Completing a track promotes the piece
+onto the next track at rank 2 (`ns.TRACK_FREE_RANKS`, 2 ranks on every track
+in Season 2), so finishing a track pre-pays 40 crests of the tier above. This
+is the only crest conversion in the game — Vaskarn does not trade upward.
+
+The plan walk buys **one rank at a time, re-picking the best slot after
+each**, which is structurally incapable of saving toward a breakpoint. On the
+panel that started this: 160 Champion bought one promotion and two trinkets
+stranded mid-track, where the same 160 buys two promotions. The unit of
+planning has to become a *run of ranks to the next promotion*, costed and
+compared whole, with loose ranks as the fallback when no promotion is
+reachable.
+
+**Achievement for dead wallets, power for live ones.** These run at the same
+time, not in sequence:
+
+- A wallet whose track max sits under the drop floor can never buy a
+  permanent item level. The "of the Mist" achievement is the only durable
+  return left in it — chase completion, which flattens the set.
+- A wallet at or above the drop floor should chase power: weapon, trinkets,
+  tier. The achievement is far off and irrelevant.
+
+Rule 5.5 chases the *lowest* missing achievement and breaks. But a 50%
+discount is worth exactly the crests still to be spent on that track, so the
+lowest missing one is usually the least valuable. Rank by remaining spend.
+
+**Overflow is the income model.** Capping a track pushes income down a tier,
+so the fastest route to outgrowing Champion runs entirely through content
+that never pays Champion. The advice is never "run M0s for Champion" — it is
+"run the highest thing you can, cap top-down, spend what spills."
+
+### Still missing
+
+- **No model of time.** `ns.CREST_WEEKLY_INCREMENT` is defined and read by
+  nothing. Caps make this a throughput problem, so "you need 380 more
+  Champion" is only actionable as "that is two weeks of overflow".
+- **No per-slot drop likelihood.** The strongest rule in every community
+  guide is *solve the slots your content will not* — a slot your keys fill
+  weekly is a poor crest target; one nothing has offered in three weeks is
+  where the same crests are worth most. Wants a static table shaped like
+  `ns.SLOT_PRIORITY`.
+- **No set-bonus awareness.** A lower-track piece completing 4pc beats
+  another week without it, and the recommender has no concept of tier.
+- **Trinkets ranked by item level alone.** `Features/Trinkets/TrinketData.lua`
+  exists and the recommender never consults it, so a bad trinket at 308 is
+  advised over a good one at 295.
+
+### Verify before building on it
+
+The Myth "of the Mist" threshold may be 331 rather than the track max of 334
+that `GetAchievementProgress` assumes. Sourced from a boost-site guide, which
+is the genre of source that got the crest exchange backwards in the first
+place — check the achievement in game before acting on it.

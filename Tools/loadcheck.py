@@ -22,6 +22,7 @@ instead of at the thing actually being tested.
 """
 
 import os
+import pathlib
 import re
 import sys
 import xml.parsers.expat
@@ -2272,18 +2273,35 @@ def main():
         print("  FAIL crest caps: %s" % caps)
         failures.append(("crest caps", str(caps)))
 
-    # Don't plan the wallet to zero on a track that cannot refill.
+    # Don't hold crests back on a wallet the content has outgrown.
     #
-    # This is the reported failure: crests all spent on deep upgrades,
-    # then a capped week with nothing left to put on a new drop -- which
-    # is the piece most worth upgrading, because its slot's high-water
-    # mark is already paid for. A reserve is only correct where income
-    # has actually stopped, so the interesting half of this check is
-    # that tracks which still earn do NOT hold anything back.
+    # The reserve was added for a real failure: crests all spent on deep
+    # upgrades, then a capped week with nothing left to put on a new
+    # drop. But it protects a FUTURE purchase, and a track whose crests
+    # can no longer buy any piece the player will be handed has no
+    # future purchase to protect -- every drop arrives on a higher track
+    # than those crests are valid for. Holding there just retires item
+    # levels the player could be wearing.
+    #
+    # Worth stating plainly: with the risk thresholds as they stand the
+    # live half of this branch is unreachable. The reserve needs a track
+    # that is capped, has no uncapped income, and owns a "high" risk
+    # slot -- and risk is a gap of 20+ against a ceiling that includes
+    # the raid track's MAX, so no Hero slot (305 and up against 321) or
+    # Myth slot can ever qualify. Every wallet that could reach the
+    # branch was one the player had outgrown, which is precisely where
+    # reserving is wrong. The gate stays because it is the correct
+    # semantic and the risk model is due to be reconciled against the
+    # drop band; the check below pins the gate itself rather than
+    # pretending a live reserve can currently be constructed.
     reserve = L.eval("""
         function(ns)
             local adv = ns:GetCrestPlan("Adventurer")
             if not adv then return "no Adventurer plan" end
+            -- The preconditions the reserve branch used to fire on are
+            -- all still true; only the outgrown gate stops it now. If
+            -- any of these stopped holding, this check would be passing
+            -- for the wrong reason.
             if not adv.seasonCapped then
                 return "the fixture's capped track does not read as capped"
             end
@@ -2291,48 +2309,157 @@ def main():
                 return "Adventurer claims uncapped income, so the reserve branch "
                     .. "is unreachable and this check is vacuous"
             end
-            if (adv.reserve or 0) <= 0 then
-                return "a capped track with no income reserved nothing -- the "
-                    .. "player can still plan down to their last crest"
+            if not adv.outgrown then
+                return "Adventurer does not read as outgrown, so the gate under "
+                    .. "test is not the thing holding the reserve at zero"
             end
-            -- A reserve that eats the wallet is the same paralysis with
-            -- extra steps.
-            if adv.spendable < adv.cost then
-                return "the reserve left " .. adv.spendable
-                    .. ", which cannot buy a single " .. adv.cost .. "-crest rank"
+            if (adv.reserve or 0) ~= 0 then
+                return "an outgrown wallet held " .. adv.reserve
+                    .. " back for a drop its crests can never pay for"
             end
-            if adv.reserve + adv.spendable ~= adv.held then
-                return "reserve plus spendable is " .. (adv.reserve + adv.spendable)
-                    .. ", not the " .. adv.held .. " actually held"
+            -- The freed crests have to actually reach the plan, or the
+            -- fix is cosmetic.
+            if adv.spendable ~= adv.held then
+                return "outgrown wallet holds " .. adv.held .. " but plans only "
+                    .. adv.spendable
             end
-            -- The header prints affordableNow; it must count spendable
-            -- crests, or the panel offers upgrades its own list withholds.
-            if adv.affordableNow ~= math.floor(adv.spendable / adv.cost) then
+            if adv.affordableNow ~= math.floor(adv.held / adv.cost) then
                 return "the header advertises " .. adv.affordableNow
-                    .. " upgrades from a spendable " .. adv.spendable
+                    .. " upgrades from " .. adv.held .. " held"
             end
 
-            -- Veteran is capped too, but the quest boxes keep paying, so
-            -- holding crests back there would be hoarding against a
-            -- wallet that refills on its own.
+            -- The gate reads off the drop band, so pin the band too --
+            -- a band that collapsed to one number would classify every
+            -- track the same way and this would still pass.
+            local low, high, lowTrack = ns:GetDropBand()
+            if not (low and high and low < high) then
+                return "drop band is " .. tostring(low) .. "-" .. tostring(high)
+                    .. ", not two distinct sources"
+            end
+            if ns:GetDropCeiling() ~= high then
+                return "the band's high end and GetDropCeiling disagree"
+            end
+            -- Heroic profile: the raid hands out 305 and a +10 hands out
+            -- 311, so everything below Hero is outgrown and Hero itself
+            -- is not.
+            for _, t in ipairs({ "Adventurer", "Veteran", "Champion" }) do
+                if not ns:IsCrestOutgrown(t) then
+                    return t .. " should be outgrown at a " .. low .. " drop floor"
+                end
+            end
+            for _, t in ipairs({ "Hero", "Myth" }) do
+                if ns:IsCrestOutgrown(t) then
+                    return t .. " should not be outgrown at a " .. low .. " drop floor"
+                end
+            end
+
+            -- Unchanged, and still the other half of the rule: a track
+            -- that still earns holds nothing back either.
             local vet = ns:GetCrestPlan("Veteran")
             if vet and (vet.reserve or 0) ~= 0 then
                 return "Veteran held crests back despite uncapped income still coming"
             end
-            -- Champion is not capped at all.
             local champ = ns:GetCrestPlan("Champion")
             if champ and (champ.reserve or 0) ~= 0 then
                 return "an uncapped track held crests back"
             end
-            return "ok:" .. adv.reserve
+            return string.format("ok:%d:%d:%s", low, high, lowTrack)
         end
     """)(ns)
     if reserve and str(reserve).startswith("ok:"):
-        print("  ok   crest reserve: a capped track with no income holds %s back; "
-              "tracks that still earn hold nothing" % str(reserve)[3:])
+        low, high, lowTrack = str(reserve)[3:].split(":")
+        print("  ok   crest reserve: content hands out %s-%s (%s), so the three "
+              "tracks under it plan every crest and keep none" % (low, high, lowTrack))
     else:
         print("  FAIL crest reserve: %s" % reserve)
         failures.append(("crest reserve", str(reserve)))
+
+    # What is standing between the player and the next discount.
+    #
+    # GetAchievementProgress splits the remaining slots into ones crests
+    # can fix and ones needing a drop, and Rule 5.5 only speaks when the
+    # second set is empty -- so the addon computed the blockers and then
+    # went silent in exactly the case a player most needs naming. The
+    # split is now readable; this pins that it stays coherent, because a
+    # blocker quietly reclassified as upgradeable would put the advisor
+    # back to promising an achievement that crests cannot reach.
+    achieve = L.eval("""
+        function(ns)
+            local chase = ns:GetChasedAchievement()
+            if not chase then return "nothing left to chase on the fixture" end
+
+            local blockers, remaining, cost, upgradeable =
+                ns:GetAchievementBlockers(chase.track)
+            if remaining ~= chase.remaining then
+                return "the chase and the blocker query disagree on how many "
+                    .. "slots remain (" .. chase.remaining .. " vs " .. remaining .. ")"
+            end
+            -- Every remaining slot is one or the other. If these stop
+            -- adding up, a slot has gone missing from the advice.
+            if #blockers + upgradeable ~= remaining then
+                return #blockers .. " blocked plus " .. upgradeable
+                    .. " upgradeable is not the " .. remaining .. " remaining"
+            end
+            -- The fixture leaves most of the doll empty, and an empty
+            -- slot cannot be bought up to a threshold. Blockers being
+            -- zero here would mean needsReplacement never got set and
+            -- the check is passing vacuously.
+            if #blockers == 0 then
+                return "no slot needs a drop, so the blocked branch is untested"
+            end
+            for _, b in ipairs(blockers) do
+                if not b.slotName or b.slotName == "" then
+                    return "a blocker came back without a slot name to print"
+                end
+                if b.crestCost then
+                    return b.slotName .. " is filed as blocked but carries a "
+                        .. "crest cost, so it is really upgradeable"
+                end
+            end
+            if cost < 0 then return "negative crest cost" end
+
+            -- The season's own name for the achievement. The ids were
+            -- rolled to Season 2 and these strings were not, so the
+            -- addon told players to look up an achievement that no
+            -- longer matches the one it checks.
+            if chase.name ~= chase.track .. " " .. ns.DISCOUNT_ACHIEVEMENT_SUFFIX then
+                return "achievement name '" .. chase.name .. "' is not built "
+                    .. "from the shared suffix"
+            end
+            return string.format("ok:%s:%d:%d", chase.track, remaining, #blockers)
+        end
+    """)(ns)
+    if achieve and str(achieve).startswith("ok:"):
+        track, remaining, blocked = str(achieve)[3:].split(":")
+        print("  ok   achievement blockers: %s is %s slots out, %s of them "
+              "wanting a drop rather than crests" % (track, remaining, blocked))
+    else:
+        print("  FAIL achievement blockers: %s" % achieve)
+        failures.append(("achievement blockers", str(achieve)))
+
+    # The season name, guarded at the source.
+    #
+    # Season 1's "of the Dawn" outlived the id table it belonged to and
+    # sat in two files printing the wrong achievement. One shared suffix
+    # replaced both; this stops a third copy being typed out by hand.
+    stale = []
+    for luafile in sorted(pathlib.Path(".").rglob("*.lua")):
+        if "Libs" in luafile.parts:
+            continue
+        body = luafile.read_text(encoding="utf-8", errors="replace")
+        for n, line in enumerate(body.splitlines(), 1):
+            # Comments are where the reason for the rename is written
+            # down, so they are the one place the old name belongs.
+            if line.lstrip().startswith("--"):
+                continue
+            if 'of the Dawn"' in line or "of the Dawn)" in line:
+                stale.append("%s:%d" % (luafile.as_posix(), n))
+    if not stale:
+        print("  ok   season naming: the outgrown achievement is named from one "
+              "shared suffix, no Season 1 copies left")
+    else:
+        print("  FAIL season naming: stale 'of the Dawn' at %s" % ", ".join(stale))
+        failures.append(("season naming", ", ".join(stale)))
 
     # A crest spent above what your content drops is banked by the slot's
     # high-water mark; one spent below it is overtaken by the next piece

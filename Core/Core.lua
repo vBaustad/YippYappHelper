@@ -1033,7 +1033,8 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
             local manualOverride = db.discounts and db.discounts[trackName]
             local source = ""
             if hasAchieve then
-                source = " (achievement: " .. trackName .. " of the Dawn)"
+                source = " (achievement: "
+                    .. ns:GetDiscountAchievementName(trackName) .. ")"
             elseif manualOverride then
                 source = " (manual override)"
             end

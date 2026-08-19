@@ -51,6 +51,20 @@ ns.DISCOUNT_ACHIEVEMENTS = {
     Myth       = 62416, -- Myth of the Mist
 }
 
+--- What the game calls the "outgrown" achievement for a track.
+---
+--- Written once because it was written twice and both copies went stale
+--- at the season roll: the ids above were updated to Season 2 while the
+--- advisor and the /yh discounts dump both kept printing "of the Dawn",
+--- so the addon named a Season 1 achievement while checking a Season 2
+--- one. A player looking up the name it gave them found the wrong
+--- achievement, or none.
+ns.DISCOUNT_ACHIEVEMENT_SUFFIX = "of the Mist"
+
+function ns:GetDiscountAchievementName(track)
+    return track .. " " .. ns.DISCOUNT_ACHIEVEMENT_SUFFIX
+end
+
 -- Cache achievement status (checked once per session)
 local discountCache = {}
 
@@ -298,6 +312,8 @@ function ns:GetCrestPlan(crestTrack)
     local uncapped = ns.GetUncappedCrestIncome and ns:GetUncappedCrestIncome(crestTrack) or 0
     local budget = held + seasonEarnable
     local ceiling = ns:GetDropCeiling()
+    local bandLow, bandHigh = ns:GetDropBand()
+    local outgrown = ns:IsCrestOutgrown(crestTrack)
 
     -- Candidates: every equipped piece this crest can actually be spent
     -- on. Crests are track-locked, so a slot on another track is not
@@ -403,8 +419,17 @@ function ns:GetCrestPlan(crestTrack)
     -- More than that and the reserve competes with the upgrades it is
     -- meant to protect.
     ------------------------------------------------------------
+    --
+    -- And none at all on a wallet the content has outgrown. The reserve
+    -- protects a FUTURE drop, and once every piece the player is handed
+    -- arrives on a higher track there is no future drop these crests
+    -- could ever pay for. Holding them back then protects nothing: it
+    -- retires item levels the player could be wearing, in a currency
+    -- with nowhere else to go. On the panel that prompted this it held
+    -- back exactly the 40 Champion that would have finished a second
+    -- piece to its track cap.
     local reserve = 0
-    if plan.seasonCapped and uncapped <= 0 and cost > 0 then
+    if plan.seasonCapped and uncapped <= 0 and cost > 0 and not outgrown then
         local atRisk = 0
         for _, c in ipairs(candidates) do
             if c.risk == "high" then atRisk = atRisk + 1 end
@@ -420,6 +445,9 @@ function ns:GetCrestPlan(crestTrack)
     plan.reserve   = reserve
     plan.spendable = math.max(held - reserve, 0)
     plan.ceiling   = ceiling
+    plan.bandLow   = bandLow
+    plan.bandHigh  = bandHigh
+    plan.outgrown  = outgrown
     -- Recomputed against spendable now that the reserve is known. The
     -- header prints this, and it has to be the count the walk will
     -- actually mark payable or the panel contradicts its own list.
@@ -754,6 +782,58 @@ function ns:GetAchievementProgress(targetTrack)
     return #slotsNeeded, totalCrestCost, upgradeableCount, slotsNeeded
 end
 
+--- The slots holding an "outgrown" achievement up that crests cannot fix.
+---
+--- GetAchievementProgress already separates these -- a slot whose track
+--- caps below the threshold, or which carries no item at all, needs a
+--- DROP and no amount of currency will move it. That distinction was
+--- computed and then discarded: Rule 5.5 only speaks when every
+--- remaining slot is upgradeable, so the moment one slot needs a drop
+--- the addon works the whole thing out and says nothing whatsoever.
+---
+--- Which is backwards. "Six slots to Champion of the Mist, and Wrist is
+--- the one blocking it -- it is Veteran track, caps at 295, so it wants
+--- a drop rather than crests" is the most useful sentence available,
+--- and it is only reachable in the case the advisor currently goes
+--- quiet for.
+---
+--- Returns the blocking slot entries, plus how many slots remain in
+--- total and what the upgradeable ones would cost.
+function ns:GetAchievementBlockers(targetTrack)
+    local remaining, cost, upgradeable, slots = ns:GetAchievementProgress(targetTrack)
+    local blockers = {}
+    for _, entry in ipairs(slots or {}) do
+        if entry.needsReplacement then
+            blockers[#blockers + 1] = entry
+        end
+    end
+    return blockers, remaining, cost, upgradeable
+end
+
+--- The lowest achievement the player has not earned, and its state.
+---
+--- nil once every track is outgrown. `blockers` empty means the whole
+--- thing is purchasable today, which is the only case Rule 5.5 handles.
+function ns:GetChasedAchievement()
+    for _, track in ipairs(ns.TRACK_ORDER) do
+        if not ns:HasDiscountAchievement(track) then
+            local blockers, remaining, cost, upgradeable =
+                ns:GetAchievementBlockers(track)
+            if remaining <= 0 then return nil end
+            return {
+                track      = track,
+                name       = ns:GetDiscountAchievementName(track),
+                ilvl       = ns:GetMaxIlvlForTrack(track),
+                remaining  = remaining,
+                cost       = cost,
+                upgradeable = upgradeable,
+                blockers   = blockers,
+            }
+        end
+    end
+    return nil
+end
+
 ------------------------------------------------------------
 -- Replacement risk assessment
 ------------------------------------------------------------
@@ -795,6 +875,86 @@ function ns:GetDropCeiling()
     -- what overtakes a slot -- it is what a slot could get lucky with.
     -- Returned separately rather than folded in.
     return dropIlvl, vaultIlvl
+end
+
+------------------------------------------------------------
+-- The BAND of item levels the player's own content hands out.
+--
+-- GetDropCeiling above answers "what is the best thing that drops for
+-- me", and that is the number deciding whether a crest buys a
+-- PERMANENT item level. It is not the number deciding whether the
+-- slot's high-water mark is worth setting, and the two are routinely
+-- ten item levels apart: a Heroic raider farming +10 keys is handed
+-- 305 by the raid and 311 by the end of a dungeon.
+--
+-- The mark only ever pays out against the WEAKER source. A slot marked
+-- at 308 promotes an incoming 305 for free; against an incoming 311 the
+-- mark sits below the drop and does nothing at all. So a rank landing
+-- under the low end of this band is pure rental -- stats until the slot
+-- turns over, nothing banked -- while a rank landing between the two
+-- ends banks a refund on every drop the weaker source produces.
+--
+-- Both numbers were already computed in GetDropCeiling. Only the high
+-- one survived the return, which is why nothing downstream could tell
+-- a rental apart from a rebate.
+--
+-- Returns lowIlvl, highIlvl, lowTrack.
+------------------------------------------------------------
+function ns:GetDropBand()
+    local profile = ns:GetCurrentProfile()
+    local sources = {}
+
+    -- End-of-dungeon at the best key the player actually runs. Lower
+    -- keys are not a source: nobody farms a +4 while holding a +10, and
+    -- counting one would drag the floor down onto content the player
+    -- has already left behind.
+    local keyIlvl = 0
+    for _, entry in ipairs(ns.DUNGEON_LOOT) do
+        local keyNum = tonumber(entry.key:match("M(%d+)"))
+        if keyNum and keyNum <= profile.maxKeyLevel and entry.loot > keyIlvl then
+            keyIlvl = entry.loot
+        end
+    end
+    if keyIlvl > 0 then sources[#sources + 1] = keyIlvl end
+
+    -- The raid contributes the level its loot ARRIVES at, not that
+    -- track fully upgraded -- the same reason GetDropCeiling reads
+    -- raidLevels[1] and not GetMaxIlvlForTrack.
+    local raidTrack = ns.RAID_TRACKS[profile.raidTier]
+    local raidLevels = raidTrack and ns.GEAR_TRACKS[raidTrack]
+    if raidLevels and raidLevels[1] then
+        sources[#sources + 1] = raidLevels[1]
+    end
+
+    if #sources == 0 then return 0, 0, nil end
+
+    local low, high = sources[1], sources[1]
+    for _, ilvl in ipairs(sources) do
+        if ilvl < low  then low  = ilvl end
+        if ilvl > high then high = ilvl end
+    end
+
+    return low, high, ns:GetTrackFromIlvl(low)
+end
+
+--- Has the player's content moved past what this crest can buy?
+---
+--- True when every piece the player is handed arrives on a HIGHER track
+--- than this wallet pays for. Such a wallet can never fund a future
+--- drop -- the drop lands on a track its crests are not valid for -- so
+--- its only remaining customers are the items already worn.
+---
+--- This is the difference between a crest that is merely plentiful and
+--- one the player has outgrown, and several rules below need to tell
+--- them apart: advice about saving, holding, or reserving crests is
+--- advice about a future purchase, and for an outgrown wallet there is
+--- no future purchase to save for.
+function ns:IsCrestOutgrown(crestTrack)
+    if not crestTrack then return false end
+    local _, _, lowTrack = ns:GetDropBand()
+    local dropRank = lowTrack and ns.TRACK_RANK[lowTrack] or 0
+    if dropRank == 0 then return false end
+    return dropRank > (ns.TRACK_RANK[crestTrack] or 0)
 end
 
 function ns:GetReplacementRisk(slotID, ilvl)
@@ -1080,7 +1240,7 @@ function ns:GetRecommendation(slotID)
                         end
                     end
 
-                    local achieveName = achieveTrack .. " of the Dawn"
+                    local achieveName = ns:GetDiscountAchievementName(achieveTrack)
                     if slotsRemaining == 1 then
                         return ns.RECOMMEND.UPGRADE_NOW,
                             "Last slot for " .. achieveName .. "! 50% off for alts (" ..

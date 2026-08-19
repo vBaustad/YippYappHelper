@@ -244,6 +244,16 @@ function ns:RefreshCrests()
             local plan = ns.GetCrestPlan and ns:GetCrestPlan(data.track)
             if plan and plan.slotCount > 0 then
                 buysStr = string.format("  |cffdddddd%d up|r", plan.affordableNow)
+                -- A wallet the content has moved past still buys real
+                -- upgrades -- stats now, and a high-water mark the next
+                -- drop cashes in -- so the count above stays. What it
+                -- cannot buy is an item level the player keeps, and
+                -- without saying so the row reads exactly like a live
+                -- track. This is the one word that explains why the
+                -- advice under it looks strange.
+                if plan.outgrown then
+                    buysStr = buysStr .. "  |cffff8800outgrown|r"
+                end
                 if plan.reserve > 0 then
                     -- Named, because a reserve is the addon declining to
                     -- plan crests the player can see in this very row.
