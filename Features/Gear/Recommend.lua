@@ -10,7 +10,7 @@ ns.RECOMMEND = {
     HOLD_CRESTS       = { label = "Hold crests",             color = "ffff8800" }, -- orange
     SAVE_FOR_DROP     = { label = "Wait for a drop",         color = "ffff8800" }, -- orange
     CREST_CAPPED      = { label = "Capped this week",        color = "ffff4444" }, -- red-ish
-    SAFE_TEMP         = { label = "Safe temporary upgrade",  color = "ff88bbff" }, -- light blue
+    SAFE_TEMP         = { label = "Temporary upgrade",       color = "ff88bbff" }, -- light blue
     BAD_INVESTMENT    = { label = "Bad investment",           color = "ffff0000" }, -- red
     CRAFT_INSTEAD     = { label = "Craft instead",            color = "ffcc66ff" }, -- purple
     USE_LOWER_TRACK   = { label = "Use cheaper crests",        color = "ff66bbff" }, -- light blue
@@ -270,6 +270,80 @@ end
 -- never "you are 60 short of this, and here is what is ahead of it".
 ------------------------------------------------------------
 
+------------------------------------------------------------
+-- What a rank is worth, and why these numbers.
+--
+-- Every rank costs the same crest, so the only thing that can order a
+-- plan is what the rank is WORTH -- and that is not its item level. It
+-- is the item level multiplied by how long the player keeps it, which
+-- the drop band decides:
+--
+--   above the whole band   the content cannot hand this out, so the
+--                          rank is permanent. Full value.
+--   inside the band        the slot's high-water mark promotes an
+--                          incoming piece from the weaker source up to
+--                          here for free, so the rank is refunded when
+--                          that source fills the slot -- and lost when
+--                          the stronger one does. Half, for the coin
+--                          toss over which arrives first.
+--   below the whole band   any drop clears it and the mark never comes
+--                          into play. Stats until the slot turns over,
+--                          which is real but small -- and is the only
+--                          reason this is not zero.
+--
+-- `promotion` values the OTHER thing reaching a track's cap does: the
+-- piece moves onto the next track, so the slot stops being capped at
+-- this track's ceiling. That headroom is potential rather than power --
+-- realising it costs crests of the higher track -- so it counts for
+-- half of the item levels it opens up.
+--
+-- Unless the content already hands out that next track, in which case
+-- the promotion mostly duplicates a drop that was coming anyway, and it
+-- drops to `promotionCovered`. That is the honest verdict for a Heroic
+-- raider's Champion wallet: finishing a Champion piece does manufacture
+-- a Hero-track item, but the raid was going to hand them one.
+--
+-- These are weights, not measurements. They are set where the ordering
+-- they produce matches what the drop band already says in words, and
+-- they are deliberately coarse: the ranking is robust to moving any of
+-- them by a tenth, and anything finer would be false precision about a
+-- coin toss.
+------------------------------------------------------------
+ns.PLAN_VALUE = {
+    permanent        = 1.00,
+    banked           = 0.50,
+    rental           = 0.20,
+    promotion        = 0.50,
+    promotionCovered = 0.15,
+}
+
+--- How much of a rank's item level the player actually keeps.
+local function RankDurability(ilvl, bandLow, bandHigh)
+    local V = ns.PLAN_VALUE
+    -- No band means no content model to judge against; treat every rank
+    -- as kept rather than inventing a discount.
+    if not bandHigh or bandHigh <= 0 then return V.permanent end
+    if ilvl > bandHigh then return V.permanent end
+    if bandLow and ilvl >= bandLow then return V.banked end
+    return V.rental
+end
+
+--- What reaching a track's cap opens up, in item levels of headroom.
+--- Returns the weighted value and the track promoted onto.
+local function PromotionValue(track, bandLow)
+    local V = ns.PLAN_VALUE
+    local nextTrack = ns.TRACK_ORDER[(ns.TRACK_RANK[track] or 0) + 1]
+    if not nextTrack then return 0, nil end
+
+    local headroom = ns:GetMaxIlvlForTrack(nextTrack) - ns:GetMaxIlvlForTrack(track)
+    if headroom <= 0 then return 0, nextTrack end
+
+    local nextLevels = ns.GEAR_TRACKS[nextTrack]
+    local covered = bandLow and bandLow > 0 and nextLevels and nextLevels[1]
+        and bandLow >= nextLevels[1]
+    return headroom * (covered and V.promotionCovered or V.promotion), nextTrack
+end
+
 local planCache = {}
 
 --- Drop memoised plans. Cheap, and a stale plan is worse than a slow one.
@@ -341,15 +415,14 @@ function ns:GetCrestPlan(crestTrack)
                     rank     = rank,
                     maxRank  = up.maxUpgrade or 0,
                     ilvl     = startIlvl,
+                    -- Kept for the reserve, which counts at-risk slots.
+                    -- It no longer orders the walk: the drop band does
+                    -- that, and against the right number. Risk measures
+                    -- the gap to a ceiling built from the raid track's
+                    -- MAX -- ten item levels above what the raid drops
+                    -- -- so on a Heroic profile every slot below Hero
+                    -- reads "high" and the signal is flat.
                     risk     = risk,
-                    -- Low sorts first. A slot the content is about to
-                    -- replace is a worse home for a scarce crest than an
-                    -- equally important slot that will keep it, and the
-                    -- ORDER is where that belongs -- not in a label that
-                    -- says "spend here last" on the slot the plan just
-                    -- funded first. That contradiction is what this is.
-                    riskRank = (risk == "high" and 2)
-                        or (risk == "moderate" and 1) or 0,
                 }
             end
         end
@@ -387,6 +460,9 @@ function ns:GetCrestPlan(crestTrack)
             risk         = c.risk,
             wantedRanks  = c.maxRank - c.rank,
             fundedRanks  = 0,
+            bankedRanks  = 0,      -- paid ranks inside the drop band
+            promotes     = false,  -- paid ranks reach this track's cap
+            promotesTo   = nil,    -- ...and put the piece on this track
             paidRanks    = 0,      -- covered by crests in hand today
             paidIlvl     = c.ilvl,
             paidCost     = 0,
@@ -453,71 +529,145 @@ function ns:GetCrestPlan(crestTrack)
     -- actually mark payable or the panel contradicts its own list.
     plan.affordableNow = cost > 0 and math.floor(plan.spendable / cost) or 0
 
-    -- The walk. Pick the best remaining candidate, buy it one rank, repeat.
+    ------------------------------------------------------------
+    -- The walk. Pick the best RUN of ranks, not the best single rank.
+    --
+    -- Buying one rank at a time and re-picking the best slot after each
+    -- is what spread a wallet thin. Equal-priority slots interleave by
+    -- item level, which reads like fairness and costs the player the one
+    -- thing on this track worth saving for: the cap. Ranks are not
+    -- independent purchases. The last one on a track promotes the piece
+    -- onto the next track, and the ranks nearest the cap are the ones
+    -- landing high enough for the slot to keep them -- so a run bought
+    -- whole is worth more than the same crests dribbled across slots.
+    --
+    -- A one-rank walk cannot express that, because it never looks
+    -- further ahead than one rank. On the panel that prompted this, 160
+    -- Champion bought one piece to its cap and left two trinkets
+    -- stranded mid-track, where the same 160 finishes two of them.
+    --
+    -- So every candidate offers every run it could still buy -- one
+    -- rank, two, up to its cap -- each scored on what the player keeps
+    -- per crest spent, and the best run wins outright. Runs are chosen
+    -- whole but RECORDED rank by rank, so the steps list, the running
+    -- total and the paid/unpaid line are all exactly what they were.
+    ------------------------------------------------------------
+    local promoValue, promoTrack = PromotionValue(crestTrack, bandLow)
+    plan.promotesTo = promoTrack
+
+    --- Value kept per crest spent, for buying k more ranks on c.
+    --- reachable is what the wallet can still finish with right now.
+    local function ScoreRun(c, k, reachable)
+        local gain, landing = 0, c.ilvl
+        for j = 1, k do
+            local step = c.levels and c.levels[c.rank + j]
+            if not step then return nil end
+            gain = gain + (step - landing) * RankDurability(step, bandLow, bandHigh)
+            landing = step
+        end
+
+        local runCost = k * cost
+        -- A promotion only counts if the wallet can actually finish the
+        -- run. Crediting one the player cannot reach is precisely how a
+        -- plan talks itself into stranding crests halfway up a track.
+        if c.rank + k >= c.maxRank and runCost <= reachable then
+            gain = gain + promoValue
+        end
+        return gain * (c.priority or 2) / runCost
+    end
+
+    -- Ties break on priority, then item level, then slot id, then the
+    -- shorter run. The slot id is not cosmetic: two rings at the same
+    -- priority and level would otherwise swap places with table
+    -- iteration order and the panel would reshuffle between refreshes.
+    local function Better(score, c, k, bestScore, bestC, bestK)
+        if not bestC then return true end
+        if score ~= bestScore then return score > bestScore end
+        if c.priority ~= bestC.priority then return c.priority > bestC.priority end
+        if c.ilvl ~= bestC.ilvl then return c.ilvl < bestC.ilvl end
+        if c.slotID ~= bestC.slotID then return c.slotID < bestC.slotID end
+        return k < bestK
+    end
+
     local spent = 0
     while true do
-        local best
+        -- Crests in hand while any remain, then what the season still
+        -- allows. A run that fits in neither is planned without its
+        -- promotion, which is the truth: it will not be finished.
+        local reachable = (spent < plan.spendable)
+            and (plan.spendable - spent)
+            or math.max(budget - spent, 0)
+
+        local best, bestK, bestScore
         for _, c in ipairs(candidates) do
-            if c.rank < c.maxRank then
-                -- Priority, then replacement risk, then item level,
-                -- then slot id. The last key is not cosmetic: two rings
-                -- of the same priority and level would otherwise swap
-                -- places with table iteration order, and the panel would
-                -- reshuffle itself between refreshes.
-                local function better(a, b)
-                    if not b then return true end
-                    if a.priority ~= b.priority then return a.priority > b.priority end
-                    if a.riskRank ~= b.riskRank then return a.riskRank < b.riskRank end
-                    if a.ilvl ~= b.ilvl then return a.ilvl < b.ilvl end
-                    return a.slotID < b.slotID
+            for k = 1, c.maxRank - c.rank do
+                local score = ScoreRun(c, k, reachable)
+                if score and Better(score, c, k, bestScore, best, bestK) then
+                    best, bestK, bestScore = c, k, score
                 end
-                if better(c, best) then best = c end
             end
         end
         if not best then break end
 
-        best.rank = best.rank + 1
-        best.ilvl = (best.levels and best.levels[best.rank]) or best.ilvl
-        spent = spent + cost
-
         local summary = plan.slots[best.slotID]
-        local step = {
-            slotID     = best.slotID,
-            slotName   = best.slotName,
-            rank       = best.rank,
-            maxRank    = best.maxRank,
-            toIlvl     = best.ilvl,
-            cumulative = spent,
-            funded     = spent <= budget,
-            -- Against spendable, not held: the reserve is deliberately
-            -- not planned, so a step it would have paid for is not one
-            -- the panel should show above the line.
-            paid       = spent <= plan.spendable,
-            -- Does this rank survive a drop? The slot's high-water mark
-            -- makes any future item in it free up to the level reached,
-            -- so a rank landing ABOVE what the player's content drops is
-            -- banked permanently, and one landing below is overtaken by
-            -- the next piece that falls in that slot.
-            sticks     = best.ilvl > ceiling,
-        }
-        plan.steps[#plan.steps + 1] = step
+        for _ = 1, bestK do
+            best.rank = best.rank + 1
+            best.ilvl = (best.levels and best.levels[best.rank]) or best.ilvl
+            spent = spent + cost
 
-        if not summary.firstStep then
-            summary.firstStep    = #plan.steps
-            -- Everything bought before this slot's first rank is what a
-            -- "these come first" explanation has to name.
-            summary.crestsBefore = spent - cost
-            plan.order[#plan.order + 1] = best.slotID
-        end
-        if step.funded then
-            summary.fundedRanks = summary.fundedRanks + 1
-        end
-        if step.paid then
-            summary.paidRanks = summary.paidRanks + 1
-            summary.paidIlvl  = best.ilvl
-            summary.paidCost  = summary.paidCost + cost
-            if step.sticks then
-                summary.stickyRanks = summary.stickyRanks + 1
+            -- Which side of the player's own content this rank lands on.
+            -- The whole ordering above turns on it, so it is recorded
+            -- rather than re-derived by every string that explains it.
+            local band = "permanent"
+            if bandHigh > 0 and best.ilvl <= bandHigh then
+                band = (bandLow > 0 and best.ilvl >= bandLow) and "banked" or "rental"
+            end
+
+            local step = {
+                slotID     = best.slotID,
+                slotName   = best.slotName,
+                rank       = best.rank,
+                maxRank    = best.maxRank,
+                toIlvl     = best.ilvl,
+                cumulative = spent,
+                funded     = spent <= budget,
+                -- Against spendable, not held: the reserve is
+                -- deliberately not planned, so a step it would have paid
+                -- for is not one the panel should show above the line.
+                paid       = spent <= plan.spendable,
+                band       = band,
+                -- Its own field because the reason strings read it
+                -- directly: a rank the content cannot reach is banked by
+                -- the slot's mark whatever else is true of it.
+                sticks     = band == "permanent",
+                -- The rank that lifts the slot off this track's ceiling.
+                promotes   = (best.rank >= best.maxRank) and promoTrack or nil,
+            }
+            plan.steps[#plan.steps + 1] = step
+
+            if not summary.firstStep then
+                summary.firstStep    = #plan.steps
+                -- Everything bought before this slot's first rank is
+                -- what a "these come first" explanation has to name.
+                summary.crestsBefore = spent - cost
+                plan.order[#plan.order + 1] = best.slotID
+            end
+            if step.funded then
+                summary.fundedRanks = summary.fundedRanks + 1
+            end
+            if step.paid then
+                summary.paidRanks = summary.paidRanks + 1
+                summary.paidIlvl  = best.ilvl
+                summary.paidCost  = summary.paidCost + cost
+                if step.sticks then
+                    summary.stickyRanks = summary.stickyRanks + 1
+                elseif band == "banked" then
+                    summary.bankedRanks = summary.bankedRanks + 1
+                end
+                if step.promotes then
+                    summary.promotes   = true
+                    summary.promotesTo = step.promotes
+                end
             end
         end
     end
@@ -1027,7 +1177,6 @@ function ns:GetRecommendation(slotID)
     local ilvl = info.ilvl
     local track = upgradeInfo.track or ns:GetTrackFromIlvl(ilvl)
     local crestTrack = ns.TRACK_CREST[track]
-    local replacementRisk = ns:GetReplacementRisk(slotID, ilvl)
     local isFree = ns:IsCrestFree(crestTrack)
     local isPrecious = ns:IsCrestPrecious(crestTrack)
     local trackRank = ns.TRACK_RANK[track] or 1
@@ -1291,9 +1440,6 @@ function ns:GetRecommendation(slotID)
         return names[1] .. " and " .. names[2], "come"
     end
 
-    local nextIlvl = ns.GEAR_TRACKS[track] and ns.GEAR_TRACKS[track][rank + 1]
-    local step = nextIlvl and (ilvl .. " to " .. nextIlvl) or ("rank " .. (rank + 1))
-
     ------------------------------------------------------------
     -- Nothing in the wallet reaches this slot: everything ahead of it
     -- in the plan spends the crests first.
@@ -1306,6 +1452,20 @@ function ns:GetRecommendation(slotID)
         -- covers this one too" on a slot that plainly was not covered.
         local short = math.max((mine.crestsBefore or 0) + crestCost - plan.spendable, 0)
 
+        -- Where the shortfall is going to come from.
+        --
+        -- "80 more Champion covers this one too" reads as an instruction
+        -- to go and farm Champion, and on a wallet the content has
+        -- outgrown that is the wrong instinct entirely: nothing the
+        -- player runs pays this tier directly any more. It still
+        -- arrives -- capping a higher track spills its income down a
+        -- tier -- but as a by-product of content that pays something
+        -- else, which is a different plan for the week.
+        local how = ""
+        if plan.outgrown then
+            how = " (" .. crestTrack .. " only arrives as overflow now)"
+        end
+
         if plan.spendable >= crestCost then
             -- Affordable on its own, but only by taking the crests off a
             -- slot worth more. This is the case the old "Hold crests"
@@ -1313,72 +1473,98 @@ function ns:GetRecommendation(slotID)
             -- gap would cost.
             return ns.RECOMMEND.HOLD_CRESTS,
                 who .. " " .. verb .. " first — " .. short .. " more " ..
-                crestTrack .. " covers this one too"
+                crestTrack .. " covers this one too" .. how
         end
         return ns.RECOMMEND.UPGRADE_LATER,
             "Need " .. short .. " more " .. crestTrack .. " — " ..
-            who .. " " .. verb .. " first"
+            who .. " " .. verb .. " first" .. how
     end
 
     ------------------------------------------------------------
-    -- Funded. Say what the crests buy here and what that costs.
+    -- Funded. Say what the crests buy, and what the player keeps.
+    --
+    -- Two separate questions, and the old strings answered only the
+    -- first. "292 to 295 -- 3 of 5 ranks, to 302" describes a purchase
+    -- without saying whether any of it survives contact with the next
+    -- drop, which is the only thing that decides if it was worth making.
+    --
+    -- Ranks are planned in runs now, so the run is what gets named: the
+    -- level it starts at, the level it reaches, and how much of the slot
+    -- that covers. The old form previewed one rank and then described a
+    -- different number of them in the same breath.
     ------------------------------------------------------------
-    -- The target level is only worth naming when it is not already the
-    -- level the step's own "279 to 282" just gave. Buying a single rank
-    -- otherwise reads "279 to 282 -- 1 of 5 ranks, to 282".
+    local reach = mine.paidIlvl or ilvl
+    local runStr = (reach > ilvl) and (ilvl .. " to " .. reach)
+        or ("rank " .. (rank + 1))
+
     local buys
-    if mine.paidRanks == mine.wantedRanks then
+    if mine.paidRanks >= mine.wantedRanks then
         buys = "all " .. mine.wantedRanks ..
-            (mine.wantedRanks == 1 and " rank to " or " ranks to ") .. mine.paidIlvl
-    elseif mine.paidRanks == 1 then
-        buys = "1 of " .. mine.wantedRanks .. " ranks"
+            (mine.wantedRanks == 1 and " rank" or " ranks")
     else
-        buys = mine.paidRanks .. " of " .. mine.wantedRanks .. " ranks, to " .. mine.paidIlvl
+        buys = mine.paidRanks .. " of " .. mine.wantedRanks .. " ranks"
     end
-    -- Against spendable, not held. With a reserve in play "60 of your
-    -- 100 Champion" describes a wallet the plan has already decided is
-    -- only 60 -- two numbers for one thing, in adjacent sentences.
+
     local spendStr = mine.paidCost .. " of your " .. plan.spendable ..
         " " .. crestTrack
     if plan.reserve > 0 then spendStr = spendStr .. " to spend" end
 
-    -- Whether a spend survives a drop is not the same question as
-    -- whether the item does.
+    ------------------------------------------------------------
+    -- What survives the next drop, in one clause.
     --
-    -- The slot keeps a high-water mark, so any future piece in it is
-    -- free up to the level already reached. A rank that lands ABOVE
-    -- what the player's content drops is therefore banked permanently:
-    -- the replacement arrives and is immediately promoted to it for no
-    -- crests. A rank that lands below is the one that gets overtaken --
-    -- the drop is simply better, and the mark never comes into play.
+    -- The slot keeps a high-water mark, so a future piece landing in it
+    -- is free up to the level already reached. That makes the drop BAND
+    -- -- not a single ceiling -- decide what a spend is worth:
     --
-    -- This is why the old advice was backwards. It warned loudest about
-    -- deep upgrades, which are the ones the mark protects, and stayed
-    -- quiet about shallow ones, which are the ones a drop erases.
-    local overtaken = (mine.paidRanks > 0) and (mine.stickyRanks == 0)
-        and (mine.risk == "high")
-    local isFirst = mine.firstStep and mine.firstStep <= 1
-
-    local sticksNote = ""
-    if mine.stickyRanks > 0 and plan.ceiling and plan.ceiling > 0 then
-        sticksNote = " — clears the " .. plan.ceiling ..
+    --   above the band   nothing the player runs hands this out, so the
+    --                    rank is theirs permanently.
+    --   inside it        the mark promotes an incoming piece from the
+    --                    weaker source up to here for nothing, so the
+    --                    spend comes back as a rebate on that drop.
+    --   below it         any drop clears it and the mark never applies.
+    --
+    -- And above all of them, reaching the track's cap: the piece moves
+    -- onto the next track, so the slot stops being capped where this
+    -- track ends. That is the one outcome worth leading with, and the
+    -- shipped strings had no way to say it at all.
+    --
+    -- The old code chose between this clause and the "spend here first"
+    -- lead, and first won -- so a weapon and a trinket in identical
+    -- positions got opposite advice, one silently reassured and the
+    -- other warned about. They are different facts about different
+    -- questions and both are printed now.
+    ------------------------------------------------------------
+    local label, outcome = ns.RECOMMEND.UPGRADE_NOW, ""
+    if mine.promotes and mine.promotesTo then
+        outcome = " — finishes the track, so the piece moves to " ..
+            mine.promotesTo .. " and can keep climbing"
+    elseif mine.stickyRanks > 0 and (plan.bandHigh or 0) > 0 then
+        outcome = " — clears the " .. plan.bandHigh ..
             " your content drops, so the slot keeps it"
+    elseif mine.bankedRanks > 0 and (plan.bandLow or 0) > 0 then
+        outcome = " — over " .. plan.bandLow .. ", so the slot's mark pays "
+            .. "it back on the next " .. plan.bandLow .. " that drops"
+    elseif (plan.bandLow or 0) > 0 then
+        -- Nothing bought here outlives a drop. Still worth doing when
+        -- the crests have nowhere better to be -- which on an outgrown
+        -- wallet is always -- but the player should know they are
+        -- renting it.
+        label = ns.RECOMMEND.SAFE_TEMP
+        outcome = " — lands under the " .. plan.bandLow ..
+            " your content drops, so a piece overtakes it"
     end
 
-    if isFirst then
-        return ns.RECOMMEND.UPGRADE_NOW,
-            "Spend here first: " .. step .. ", " .. buys ..
-            " (" .. spendStr .. ")" .. sticksNote
+    -- Which wallet this is the best use of, not which row is the most
+    -- important on the page. Crests are track-locked, so every track
+    -- has a best spend and the shipped string claimed each of them was
+    -- THE first -- two rows under "Spend here first" on one panel.
+    local lead = ""
+    if mine.firstStep and mine.firstStep <= 1 then
+        lead = "Best " .. crestTrack .. " spend: "
     end
 
-    if overtaken then
-        return ns.RECOMMEND.SAFE_TEMP,
-            step .. " — " .. buys .. ", but stays under the " .. (plan.ceiling or 0) ..
-            " your content drops, so a piece will overtake it (" .. spendStr .. ")"
-    end
-
-    return ns.RECOMMEND.UPGRADE_NOW,
-        step .. " — " .. buys .. " (" .. spendStr .. ")" .. sticksNote
+    return label, lead .. runStr .. ", " .. buys .. outcome ..
+        " (" .. spendStr .. ")"
 end
 
 ------------------------------------------------------------

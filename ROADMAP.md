@@ -114,8 +114,9 @@ So this is one insertion point, not a feature threaded through the page.
 
 ## Crest advice: rebuild around promotion, not per-rank greed
 
-**Status:** specced from a live panel that gave contradictory advice. The
-cheap corrections are done; the model changes are not.
+**Status:** part built. The drop band, promotion-aware planning and the
+reason strings are in. What is left is listed under "Still missing" —
+none of it blocks the rest, and each piece is independently useful.
 
 The Improvements list told a +10 / Heroic-raid character to spend 160
 Champion crests, in an order that put two rows under "Spend here first",
@@ -133,7 +134,9 @@ the weapon and the trinket, in identical positions, got opposite advice.
 
 **Every wallet plans alone.** `GetCrestPlan` is per-track and the panel merges
 by label, so five independent plans each contribute a "first" and a
-priority-2 Wrist can outrank two priority-4 trinkets.
+priority-2 Wrist can outrank two priority-4 trinkets. *Half done:* each
+lead now names its wallet ("Best Champion spend"), so the rows no longer
+contradict each other. One global order across wallets is still open.
 
 **Scarcity is declared, not derived.** `preciousCrests` / `freeCrests` are
 static per-profile lists. The real income model — which content pays which
@@ -142,7 +145,11 @@ crest — is `ns.PROGRESSION.CREST_SOURCES`, and nothing reads it.
 **Two ceilings disagree.** `GetDropCeiling` uses the raid track's entry level
 and excludes the vault; `GetReplacementRisk` uses the raid track's max and
 folds the vault in. So "will this stick" is judged against one number and "is
-this slot at risk" against another, 10 item levels apart.
+this slot at risk" against another, 10 item levels apart. *Worked around:*
+the plan reads the band and no longer orders on risk at all, so the two
+cannot contradict each other in the output. `GetReplacementRisk` is still
+wrong and still feeds the reserve's at-risk count — reconcile it against
+the band and the reserve gets a reachable live path again.
 
 ### The model that replaces it
 
@@ -154,7 +161,7 @@ having to pick.
 **Plan once, globally.** One order over all slots, annotated with which wallet
 pays. Only one row can say "do this first".
 
-**The drop band replaces the single ceiling.** Two numbers, not one: the
+**The drop band replaces the single ceiling.** *(built: `ns:GetDropBand`)* Two numbers, not one: the
 lowest and highest item level the player's own content hands out. For a
 Heroic / +10 character that is 305 (raid entry) and 311 (end of dungeon).
 Three bands follow, and they are the whole scoring model:
@@ -167,18 +174,20 @@ Three bands follow, and they are the whole scoring model:
 
 `GetDropCeiling` already computes both numbers and throws the low one away.
 
-**Rank 6 is a breakpoint, not a rank.** Completing a track promotes the piece
+**Rank 6 is a breakpoint, not a rank.** *(built: runs, `ns.PLAN_VALUE`)* Completing a track promotes the piece
 onto the next track at rank 2 (`ns.TRACK_FREE_RANKS`, 2 ranks on every track
 in Season 2), so finishing a track pre-pays 40 crests of the tier above. This
 is the only crest conversion in the game — Vaskarn does not trade upward.
 
-The plan walk buys **one rank at a time, re-picking the best slot after
+The plan walk bought **one rank at a time, re-picking the best slot after
 each**, which is structurally incapable of saving toward a breakpoint. On the
 panel that started this: 160 Champion bought one promotion and two trinkets
-stranded mid-track, where the same 160 buys two promotions. The unit of
-planning has to become a *run of ranks to the next promotion*, costed and
-compared whole, with loose ranks as the fallback when no promotion is
-reachable.
+stranded mid-track. The unit of planning is now a *run* — every candidate
+offers every run it could still buy, scored on value kept per crest, and the
+best run wins whole. Runs are chosen whole but recorded rank by rank, so the
+steps list, the running total and the paid/unpaid line are unchanged.
+`Tools/loadcheck.py` pins the outcome on the original numbers: 200 Champion
+carries Main Hand and Trinket 1 to the cap and puts the change on Trinket 2.
 
 **Achievement for dead wallets, power for live ones.** These run at the same
 time, not in sequence:
@@ -192,6 +201,10 @@ time, not in sequence:
 Rule 5.5 chases the *lowest* missing achievement and breaks. But a 50%
 discount is worth exactly the crests still to be spent on that track, so the
 lowest missing one is usually the least valuable. Rank by remaining spend.
+
+Neither half is built. `ns:IsCrestOutgrown` is the classifier they both want
+and it already exists — it is what gates the reserve and what the "arrives as
+overflow now" note reads.
 
 **Overflow is the income model.** Capping a track pushes income down a tier,
 so the fastest route to outgrowing Champion runs entirely through content

@@ -2437,6 +2437,231 @@ def main():
         print("  FAIL achievement blockers: %s" % achieve)
         failures.append(("achievement blockers", str(achieve)))
 
+    # The panel that started all of this, replayed.
+    #
+    # A Heroic raider on +10s, 200 Champion in the wallet, and the exact
+    # gear the screenshot showed. The shipped advisor spent 160 of it as
+    # 60 on the weapon, 60 on one trinket and 40 on the other -- one
+    # piece carried to its track cap and two stranded mid-track, which is
+    # what a one-rank-at-a-time walk does when it re-picks the best slot
+    # after every rank.
+    #
+    # The same crests finish two pieces and still have change. This is
+    # the whole point of planning in runs, so it is pinned as an outcome
+    # on real numbers rather than as a property of the scoring.
+    accept = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
+
+            -- slotID, track, rank -- read off the screenshot.
+            local SET = {
+                { 16, "Champion", 3 },   -- Main Hand 298, priority 5
+                { 13, "Champion", 1 },   -- Trinket 1 292, priority 4
+                { 14, "Champion", 1 },   -- Trinket 2 292, priority 4
+                {  8, "Champion", 1 },   -- Feet      292, priority 3
+                { 12, "Champion", 1 },   -- Ring 2    292, priority 3
+            }
+            local bySlot = {}
+            for _, e in ipairs(SET) do
+                local levels = T[e[2]]
+                bySlot[e[1]] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = levels[e[3]], quality = 4, icon = 134400,
+                    track = e[2], rank = e[3], maxRank = #levels,
+                    crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and 200 or 0
+            end
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local p = ns:GetCrestPlan("Champion")
+            if not p then return restore("no Champion plan") end
+            if p.cost ~= 20 then
+                return restore("fixture cost is " .. p.cost .. ", not the 20 the "
+                    .. "screenshot's arithmetic assumes")
+            end
+            -- The reserve fix, seen from the panel: the wallet the plan
+            -- talks about is the wallet the player has.
+            if p.spendable ~= 200 then
+                return restore("plans " .. p.spendable .. " of a 200 crest wallet")
+            end
+
+            -- Every crest in hand is allocated, and to whole pieces.
+            local paidCost, promoted, byName = 0, {}, {}
+            for _, st in ipairs(p.steps) do
+                if st.paid then
+                    paidCost = paidCost + p.cost
+                    byName[st.slotName] = st.toIlvl
+                    if st.promotes then
+                        promoted[#promoted + 1] = st.slotName
+                    end
+                end
+            end
+            if paidCost ~= 200 then
+                return restore("spent " .. paidCost .. " of 200 in hand")
+            end
+            if #promoted ~= 2 then
+                return restore("carried " .. #promoted .. " piece(s) to the "
+                    .. "Champion cap, not the 2 the same crests reach")
+            end
+            -- Which two matters: the weapon is the best value per crest
+            -- on the page and the cheapest run to finish, so a plan that
+            -- promotes two trinkets and leaves it short has concentrated
+            -- on the wrong slots.
+            if byName["Main Hand"] ~= 308 then
+                return restore("Main Hand ends at " .. tostring(byName["Main Hand"])
+                    .. ", not the 308 cap")
+            end
+            if byName["Trinket 1"] ~= 308 then
+                return restore("Trinket 1 ends at " .. tostring(byName["Trinket 1"])
+                    .. ", not the 308 cap")
+            end
+            -- And the change goes somewhere rather than nowhere.
+            if byName["Trinket 2"] ~= 298 then
+                return restore("Trinket 2 ends at " .. tostring(byName["Trinket 2"])
+                    .. ", not the 298 the last 40 crests reach")
+            end
+
+            -- The band is what drove it. If these collapsed to one
+            -- verdict the ordering above would be luck.
+            local bands = {}
+            for _, st in ipairs(p.steps) do
+                if st.paid then bands[st.band] = (bands[st.band] or 0) + 1 end
+            end
+            if not (bands.rental and bands.banked) then
+                return restore("every paid rank landed in one band, so the drop "
+                    .. "band is not separating them")
+            end
+            -- Champion tops out at 308 under a 311 key drop, so nothing
+            -- on this track can ever be permanent. A permanent rank here
+            -- would mean the band is being read against the wrong number.
+            if bands.permanent then
+                return restore(bands.permanent .. " Champion rank(s) called "
+                    .. "permanent under a " .. p.bandHigh .. " drop ceiling")
+            end
+
+            return restore(string.format("ok:%s+%s:%d",
+                promoted[1], promoted[2], bands.rental + bands.banked))
+        end
+    """)(ns)
+    if accept and str(accept).startswith("ok:"):
+        who, ranks = str(accept)[3:].split(":")
+        print("  ok   promotion planning: 200 Champion carries %s to the track "
+              "cap over %s ranks, none left idle" % (who, ranks))
+    else:
+        print("  FAIL promotion planning: %s" % accept)
+        failures.append(("promotion planning", str(accept)))
+
+    # The sentences the player actually reads, on the same scenario.
+    #
+    # The plan being right is not the same as the panel saying so. The
+    # shipped strings chose between "spend here first" and the clause
+    # explaining whether the spend survives a drop, and first won -- so
+    # a weapon and a trinket in identical positions were described in
+    # opposite terms, and two rows on one panel each claimed to be the
+    # one to do first.
+    wording = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
+            local SET = {
+                { 16, "Champion", 3 }, { 13, "Champion", 1 }, { 14, "Champion", 1 },
+                {  8, "Champion", 1 }, { 12, "Champion", 1 },
+            }
+            local bySlot = {}
+            for _, e in ipairs(SET) do
+                local levels = T[e[2]]
+                bySlot[e[1]] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = levels[e[3]], quality = 4, icon = 134400,
+                    track = e[2], rank = e[3], maxRank = #levels, crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and 200 or 0
+            end
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local said = {}
+            for _, e in ipairs(SET) do
+                local _, reason = ns:GetRecommendation(e[1])
+                said[e[1]] = reason or ""
+            end
+
+            -- One wallet, one best spend, and it says which wallet.
+            local leads = 0
+            for _, reason in pairs(said) do
+                if reason:find("Best Champion spend", 1, true) then
+                    leads = leads + 1
+                end
+                if reason:find("Spend here first", 1, true) then
+                    return restore("a row still claims to be first without "
+                        .. "naming the wallet it is first for")
+                end
+            end
+            if leads ~= 1 then
+                return restore(leads .. " rows lead the Champion wallet")
+            end
+
+            -- The two runs that reach the cap say so, and name where the
+            -- piece lands. This is the fact the shipped panel could not
+            -- express in any wording at all.
+            for _, slot in ipairs({ 16, 13 }) do
+                if not said[slot]:find("finishes the track", 1, true) then
+                    return restore("slot " .. slot .. " reaches the Champion cap "
+                        .. "but does not say so: " .. said[slot])
+                end
+                if not said[slot]:find("Hero", 1, true) then
+                    return restore("slot " .. slot .. " promotes but does not name "
+                        .. "the track it promotes onto")
+                end
+            end
+
+            -- And the run that stops short is warned about rather than
+            -- quietly listed as an upgrade like any other.
+            if not said[14]:find("overtakes it", 1, true) then
+                return restore("Trinket 2 stops under the drop floor without "
+                    .. "saying so: " .. said[14])
+            end
+            if said[14]:find("finishes the track", 1, true) then
+                return restore("Trinket 2 claims a promotion it does not reach")
+            end
+
+            -- Every funded row prices itself against the real wallet.
+            for slot, reason in pairs(said) do
+                if reason:find("of your", 1, true)
+                    and not reason:find("of your 200 Champion", 1, true) then
+                    return restore("slot " .. slot .. " prices against a wallet "
+                        .. "that is not the 200 held: " .. reason)
+                end
+            end
+
+            return restore("ok:" .. said[16])
+        end
+    """)(ns)
+    if wording and str(wording).startswith("ok:"):
+        print("  ok   improvement wording: %s" % str(wording)[3:])
+    else:
+        print("  FAIL improvement wording: %s" % wording)
+        failures.append(("improvement wording", str(wording)))
+
     # The season name, guarded at the source.
     #
     # Season 1's "of the Dawn" outlived the id table it belonged to and
