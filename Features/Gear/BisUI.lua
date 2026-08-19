@@ -34,9 +34,27 @@ local ICON = 34
 -- Ceiling for the scaled doll icon: past this the slot art is being
 -- magnified rather than shown, and the rows drift apart.
 local ICON_MAX = 46
+-- Everything in the doll's panel that is not a row of icons: 8 above the
+-- first row, the weapon row's own 6px drop, then 8, the summary line,
+-- and 10 under it.
+--
+-- The summary used to be placed from its own arithmetic while the panel
+-- was sized from a different sum, and the two were 2px apart -- so
+-- "1 equipped, 0 in bags, 15 missing" sat on the panel's bottom border
+-- with its descenders outside it. One number, used by both.
+local SUMMARY_H = 14
+local SUMMARY_BAND = 8 + 6 + 8 + SUMMARY_H + 10
 -- Everything on the page that is not the doll: the header above it and
--- the stat priority block below.
-local BIS_CHROME_H = 190
+-- the stat priority block below. The doll is sized to whatever is left,
+-- so an underestimate here is not slack at the bottom of the page -- it
+-- is the caveat hanging off the end of it, which is what 190 was doing.
+--
+-- Counted rather than guessed, top to bottom:
+--   8 cursor + 22 title + 20 stamp + 6            = 56 above the doll
+--   4 panel + 12 gap + 26 heading + 74 cards + 10
+--     + 6 + ~40 caveat + 18                       = 190 below it
+-- and 4 spare, because the caveat's line count moves with the width.
+local BIS_CHROME_H = 250
 local GAP = 4
 local DOLL_W = 380
 -- Two lines of stat text, and the build name above them.
@@ -119,21 +137,12 @@ local SLOT_INV = {
 --- { class, spec, role } -- a table, not a string -- so using it as a
 --- title threw on every spec. GetSpecializationInfo has the localised
 --- name right here, which is both correct and one fewer dependency.
+--- Delegated to Features/Gear/StatPriority.lua, which loads first. The
+--- character column in the shell asks the same question of the same
+--- data, and two copies of this drift.
 local function PlayerSpec()
-    local className, classFile = UnitClass("player")
-    if not classFile then return nil end
-    local idx = GetSpecialization and GetSpecialization()
-    if not idx then return nil end
-    local _, specName = GetSpecializationInfo(idx)
-    if not specName then return nil end
-
-    local key = classFile:upper() .. "_" .. specName:upper():gsub("[^A-Z]", "")
-    local display = specName .. " " .. (className or "")
-    local colour = RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
-    if colour and colour.WrapTextInColorCode then
-        display = colour:WrapTextInColorCode(display)
-    end
-    return key, display
+    if not ns.PlayerSpecKey then return nil end
+    return ns:PlayerSpecKey()
 end
 
 ------------------------------------------------------------
@@ -183,6 +192,21 @@ local function AcquireIcon(self, parent)
         b.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         b.tick = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         b.tick:SetPoint("BOTTOMRIGHT", 1, -1)
+        -- Top-left, opposite the item level in the other corner, and
+        -- worded rather than drawn. The list beside the doll already
+        -- tags a Catalyst row "+cat" in coloured text, so a crafted cell
+        -- saying "craft" in the same voice needs no legend; a 12px
+        -- profession icon would need one and would be mush besides.
+        --
+        -- Chip behind it because the tag sits ON the item art, and item
+        -- art is whatever colour it happens to be.
+        b.tagBG = b:CreateTexture(nil, "OVERLAY", nil, 1)
+        b.tagBG:SetColorTexture(0, 0, 0, 0.72)
+        b.tag = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.tag:SetDrawLayer("OVERLAY", 2)
+        b.tag:SetPoint("TOPLEFT", 4, -3)
+        b.tagBG:SetPoint("TOPLEFT", b.tag, "TOPLEFT", -2, 1)
+        b.tagBG:SetPoint("BOTTOMRIGHT", b.tag, "BOTTOMRIGHT", 2, -1)
         self._icons[self._iconIdx] = b
     end
     b:SetParent(parent)
@@ -190,6 +214,11 @@ local function AcquireIcon(self, parent)
     b:SetScript("OnEnter", nil)
     b:SetScript("OnLeave", nil)
     b.tick:SetText("")
+    -- Both, or the chip stays behind a tag that is no longer there: it
+    -- is anchored to the FontString, which keeps its last size when the
+    -- text is cleared.
+    b.tag:SetText("")
+    b.tagBG:Hide()
     b:Show()
     return b
 end
@@ -212,9 +241,18 @@ local function AcquireRow(self, parent)
         row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         row.name:SetPoint("LEFT", row.icon, "RIGHT", 5, 0)
         row.name:SetJustifyH("LEFT")
+        -- One line, always. A FontString wraps by default, and these sit
+        -- in a row ROW_H tall -- so "Enigmatic Dreamwatcher's Somnolent
+        -- Stare" wrapped to two lines inside a 20px row and printed its
+        -- second line straight through the row beneath it. Word wrap off
+        -- truncates instead, which is the right answer for a column that
+        -- cannot grow.
+        row.name:SetWordWrap(false)
         row.source = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         row.source:SetPoint("RIGHT", 0, 0)
         row.source:SetJustifyH("RIGHT")
+        row.source:SetWordWrap(false)
+        row.source:SetTextColor(0.43, 0.43, 0.47)
         local hl = row:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.06)
@@ -225,11 +263,89 @@ local function AcquireRow(self, parent)
     row:ClearAllPoints()
     row:SetScript("OnEnter", nil)
     row:SetScript("OnLeave", nil)
+    -- The name's hover target belongs to the render that sized it.
+    -- Left up, a re-used row would keep taking the mouse over however
+    -- wide the PREVIOUS item's name happened to be.
+    if ns.Widgets and ns.Widgets.ClearTextHover then
+        ns.Widgets:ClearTextHover(row.name)
+    end
     row.icon:SetTexture(nil)
     row.source:SetText("")
     row:Show()
     return row
 end
+
+--- Where a piece drops, minus the parts that say nothing.
+---
+--- "(Raid)" is on 32 of these and is never news: this is a
+--- best-in-slot list read next to a raid tier, and the boss name in
+--- front of it already carried the point. It cost the width the boss
+--- name needed -- "Nek'zali the Soulcoiler (Raid) & Catalyst" is 40
+--- characters for what "Nek'zali the Soulcoiler & Catalyst" says.
+---
+--- Done here rather than in the data file: ClassGuideData.lua is
+--- generated, so anything fixed there is undone by the next scrape.
+local function SourceText(entry)
+    local src = entry.source or ""
+    if src == "" then return "" end
+
+    -- Pipes first, and they are a rendering bug rather than a style
+    -- choice: "|" opens an escape sequence in a FontString. Ten rows in
+    -- the guide data carry one, and two of the forms are actively
+    -- destructive -- "Tier Set|The Coiled Altar" reads as |T, the
+    -- texture escape, which swallows the rest of the line, and
+    -- "Catalyst|Raid|Vault" hits |R and drops the row's colour. They all
+    -- mean "or", so they become a slash, which is what "Crafting/Misc"
+    -- already uses.
+    src = src:gsub("%s*|%s*", "/")
+
+    -- "(Raid)" is on 32 rows and is never news: this is a best-in-slot
+    -- list read beside a raid tier, and the boss name in front of it
+    -- already carried the point. It cost the width the boss name needed
+    -- -- "Nek'zali the Soulcoiler (Raid) & Catalyst" is 40 characters
+    -- for what "Nek'zali the Soulcoiler & Catalyst" says.
+    src = src:gsub("%s*%(Raid%)", "")
+
+    -- And the same word standing as its own segment of a slash list.
+    -- Sentinels either side so the first and last segments match the
+    -- same pattern as the middle ones; Lua patterns have no alternation.
+    src = "/" .. src .. "/"
+    src = src:gsub("/%s*[Rr]aid%s*/", "/")
+    src = src:gsub("^/+", ""):gsub("/+$", "")
+
+    -- A source that was ONLY the tag is now an empty string with
+    -- punctuation around it, so tidy the joins rather than leaving
+    -- "& Catalyst" hanging off nothing.
+    src = src:gsub("^%s*[&-]%s*", ""):gsub("%s*[&-]%s*$", "")
+    return (src:gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1"))
+end
+
+--- Fits the name and the source into one row without them colliding.
+---
+--- The source was anchored to the right edge with no width at all, so a
+--- long one grew leftward until it ran under the name -- while the name
+--- was sized against a flat 46px reserve that most sources overshot.
+--- Measuring the source and handing the name the rest is what makes both
+--- columns honest, and the cap stops one very long source from crushing
+--- the name to nothing.
+local function FitRow(row, listW, nameText, srcText)
+    row.source:SetText(srcText)
+    row.source:SetWidth(0)
+    local srcW = math.min(row.source:GetStringWidth() or 0,
+                          math.floor(listW * 0.45))
+    row.source:SetWidth(srcW)
+    row.name:SetWidth(math.max(listW - 26 - srcW - 8, 40))
+    row.name:SetText(nameText)
+end
+
+-- The source column used to be a link into the Encounter Journal:
+-- hovering a boss name looked it up and clicking opened the journal
+-- there. Removed, and Features\Gear\SourceLink.lua with it. Every
+-- lookup had to walk the tiers via EJ_SelectTier/EJ_SelectInstance,
+-- which moves the player's own journal as a side effect and stalls the
+-- client hard enough to hitch the whole game -- a per-session cache did
+-- not save it, because the first hover of each row still paid the walk
+-- and a list is sixteen rows of first hovers. The source is plain text.
 
 --- A skinned surface behind a column.
 ---
@@ -396,50 +512,7 @@ end
 --- guessed from a near-match would be the wrong tree's art, and a
 --- picture is read faster than the name beside it.
 local function HeroTalentArt()
-    local out = {}
-    if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID
-            and C_ClassTalents.GetHeroTalentSpecsForClassSpec
-            and C_Traits and C_Traits.GetSubTreeInfo) then
-        return out
-    end
-
-    local ok, configID = pcall(C_ClassTalents.GetActiveConfigID)
-    if not ok or not configID then return out end
-
-    local idx = GetSpecialization and GetSpecialization()
-    local specID = idx and GetSpecializationInfo(idx)
-    if not specID then return out end
-
-    local okIDs, ids = pcall(C_ClassTalents.GetHeroTalentSpecsForClassSpec,
-        configID, specID)
-    if not okIDs or type(ids) ~= "table" then return out end
-
-    -- Which tree you actually took. Asked for directly where the client
-    -- offers it, since that is the question, and read back off each
-    -- subtree otherwise. Neither is guaranteed, and an unknown active
-    -- tree simply leaves every card unlit rather than lighting a guess.
-    local activeID
-    if C_ClassTalents.GetActiveHeroTalentSpec then
-        local okA, id = pcall(C_ClassTalents.GetActiveHeroTalentSpec)
-        if okA then activeID = id end
-    end
-
-    for _, subTreeID in ipairs(ids) do
-        local okInfo, info = pcall(C_Traits.GetSubTreeInfo, configID, subTreeID)
-        if okInfo and type(info) == "table" and info.name then
-            -- Zero is not an icon, and in Lua it is not false either --
-            -- which is how the first version of this reserved space for
-            -- a tile, indented the label past it, and drew nothing.
-            local icon = info.iconElementID
-            if type(icon) == "number" and icon <= 0 then icon = nil end
-            out[info.name:lower()] = {
-                icon   = icon,
-                active = (activeID ~= nil and subTreeID == activeID)
-                          or info.isActive == true,
-            }
-        end
-    end
-    return out
+    return (ns.HeroTalentSubtrees and ns:HeroTalentSubtrees()) or {}
 end
 
 local function Release(self)
@@ -470,6 +543,10 @@ local function Release(self)
         if self._icons[i] then self._icons[i]:Hide() end
     end
     self._iconIdx = 0
+    -- Not pooled, so it was never being hidden: on a spec Render bails
+    -- out of early, the last spec's summary stayed on screen over the
+    -- "no guide data" message.
+    if self._slotSummary then self._slotSummary:Hide() end
 end
 
 ------------------------------------------------------------
@@ -547,8 +624,21 @@ local function itemLink(entry)
     return bonusLink(entry)
 end
 
+--- Whether the guide says you make this rather than kill something for
+--- it.
+---
+--- The guide has no flag for it; what it has is a source string, and
+--- depending on which page a spec was scraped from that reads
+--- "Crafting", "Crafted", "Crafting/Misc", "Crafting Blacksmithing" or
+--- "Jewelcrafting". All five contain "craft", and all five mean the same
+--- thing to the person reading the doll.
+local function isCrafted(entry)
+    return (entry and entry.source or ""):lower():find("craft", 1, true) ~= nil
+end
+
 --- The item level this row tops out at, and its track rank -- "334",
---- "Myth 6/6" -- or nil when neither is knowable.
+--- "Myth 6/6" -- or nil when neither is knowable, plus whether that
+--- ceiling had to be brought DOWN to it.
 ---
 --- Same source of truth as the Loot Browser, which already resolves
 --- every rank of every track: GEAR_TRACKS, with ns:DescribeIlvlRank
@@ -563,26 +653,47 @@ end
 ---    place. Crafted gear caps somewhere else and is left blank rather
 ---    than guessed at.
 ---
---- A rank of nil is normal, not a failure: Very Rares sit at 344, above
---- every track, so they get an item level and no rank.
+--- Either way the answer is CAPPED at Myth 6/6, the top of GEAR_TRACKS.
+--- Above it sits Myth 9/9 at 344, which the guides do publish bonus IDs
+--- for -- and which no amount of crests will ever reach, because it
+--- comes off the last two Mythic bosses and off Very Rares, both Mythic
+--- only. A target you cannot buy your way to is not a target for a page
+--- that measures how far along you are; it is a row that reads "12
+--- short" forever. So the page aims at 6/6 and the tooltip says the rest
+--- exists, which is the honest split.
+---
+--- The third return says the cap bit, so only the rows it actually
+--- changed carry the explanation.
 local function maxRankIlvl(entry)
     local tracks, order = ns.GEAR_TRACKS, ns.TRACK_ORDER
     local floorLvl = tracks and tracks.Adventurer and tracks.Adventurer[1] or 0
+
+    -- Myth 6/6, or nil if the tables are not loaded.
+    local cap
+    if tracks and order and #order > 0 then
+        local top = tracks[order[#order]]
+        if top and #top > 0 then cap = top[#top] end
+    end
+
+    local function describe(lvl)
+        return lvl, ns.DescribeIlvlRank and ns:DescribeIlvlRank(lvl) or nil
+    end
 
     local link = bonusLink(entry)
     if link and GetDetailedItemLevelInfo then
         local ok, lvl = pcall(GetDetailedItemLevelInfo, link)
         if ok and lvl and lvl > 0 and lvl >= floorLvl then
-            return lvl, ns.DescribeIlvlRank and ns:DescribeIlvlRank(lvl) or nil
+            if cap and lvl > cap then
+                local capped, rank = describe(cap)
+                return capped, rank, lvl
+            end
+            return describe(lvl)
         end
     end
 
-    if (entry.source or ""):lower():find("craft", 1, true) then return nil end
-    if not (tracks and order and #order > 0) then return nil end
-    local top = tracks[order[#order]]
-    if not top or #top == 0 then return nil end
-    local lvl = top[#top]
-    return lvl, ns.DescribeIlvlRank and ns:DescribeIlvlRank(lvl) or nil
+    if isCrafted(entry) then return nil end
+    if not cap then return nil end
+    return describe(cap)
 end
 
 --- Tooltip showing the rank the LIST shows, not the item's base entry.
@@ -692,7 +803,8 @@ local function hookMenu(frame, itemID, title)
     end)
 end
 
-local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned)
+local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned,
+                           crafted, above)
     frame:SetScript("OnEnter", function(s)
         GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
         if link then
@@ -723,6 +835,22 @@ local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned)
             else
                 GameTooltip:AddLine("Yours: this one, at max rank", 0.35, 0.9, 0.45)
             end
+        end
+
+        -- Only on the rows where the guide's own bonus IDs said higher.
+        -- Everywhere else it would be the same sentence sixteen times
+        -- about a rank the row was never aiming at.
+        if above and ilvl and above > ilvl then
+            GameTooltip:AddLine(("This item goes to %d on Mythic — the last two "
+                .. "bosses and Very Rares. No crest reaches it, so the "
+                .. "page aims at %d."):format(above, ilvl), 0.62, 0.62, 0.70, true)
+        end
+
+        -- Four letters on the doll, and the room to say what they mean
+        -- is here.
+        if crafted then
+            GameTooltip:AddLine("Crafted — no lockout, no drop chance.",
+                0.79, 0.63, 0.42)
         end
         GameTooltip:Show()
     end)
@@ -852,22 +980,56 @@ end
 --- fills what is left, and whatever it can no longer place comes back as
 --- an alternative -- the same route an over-long guide list already
 --- takes, so a pick you override stays visible instead of vanishing.
+--- Places the guide's picks into inventory slots, around the player's pins.
+---
+--- Returns the slot map, and only those guide picks that a PIN pushed out.
+---
+--- Two passes, because "left over" and "displaced" are not the same thing
+--- and only one of them is worth showing.
+---
+--- The guide routinely lists more options for a slot than a character has
+--- slots to wear them in -- Restoration Druid ships 24 entries for 16
+--- slots: four trinkets, three rings, two of half the others. Those
+--- extras are not news. They are the alternatives the list already ranked
+--- BELOW the pick shown above them, and printing eight of them under
+--- "Also listed" said nothing while pushing the stat priority off the
+--- bottom of the page.
+---
+--- A pick that lost its slot to something you pinned is different. That
+--- one IS news: it is the trade you just made, and it is the only reason
+--- this section still exists.
 local function AssignToSlots(bis, seed)
-    local bySlot, spare = {}, {}
-    for invSlot, entry in pairs(seed or {}) do
-        bySlot[invSlot] = entry
-    end
-    for _, entry in ipairs(bis or {}) do
-        local placed = false
-        for _, invSlot in ipairs(SLOT_INV[entry.slot] or {}) do
-            if not bySlot[invSlot] then
+    local function place(withPins)
+        local bySlot, over = {}, {}
+        if withPins then
+            for invSlot, entry in pairs(seed or {}) do
                 bySlot[invSlot] = entry
-                placed = true
-                break
             end
         end
-        if not placed then
-            table.insert(spare, entry)
+        for _, entry in ipairs(bis or {}) do
+            local placed = false
+            for _, invSlot in ipairs(SLOT_INV[entry.slot] or {}) do
+                if not bySlot[invSlot] then
+                    bySlot[invSlot] = entry
+                    placed = true
+                    break
+                end
+            end
+            if not placed then over[entry] = true end
+        end
+        return bySlot, over
+    end
+
+    -- What overflows with no pins at all is the guide's own surplus, and
+    -- is dropped. Anything that overflows only once the pins are in was
+    -- pushed out by one of them.
+    local _, surplus = place(false)
+    local bySlot, over = place(true)
+
+    local spare = {}
+    for _, entry in ipairs(bis or {}) do
+        if over[entry] and not surplus[entry] then
+            spare[#spare + 1] = entry
         end
     end
     return bySlot, spare
@@ -899,11 +1061,15 @@ function UI:Render(content, width, height)
     local iconSize = ICON
     if height and height > 0 then
         local room = height - BIS_CHROME_H
-        -- Inverted from dollH, which is 9*icon + 8*GAP + 24: eight
-        -- paired rows, the weapon row, and the panel's own padding.
-        -- Dividing by nine without subtracting that padding overshot by
-        -- 12px and the doll ran past the region it was sizing to.
-        iconSize = math.floor((room - GAP * 8 - 24) / 9)
+        -- Inverted from dollH, and it has to stay inverted from it.
+        --
+        -- This divided by NINE, for eight paired rows plus the weapons.
+        -- There are seven paired rows: DOLL runs rows 1-7 down each
+        -- side and puts both weapons on row 8. So the panel was drawn a
+        -- whole row taller than the doll inside it, which is the band of
+        -- empty surface under the slot summary -- and every icon came
+        -- out a row's worth smaller than the room it had.
+        iconSize = math.floor((room - GAP * 7 - SUMMARY_BAND) / 8)
         iconSize = math.max(ICON, math.min(iconSize, ICON_MAX))
     end
 
@@ -1021,7 +1187,11 @@ function UI:Render(content, width, height)
     -- the weapon row underneath, which is the doll's fixed shape --
     -- unlike the list, it does not grow with the guide.
     ------------------------------------------------------------
-    local dollH = 8 * (iconSize + GAP) + iconSize + 24
+    -- Seven paired rows, the weapon row 6px below them, and everything
+    -- that is not a row. Kept as the exact inverse of the iconSize
+    -- arithmetic above: the two disagreeing is how the empty band
+    -- appeared.
+    local dollH = 7 * (iconSize + GAP) + iconSize + SUMMARY_BAND
     local dollPanel = AcquirePanel(self, content)
     dollPanel:SetPoint("TOPLEFT", PAD - 6, topY + 8)
     dollPanel:SetSize(DOLL_W + 4, dollH)
@@ -1033,8 +1203,24 @@ function UI:Render(content, width, height)
     -- supposed to sit under.
     local listPanel = AcquirePanel(self, content)
 
-    local colL = PAD + 4
-    local colR = PAD + DOLL_W - iconSize - 4
+    -- Both columns measured from the PANEL's own edges, not from PAD and
+    -- DOLL_W separately.
+    --
+    -- The panel starts at PAD-6 and is DOLL_W+4 wide, so its edges are
+    -- not where PAD and PAD+DOLL_W are. Positioning the left column from
+    -- one and the right column from the other gave 10px of air on the
+    -- left and 2px on the right -- the doll sat visibly hard against its
+    -- right edge while breathing on the left. Deriving both from the
+    -- panel makes the two insets the same number by construction rather
+    -- than by two arithmetic expressions happening to agree.
+    local dollL = PAD - 6
+    local dollR = dollL + DOLL_W + 4
+    local DOLL_INSET = 10
+    local colL = dollL + DOLL_INSET
+    local colR = dollR - DOLL_INSET - iconSize
+    -- Published so Tools/loadcheck.py can assert the two match.
+    self._dollInsets = { left = colL - dollL,
+                         right = dollR - (colR + iconSize) }
     local function dollPos(def)
         if def.side == "L" then
             return colL, topY - (def.row - 1) * (iconSize + GAP)
@@ -1043,7 +1229,9 @@ function UI:Render(content, width, height)
         end
         -- Weapons sit centred under the two columns.
         local slotsOnRow = (def.slot == 16) and 0 or 1
-        local centre = PAD + DOLL_W / 2 - iconSize - GAP / 2
+        -- Centred on the panel too, for the same reason: PAD + DOLL_W/2
+        -- is four pixels right of where the panel's middle actually is.
+        local centre = (dollL + dollR) / 2 - iconSize - GAP / 2
         return centre + slotsOnRow * (iconSize + GAP),
                topY - (def.row - 1) * (iconSize + GAP) - 6
     end
@@ -1062,8 +1250,16 @@ function UI:Render(content, width, height)
             local name, icon, hex = itemInfo(entry.itemID, link)
             b.tex:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
             b.tex:SetDesaturated(false)
-            local dollIlvl, dollRank = maxRankIlvl(entry)
+            local dollIlvl, dollRank, dollAbove = maxRankIlvl(entry)
             local owned, ownIlvl = ownedIlvl(def.slot, entry, bags)
+
+            -- Crafted pieces are the ones you can simply go and get, and
+            -- the doll is where that is worth knowing at a glance: every
+            -- other cell on it is a boss you wait on a lockout to fight.
+            if isCrafted(entry) then
+                b.tag:SetText("|cffc9a06acraft|r")
+                b.tagBG:Show()
+            end
 
             -- Three states, not two. "Have it" and "have it at the rank
             -- this list means" are different answers, and collapsing
@@ -1093,7 +1289,8 @@ function UI:Render(content, width, height)
                 -- legend; the number marks the ones you have.
                 b.tex:SetDesaturated(true)
             end
-            hookTooltip(b, entry.itemID, link, dollIlvl, dollRank, ownIlvl, owned)
+            hookTooltip(b, entry.itemID, link, dollIlvl, dollRank, ownIlvl,
+                        owned, isCrafted(entry), dollAbove)
             hookMenu(b, entry.itemID, entry.name)
             b.tex:SetAlpha(1)
             local _ = name  -- name is shown in the list, not on the doll
@@ -1103,6 +1300,82 @@ function UI:Render(content, width, height)
             b.tex:SetTexture(nil)
             b:SetBackdropColor(0.08, 0.08, 0.09, 0.8)
             b:SetBackdropBorderColor(0.20, 0.20, 0.22, 0.7)
+        end
+    end
+
+    ------------------------------------------------------------
+    -- The Catalyst, in the middle of the doll
+    --
+    -- A character panel has a model between its two columns of slots.
+    -- This one had 270x350 of empty surface there, which is the best
+    -- reading position on the page going spare -- and the Catalyst note
+    -- was competing for the header strip above, where it wrapped to two
+    -- lines and pushed the caveat off the bottom.
+    --
+    -- Here it costs the page nothing: the space already existed, and it
+    -- is surrounded by the very rows it is explaining. That also means
+    -- there is room to say the whole thing rather than one line with the
+    -- rest on hover, and this is not a footnote -- since 12.1 it is how
+    -- to read the list it sits inside.
+    --
+    -- Text is parented to the CARD, not to content. Every other block on
+    -- this page hangs its FontStrings off content, which is fine while
+    -- nothing sits under them; a card drawn over the doll's own panel
+    -- has two frames in the stack already, and text on the card cannot
+    -- land behind either of them.
+    ------------------------------------------------------------
+    local cat = ns.CATALYST_NOTE
+    if cat then
+        local catX = colL + iconSize + 10
+        local catW = math.max(colR - catX - 10, 120)
+        -- Down to the weapon row, which is 6px below the seventh.
+        local catH = math.max(7 * (iconSize + GAP) - 4, 80)
+
+        local card = AcquireCard(self, content)
+        card:SetPoint("TOPLEFT", catX, topY)
+        card:SetSize(catW, catH)
+        -- Above the doll's surface rather than trusting creation order:
+        -- both are children of content and the panel pool is filled
+        -- first, so equal levels would put this behind it.
+        card:SetFrameLevel(dollPanel:GetFrameLevel() + 1)
+        if ns.Widgets then
+            -- The Catalyst purple the "+cat" tag already uses, as a wash
+            -- rather than a fill, so it reads as lit rather than as a
+            -- purple box in a brown window.
+            ns.Widgets:Rounded(card, "inset", CARD_RADIUS,
+                { wash = { 0.60, 0.42, 0.85, 0.22 } })
+        end
+
+        local cx, cy = 12, -10
+        local cw = catW - 24
+
+        local ch = AcquireFS(self, card, "GameFontNormal")
+        ch:SetPoint("TOPLEFT", cx, cy)
+        ch:SetWidth(cw)
+        ch:SetTextColor(0.72, 0.55, 0.95)
+        ch:SetText("THE CATALYST")
+        ns.ApplyTextShadow(ch)
+        cy = cy - 18
+
+        -- The conclusion first and brightest, then the reasoning. A
+        -- reader who stops after one paragraph should still have the
+        -- part that changes what they chase.
+        local lead = AcquireFS(self, card, "GameFontNormalSmall")
+        lead:SetPoint("TOPLEFT", cx, cy)
+        lead:SetWidth(cw)
+        lead:SetWordWrap(true)
+        lead:SetTextColor(0.94, 0.92, 0.98)
+        lead:SetText(cat.line)
+        cy = cy - (lead:GetStringHeight() or 12) - 8
+
+        for _, para in ipairs(cat.detail or {}) do
+            local fs = AcquireFS(self, card, "GameFontNormalSmall")
+            fs:SetPoint("TOPLEFT", cx, cy)
+            fs:SetWidth(cw)
+            fs:SetWordWrap(true)
+            fs:SetTextColor(0.68, 0.66, 0.72)
+            fs:SetText(para)
+            cy = cy - (fs:GetStringHeight() or 12) - 6
         end
     end
 
@@ -1130,8 +1403,13 @@ function UI:Render(content, width, height)
         self._slotSummary = ns.Widgets:Label(content, "GameFontNormalSmall")
     end
     self._slotSummary:ClearAllPoints()
-    self._slotSummary:SetPoint("TOPLEFT", PAD, topY - 8 * (iconSize + GAP) - 6)
-    self._slotSummary:SetWidth(DOLL_W)
+    -- From colL, not from PAD. The panel starts at PAD-6 and insets its
+    -- columns by DOLL_INSET, so PAD is four pixels left of the icons the
+    -- line is summarising -- close enough to look like a mistake rather
+    -- than an indent.
+    self._slotSummary:SetPoint("TOPLEFT", colL,
+        topY - 7 * (iconSize + GAP) - iconSize - 14)
+    self._slotSummary:SetWidth(math.max(dollR - DOLL_INSET - colL, 100))
     self._slotSummary:SetText(("%s  %s  %s"):format(
         ("|cff%s%d equipped|r"):format(ns.Widgets:Hex("good"), haveCount),
         bagCount > 0 and ("|cff%s%d in bags|r"):format(ns.Widgets:Hex("warn"), bagCount)
@@ -1139,8 +1417,6 @@ function UI:Render(content, width, height)
         missingCount > 0 and ("|cff%s%d missing|r"):format(ns.Widgets:Hex("muted"), missingCount)
             or ns.Widgets:Tint("faint", "none missing")))
     self._slotSummary:Show()
-
-    local dollBottom = topY - 8 * (iconSize + GAP) - 14
 
     ------------------------------------------------------------
     -- List, right
@@ -1159,12 +1435,19 @@ function UI:Render(content, width, height)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
             if icon then row.icon:SetTexture(icon) end
-            row.name:SetWidth(listW - 26 - 46)
-            row.name:SetText(name and (hex .. name .. "|r")
-                or ("|cff5a5a62item " .. entry.itemID .. "|r"))
             if not name then unresolved = unresolved + 1 end
+            local nameText = name and (hex .. name .. "|r")
+                or ("|cff5a5a62item " .. entry.itemID .. "|r")
 
-            local src = entry.source or ""
+            -- The row's own ceiling. The column stopped printing it and
+            -- these two locals went with it -- but the mark below and
+            -- the tooltip call still read `ilvl` and `rank`, which from
+            -- then on were nil GLOBALS: every owned row went green "at
+            -- max rank" however far short it was, and the list's
+            -- tooltips lost the upgrade line the doll still had.
+            local ilvl, rank, above = maxRankIlvl(entry)
+
+            local src = SourceText(entry)
             -- Source only. The item level and "Myth 6/6" were the same
             -- two values on almost every row -- this is a best-in-slot
             -- list, so of course they are all at max rank -- and they
@@ -1175,7 +1458,6 @@ function UI:Render(content, width, height)
             if entry.catalystFrom then
                 src = src ~= "" and (src .. " |cff9a6ad4+cat|r") or "|cff9a6ad4catalyst|r"
             end
-            row.source:SetText("|cff6d6d77" .. src .. "|r")
 
             -- Equipped is marked on the name itself now that the slot
             -- column is gone, so the signal survives -- and it carries
@@ -1191,18 +1473,29 @@ function UI:Render(content, width, height)
                 elseif ownIlvl then
                     mark = ("|cff5cff78%d|r"):format(ownIlvl)
                 end
-                row.name:SetText((name and (hex .. name .. "|r")
-                    or ("|cff777777item " .. entry.itemID .. "|r")) .. " " .. mark)
+                nameText = (name and (hex .. name .. "|r")
+                    or ("|cff777777item " .. entry.itemID .. "|r")) .. " " .. mark
             end
-            hookTooltip(row, entry.itemID, link, ilvl, rank, ownIlvl, owned)
+
+            -- Sized last, once both strings are final: the name's width
+            -- depends on how much room the source actually needs.
+            FitRow(row, listW, nameText, src)
+
+            -- The tooltip hangs off the NAME, not off the row. A row is
+            -- as wide as the column; the name almost never is, and a
+            -- tooltip that fires over the empty half of every row is
+            -- what makes this list feel twitchy to read.
+            hookTooltip(ns.Widgets:TextHover(row.name) or row,
+                        entry.itemID, link, ilvl, rank, ownIlvl, owned,
+                        isCrafted(entry), above)
             hookMenu(row, entry.itemID, entry.name)
             ly = ly - ROW_H
         end
     end
 
-    -- Options the guide lists beyond what a character can wear at once
-    -- (a third trinket, a spare ring). No doll cell can hold them, and
-    -- silently dropping them would delete advice the guide gave.
+    -- The guide picks your pins pushed out of their slots. See
+    -- AssignToSlots: the guide's own surplus options never reach here,
+    -- so this section is empty until you pin something of your own.
     if #spare > 0 then
         ly = ly - 8
         local sh = AcquireFS(self, content, "GameFontNormalSmall")
@@ -1218,9 +1511,8 @@ function UI:Render(content, width, height)
             local link = itemLink(entry)
             local name, icon, hex = itemInfo(entry.itemID, link)
             if icon then row.icon:SetTexture(icon) end
-            row.name:SetWidth(listW - 26 - 46)
-            row.name:SetText(name and (hex .. name .. "|r")
-                or ("|cff777777item " .. entry.itemID .. "|r"))
+            local sName = name and (hex .. name .. "|r")
+                or ("|cff777777item " .. entry.itemID .. "|r")
             -- Source only, as in the main list above. These rows had
             -- their own copy of the item level and rank formatting, so
             -- trimming the one branch left "Also listed" still carrying
@@ -1229,10 +1521,11 @@ function UI:Render(content, width, height)
             -- sIlvl and sRank stay: the tooltip below still shows the
             -- item level a piece maxes at, which is worth knowing on
             -- hover even when it is noise in the row.
-            local sIlvl, sRank = maxRankIlvl(entry)
-            local sSrc = entry.source or ""
-            row.source:SetText("|cff6d6d77" .. sSrc .. "|r")
-            hookTooltip(row, entry.itemID, link, sIlvl, sRank)
+            local sIlvl, sRank, sAbove = maxRankIlvl(entry)
+            FitRow(row, listW, sName, SourceText(entry))
+            hookTooltip(ns.Widgets:TextHover(row.name) or row,
+                        entry.itemID, link, sIlvl, sRank, nil, nil,
+                        isCrafted(entry), sAbove)
             hookMenu(row, entry.itemID, entry.name)
             ly = ly - ROW_H
         end
@@ -1245,10 +1538,11 @@ function UI:Render(content, width, height)
 
     -- Below BOTH columns, with room to breathe.
     --
-    -- dollBottom is the last icon row, not the bottom of the doll: the
-    -- "0 equipped, 0 in bags, 16 missing" summary sits under it and the
-    -- panel's own edge under that. Taking the min against it put the
-    -- Stat Priority heading straight through the summary line.
+    -- Off the PANEL's bottom edge, not off the last icon row. The row
+    -- is not the bottom of the doll: the "0 equipped, 0 in bags, 16
+    -- missing" summary sits under it and the panel's own edge under
+    -- that, and taking the min against the row put the Stat Priority
+    -- heading straight through the summary line.
     local dollPanelBottom = topY + 8 - dollH - 12
     y = math.min(dollPanelBottom, ly - 10) - GAP * 3
 
@@ -1470,9 +1764,17 @@ function UI:BuildInto(parent)
     -- plus a stat block, so it can be laid out to fit -- and a scrollbar
     -- on something that nearly fits is worse than either extreme,
     -- because it hides the last two rows behind a gesture.
+    -- Hard against the region, with PAD doing the insetting.
+    --
+    -- This was 8 on every side, on top of PAD's 16 and the page
+    -- container's own 10 above it -- so the page began 34px inside the
+    -- shell at the top and the doll sat in a visible moat. Two things
+    -- were spending margin on the same edge; the shell's PAD is the one
+    -- that is shared with every other page, so it is the one that keeps
+    -- the job.
     local content = CreateFrame("Frame", nil, host)
-    content:SetPoint("TOPLEFT", host, "TOPLEFT", 8, -8)
-    content:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -8, 8)
+    content:SetPoint("TOPLEFT", host, "TOPLEFT", 2, -2)
+    content:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -2, 2)
     self._content = content
 
     -- Equipping a piece, changing spec, an item name arriving, or a

@@ -214,6 +214,11 @@ local function build(style)
                     bucket.specs[#bucket.specs + 1] = {
                         key = specKey, rank = rank, rel = row.rel or 0,
                         tier = block.tier,
+                        -- Carried per entry, not read back from the spec
+                        -- later: a tooltip listing five specs can be
+                        -- quoting both sources at once, and it has to be
+                        -- able to say so.
+                        provider = block.provider or "bloodmallet",
                     }
                 end
             end
@@ -306,9 +311,11 @@ function T:Rebuild()
     build(T.DEFAULT_STYLE)
 end
 
---- True when any spec has data for this fight style. Healer specs are
---- never simmed, and a few others (Blood, Fire) have no AoE chart, so the
---- UI asks before offering a tab that would open on an empty list.
+--- True when any spec has data for this fight style. A few specs have no
+--- AoE chart at all, so the UI asks before offering a tab that would open
+--- on an empty list. Healers count here too: QE Live's dungeon chart is
+--- filed under AOE, so the tab has content for them even when the spec
+--- next to them on the council list has none.
 function T:HasStyle(style)
     local _, items = build(style)
     return #items > 0
@@ -329,11 +336,78 @@ function T:PendingSpecs(style)
     return c and c.pendingSpecs or {}
 end
 
---- All specs that sim this trinket, best rank first. nil if unknown.
+--- All specs that sim this trinket, strongest claim first. nil if unknown.
 function T:GetSpecsFor(itemID, style)
     local byItem = build(style)
     local bucket = byItem[itemID]
     return bucket and bucket.specs or nil, bucket
+end
+
+------------------------------------------------------------
+-- Grouping by what the percentage measures.
+--
+-- `rel` is percent behind that spec's best trinket, and the two sources
+-- divide by different things to get there. bloodmallet's is a share of
+-- the profile's TOTAL DPS, so a spec's whole 25-trinket list spans about
+-- three and a half percent. QE Live's is the difference between two
+-- trinkets' own healing contributions, with no total underneath it, so
+-- the same list spans forty.
+--
+-- Sorted into one list by that number, the sort stops ranking interest
+-- and starts ranking which project simmed you: a Holy Priest's 4th best
+-- trinket reads -16.4% and lands below an Arcane Mage's 16th at -2.0%.
+-- The numbers are each right about their own spec and meaningless
+-- against each other, so they are never placed in the same column.
+--
+-- Split by the unit rather than by role. That it currently separates
+-- healers from everyone else is a consequence, not the rule -- the rule
+-- is that two numbers only go in one list when they divide by the same
+-- thing.
+------------------------------------------------------------
+local GROUPS = {
+    percent = { order = 1, label = "Damage & tanks",
+                note = "% of total DPS" },
+    score   = { order = 2, label = "Healers",
+                note = "% of the best trinket's healing" },
+}
+
+--- The same specs, split by unit, with the player's own group first.
+---
+--- Groups keep the order build() sorted them into, which is by rel --
+--- correct inside a group, since every entry in one divides by the same
+--- thing.
+function T:GroupedSpecsFor(itemID, style)
+    local specs, bucket = self:GetSpecsFor(itemID, style)
+    if not specs then return nil, bucket end
+
+    local out, index = {}, {}
+    for _, entry in ipairs(specs) do
+        local unit = self:ProviderInfo(entry.provider).unit
+        local group = index[unit]
+        if not group then
+            local meta = GROUPS[unit] or GROUPS.percent
+            group = { unit = unit, label = meta.label, note = meta.note,
+                      order = meta.order, source = self:ProviderInfo(entry.provider).label,
+                      entries = {} }
+            index[unit] = group
+            out[#out + 1] = group
+        end
+        group.entries[#group.entries + 1] = entry
+    end
+
+    -- The player's own group first, because the question a player opens
+    -- this on is "do I want it", and the answer should not be below a
+    -- list of eight specs they will never play. Falls back to the fixed
+    -- order when the player's spec is not simmed at all.
+    local mine = self:GetPlayerSpecKey()
+    local myUnit = mine and self:ProviderInfo(self:Provider(mine, style)).unit
+    table.sort(out, function(a, b)
+        if myUnit and (a.unit == myUnit) ~= (b.unit == myUnit) then
+            return a.unit == myUnit
+        end
+        return a.order < b.order
+    end)
+    return out, bucket
 end
 
 --- Trinkets worth browsing, best-ranked first.
@@ -356,10 +430,58 @@ end
 --- The ranking for one spec in one fight style: list, itemLevel, when it
 --- was simmed, and which tier it is from.
 function T:GetForSpec(specKey, style)
-    local entry = ns.TrinketData and ns.TrinketData[specKey]
-    local block = entry and entry[style or T.DEFAULT_STYLE]
+    local block = self:GetBlock(specKey, style)
     if not block then return nil end
     return block.list, block.ilvl, block.timestamp, block.tier
+end
+
+------------------------------------------------------------
+-- Where a block came from.
+--
+-- Two sources feed the same table. bloodmallet sims damage and covers
+-- everything that deals it; QE Live covers the seven healing specs it
+-- has never published and never will. They disagree about more than the
+-- name in the footer -- what the numbers measure, what the two fight
+-- style tabs mean, and whether a spec waiting on a re-sim is a thing
+-- that can happen -- so anything user-facing asks which one it holds
+-- rather than assuming bloodmallet.
+------------------------------------------------------------
+local PROVIDERS = {
+    bloodmallet = { label = "bloodmallet", site = "bloodmallet.com",
+                    unit = "percent" },
+    qe          = { label = "QE Live", site = "questionablyepic.com",
+                    unit = "score" },
+}
+
+--- The raw block, for the callers that need more than list and tier.
+function T:GetBlock(specKey, style)
+    local entry = ns.TrinketData and ns.TrinketData[specKey]
+    return entry and entry[style or T.DEFAULT_STYLE] or nil
+end
+
+--- Provider key for one block. bloodmallet by default: it wrote every
+--- block in the file before QE Live was added, and none of them say so.
+function T:Provider(specKey, style)
+    local block = self:GetBlock(specKey, style)
+    return block and block.provider or "bloodmallet"
+end
+
+--- Display name, site and curve unit for a provider key.
+function T:ProviderInfo(provider)
+    return PROVIDERS[provider or "bloodmallet"] or PROVIDERS.bloodmallet
+end
+
+--- What the two style tabs mean for this spec.
+---
+--- ST and AOE are target counts to bloodmallet and content to QE Live,
+--- which files its raid chart under ST and its dungeon chart under AOE
+--- so healers land in the same loot council index as everyone else. The
+--- label follows the block rather than the key, so a Mistweaver is not
+--- told their dungeon ranking is an AoE one.
+function T:StyleLabel(specKey, style)
+    local block = specKey and self:GetBlock(specKey, style)
+    if block and block.profile then return block.profile end
+    return style == "AOE" and "AoE" or "Single Target"
 end
 
 ------------------------------------------------------------
@@ -373,15 +495,21 @@ end
 -- question can be asked at a chosen item level instead.
 ------------------------------------------------------------
 
---- curve[itemID][ilvl] = percent gain over an empty trinket slot, every
---- item level present in the block, and where each trinket drops.
+--- curve[itemID][ilvl] = what the trinket is worth at that item level,
+--- every item level present in the block, where each trinket drops, and
+--- which unit the values are in.
+---
+--- The unit is not decoration. bloodmallet's curve is a percent gain
+--- over an empty trinket slot; QE Live's is an HPS-equivalent score.
+--- Both rank the same way, so every caller that only sorts can ignore
+--- it -- but anything that subtracts two of them, or prints one, cannot.
 --- nil curve for a spec bloodmallet has not re-simmed: the detail was
 --- never scraped and cannot be recovered, only re-run.
 function T:GetCurve(specKey, style)
-    local entry = ns.TrinketData and ns.TrinketData[specKey]
-    local block = entry and entry[style or T.DEFAULT_STYLE]
+    local block = self:GetBlock(specKey, style)
     if not block then return nil end
-    return block.curve, block.steps, block.source
+    return block.curve, block.steps, block.source,
+        self:ProviderInfo(block.provider).unit
 end
 
 --- The ranking as it stands at one item level, best first.
@@ -423,13 +551,25 @@ function T:GetAtItemLevel(specKey, style, ilvl)
         return (a.name or "") < (b.name or "")
     end)
 
-    -- Percent behind the best at this item level. Both sides are gains
-    -- over the same empty-slot baseline, so the difference is taken
-    -- against that baseline rather than subtracted outright -- a 9%
-    -- trinket is not "1% better" than an 8% one, it is 0.93% better.
+    -- Percent behind the best at this item level, which is arithmetic
+    -- the unit decides.
+    --
+    -- bloodmallet's gains are percentages over an empty slot, so the
+    -- difference is taken against that same baseline rather than
+    -- subtracted outright -- a 9% trinket is not "1% better" than an 8%
+    -- one, it is 0.93% better. QE Live's are absolute scores with no
+    -- baseline in them, so there the ratio is against the best score.
+    -- Using the percent formula on scores would divide by 100 more than
+    -- it should, which at QE's magnitudes is a rounding error and
+    -- therefore the kind of wrong that survives review.
+    local _, _, _, unit = self:GetCurve(specKey, style)
     local top = out[1].gain
     for _, r in ipairs(out) do
-        r.rel = (r.gain - top) / (100.0 + top) * 100.0
+        if unit == "score" then
+            r.rel = (r.gain - top) / top * 100.0
+        else
+            r.rel = (r.gain - top) / (100.0 + top) * 100.0
+        end
     end
 
     atCache[key] = out
@@ -475,9 +615,14 @@ function T:StaleText()
 end
 
 --- The same warning for one spec, while other specs are current.
-function T:StaleSpecText(tier)
-    return ("|cffffcc00This is %s data.|r bloodmallet has not re-simmed this spec for %s yet, so the order below is last tier's.")
+---
+--- Named after the provider that owes the update. Telling a Holy Priest
+--- that bloodmallet has not re-simmed them would be a wait with no end:
+--- bloodmallet sims damage and has never published a healer chart.
+function T:StaleSpecText(tier, provider)
+    return ("|cffffcc00This is %s data.|r %s has not re-run this spec for %s yet, so the order below is last tier's.")
         :format(tier or ns.TRINKET_TIER or "older",
+                self:ProviderInfo(provider).label,
                 ns.TRINKET_TARGET_TIER or "the current tier")
 end
 
@@ -503,22 +648,74 @@ local function describeRank(entry)
     return ("  #%d %s%s"):format(entry.rank, T:ColorSpec(entry.key), suffix)
 end
 
+--- Appends the sim block. Returns true only if it actually added lines.
+---
+--- The return value is the point: this runs on EVERY item tooltip in the
+--- game and the overwhelming majority are not trinkets we have data for,
+--- so the caller needs to know the difference between "added something"
+--- and "looked and left".
 local function addTrinketLines(tooltip, itemID)
-    if not itemID then return end
+    if not itemID then return false end
     local specs = T:GetSpecsFor(itemID)
-    if not specs or #specs == 0 then return end
+    if not specs or #specs == 0 then return false end
+
+    -- Attributed to whoever is actually on the tooltip. A trinket good
+    -- for a Warlock and a Holy Priest is being ranked by two different
+    -- projects, and crediting one of them for both is wrong in the
+    -- direction that matters -- the healer numbers are the ones a reader
+    -- would otherwise assume bloodmallet publishes, which it does not.
+    local seen, names = {}, {}
+    for _, entry in ipairs(specs) do
+        local label = T:ProviderInfo(entry.provider).label
+        if not seen[label] then
+            seen[label] = true
+            names[#names + 1] = label
+        end
+    end
+    table.sort(names)
 
     tooltip:AddLine(" ")
-    tooltip:AddLine("|cff00ccffTrinket sims|r |cff666666(bloodmallet)|r")
+    tooltip:AddLine("|cff00ccffTrinket sims|r |cff666666(" ..
+        table.concat(names, " + ") .. ")|r")
 
     local playerKey = T:GetPlayerSpecKey()
     local shown, playerShown = 0, false
 
-    for _, entry in ipairs(specs) do
-        if shown >= MAX_TOOLTIP_SPECS then break end
-        tooltip:AddLine(describeRank(entry))
-        if entry.key == playerKey then playerShown = true end
-        shown = shown + 1
+    -- Grouped for the same reason the page groups -- the percentages
+    -- divide by different things -- but with a second job here: five
+    -- lines sorted into one list is five damage specs, every time, and
+    -- a healer hovering a trinket would never see another healer on it.
+    -- The budget is split so both sides get a look in, and whichever
+    -- group the player is in goes first and takes the larger share.
+    local groups = T:GroupedSpecsFor(itemID) or {}
+    local budget = {}
+    local room = MAX_TOOLTIP_SPECS
+    for i = #groups, 1, -1 do
+        -- Back to front, so the rounding lands on the player's group.
+        local share = math.floor(room / i)
+        local want = #groups[i].entries
+        budget[i] = (share < want) and share or want
+        room = room - budget[i]
+    end
+    -- Whatever the smaller group did not need goes to the first one,
+    -- rather than shortening the tooltip for no reason.
+    if room > 0 and groups[1] then
+        local want = #groups[1].entries - budget[1]
+        budget[1] = budget[1] + ((room < want) and room or want)
+    end
+
+    for i, group in ipairs(groups) do
+        local take = budget[i] or 0
+        if take > 0 and #groups > 1 then
+            tooltip:AddLine(("|cff666666%s — %s|r"):format(group.label,
+                group.source))
+        end
+        for n, entry in ipairs(group.entries) do
+            if n > take then break end
+            tooltip:AddLine(describeRank(entry))
+            if entry.key == playerKey then playerShown = true end
+            shown = shown + 1
+        end
     end
 
     -- Always tell the player where it lands for them, even if their spec
@@ -541,6 +738,7 @@ local function addTrinketLines(tooltip, itemID)
     if T:IsStale() then
         tooltip:AddLine("|cff886600" .. (ns.TRINKET_TIER or "old") .. " sim data|r")
     end
+    return true
 end
 
 local function enabled()
@@ -576,8 +774,18 @@ local function hookTooltips()
                 end
                 local id = data and data.id
                 if not id then return end
-                local ok = pcall(addTrinketLines, tooltip, id)
-                if ok and tooltip.Show then tooltip:Show() end
+                -- Show() ONLY when we actually appended something.
+                --
+                -- It used to fire on every item tooltip in the game,
+                -- trinket or not, because the pcall's `ok` says the call
+                -- did not error rather than that it did anything. Calling
+                -- Show on a tooltip we did not touch is at best pointless
+                -- work on every hover, and at worst a second opinion
+                -- about visibility offered while the client is busy
+                -- forming its own -- which is the shape of a tooltip that
+                -- appears and vanishes.
+                local ok, added = pcall(addTrinketLines, tooltip, id)
+                if ok and added and tooltip.Show then tooltip:Show() end
             end)
     end
 end

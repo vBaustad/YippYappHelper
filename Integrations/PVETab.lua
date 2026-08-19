@@ -12,51 +12,55 @@ local function CreatePVETab()
 
     tabCreated = true
 
-    -- Capture the existing last tab BEFORE creating ours — PanelTabButtonTemplate's
-    -- OnLoad may auto-insert the new tab into PVEFrame.Tabs, which would otherwise
-    -- make us anchor to ourselves.
-    local numTabs = PVEFrame.numTabs or (PVEFrame.Tabs and #PVEFrame.Tabs) or 0
-    local tabIndex = numTabs + 1
+    -- A button that SITS BESIDE Blizzard's tabs, and is not one of them.
+    --
+    -- This used to enrol itself properly: it took the next tab index, took
+    -- the reserved "PVEFrameTab<n>" global name, appended itself to
+    -- PVEFrame.Tabs and wrote PVEFrame.numTabs. Every one of those hands
+    -- Blizzard's tab machinery something an addon created, and PVEFrame is
+    -- the Group Finder -- PVEFrame_ShowFrame and the PanelTemplates
+    -- helpers read numTabs and walk the Tabs list, so the taint travelled
+    -- straight into the frame that queues you for things. Queueing is
+    -- protected, and a blocked protected call is silent unless
+    -- scriptErrors is on: the Join button simply stops working, with no
+    -- error to connect it to us. It ran on every login the moment
+    -- Blizzard_GroupFinder loaded, whether or not anyone clicked the tab.
+    --
+    -- None of it bought anything. The OnClick below already refuses to
+    -- participate in Blizzard's tab state ("pure launcher"), and the old
+    -- code then spent two separate deselect calls undoing the selection
+    -- that enrolling had invited. Not enrolling is the same result with
+    -- nothing to undo.
+    --
+    -- What is left touches only our own button: anchoring it after the
+    -- last real tab, and the two PanelTemplates helpers, which write to
+    -- the button passed in and nothing else.
     local anchorTab
     if PVEFrame.Tabs and #PVEFrame.Tabs > 0 then
         anchorTab = PVEFrame.Tabs[#PVEFrame.Tabs]
-    elseif numTabs > 0 then
-        anchorTab = _G["PVEFrameTab" .. numTabs]
+    else
+        local n = PVEFrame.numTabs or 0
+        if n > 0 then anchorTab = _G["PVEFrameTab" .. n] end
     end
 
-    local tab = CreateFrame("Button", "PVEFrameTab" .. tabIndex, PVEFrame, "PanelTabButtonTemplate")
+    -- Named out of Blizzard's namespace on purpose. PanelTemplates looks
+    -- siblings up as _G[parentName .. "Tab" .. i], so a button called
+    -- PVEFrameTab5 gets found and driven by tab code we are trying to
+    -- stay out of.
+    local tab = CreateFrame("Button", "YippYappPVEFrameTab", PVEFrame, "PanelTabButtonTemplate")
     tab:SetText("Keys")
-    tab:SetID(tabIndex)
     PanelTemplates_TabResize(tab, 15, nil, 70)
     PanelTemplates_DeselectTab(tab)
 
-    if anchorTab and anchorTab ~= tab then
+    if anchorTab then
         tab:SetPoint("TOPLEFT", anchorTab, "TOPRIGHT", 4, 0)
     end
 
-    -- Register in PVEFrame's tab system
-    if PVEFrame.Tabs then
-        table.insert(PVEFrame.Tabs, tab)
-    end
-    PVEFrame.numTabs = tabIndex
-
     tab:SetScript("OnClick", function()
-        -- Pure launcher: don't touch PVEFrame's tab state or content panels.
-        -- Just open our app to the mythic+ page. Defer the tab visual reset
-        -- one frame so it never runs inline with Blizzard's click dispatch,
-        -- keeping the PVEFrame tab-state machine untouched in combat.
-        C_Timer.After(0, function()
-            if tab then PanelTemplates_DeselectTab(tab) end
-        end)
-        if not ns.AppFrame then return end
-        ns.AppFrame:Hide()
-        ns:ShowAppPage("mythicplus")
-        ns.AppFrame:Show()
-    end)
-
-    -- Ensure our tab never ends up visually "selected"
-    hooksecurefunc("PVEFrame_ShowFrame", function()
-        if tab then PanelTemplates_DeselectTab(tab) end
+        -- Pure launcher: Blizzard's tab state and content panels are not
+        -- ours to touch. Nothing selects this button, so nothing has to
+        -- deselect it either.
+        if ns.OpenTo then ns:OpenTo("mythicplus") end
     end)
 end
 

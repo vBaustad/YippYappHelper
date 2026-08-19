@@ -57,8 +57,9 @@ Everything lives in one window, movable through Blizzard's own Edit Mode.
 |---|---|
 | `/yh` | Open it |
 | `/yh help` | Every command |
-| `/yh keys` | Mythic+ |
-| `/yh loot` | Loot browser |
-| `/yh raid` | Raid tools |
+| `/yh shell <page>` | Straight to a page |
+| `/yh guide` | Boss guide for the current raid |
+| `/yh train [boss]` | Practise a boss's mechanics |
+| `/yh settings` | Options |
 
 Bug reports and requests welcome on the project page.

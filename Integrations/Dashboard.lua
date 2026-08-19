@@ -171,7 +171,7 @@ CreateDashButton(
 )
 
 CreateDashButton(
-    "|cff00aaffRaid Tools|r",
+    "|cff00aaffRaid|r",
     "Tier tracker, L'ura Runes, raid overview",
     { 0.0, 0.67, 1.0 },
     function()

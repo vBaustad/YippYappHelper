@@ -444,8 +444,24 @@ end
 ------------------------------------------------------------
 local tooltip = GameTooltip
 
+-- Combat deferral, for the same reason as Features/MythicPlus/MythicPlusUI.lua.
+--
+-- The dungeon tiles here are SecureActionButtonTemplate frames, and a
+-- redraw re-parents them, re-anchors them, shows them and hides them
+-- again through ResetPools. Every one of those is blocked while the
+-- player is in combat -- not just the SetAttribute calls AcquireBtn
+-- already guarded, which is why guarding only those left the page half
+-- drawn instead of fixed. The blocks are silent unless scriptErrors is
+-- on, so the visible symptom is a teleport tile that stops responding.
+local refreshPending = false
+
 function ns:RefreshTeleports()
     if not frame:IsShown() then return end
+    if InCombatLockdown() then
+        refreshPending = true
+        return
+    end
+    refreshPending = false
 
     ResetPools()
 
@@ -643,3 +659,19 @@ function ns:SetTeleportAppMode(enabled, contentWidth, contentHeight)
         scrollFrame:SetPoint("TOPLEFT", PAD, -38)
     end
 end
+
+------------------------------------------------------------
+-- Combat
+------------------------------------------------------------
+
+-- Draws whatever the guard in RefreshTeleports refused, the moment the
+-- lockdown lifts. Declared down here rather than beside the frame: it
+-- closes over `refreshPending`, and a watcher written above that local
+-- would have captured a nil global and quietly never fired.
+local combatWatcher = CreateFrame("Frame")
+combatWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+combatWatcher:SetScript("OnEvent", function()
+    if refreshPending and frame:IsShown() and ns.RefreshTeleports then
+        ns:RefreshTeleports()
+    end
+end)

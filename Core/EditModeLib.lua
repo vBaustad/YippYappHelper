@@ -105,6 +105,28 @@ local function RepairAfterChange()
     end)
 end
 
+--- Raises a frame's selection overlay above the frame's own children.
+---
+--- LibEditMode parents the selection to the frame at the default level,
+--- but our windows put clickable content on top: the completion popup
+--- fills its body with action buttons, and both it and the tracker draw
+--- overlays at level +10. Those swallow the click before the selection
+--- ever sees it, so the frame looks selectable but cannot be picked up.
+---
+--- Strata has to be matched too, and matched *again* whenever it
+--- changes. Strata outranks frame level, so a frame that raises itself
+--- above its own selection child takes every click -- and the shared
+--- situation window changes strata with whatever it is showing, which is
+--- why this is a function rather than four lines inside Register.
+function ns.EditModeLib.SyncSelection(frame)
+    if not frame or not LEM.frameSelections then return end
+    local selection = LEM.frameSelections[frame]
+    if not selection then return end
+    selection:SetFrameStrata(frame:GetFrameStrata())
+    selection:SetFrameLevel(frame:GetFrameLevel() + 20)
+    selection:EnableMouse(true)
+end
+
 local function Register(frame, key, default, settings, label)
     if not frame then return end
     table.insert(managed, { frame = frame, key = key, default = default })
@@ -139,27 +161,7 @@ local function Register(frame, key, default, settings, label)
         p.point, p.relativePoint, p.x, p.y = point, point, x, y
     end, default, label)
 
-    -- Raise the selection above the frame's own children. LibEditMode
-    -- parents it to the frame at the default level, but our windows put
-    -- clickable content on top: the completion popup fills its body with
-    -- secure action buttons, and both it and the tracker draw a lock
-    -- overlay at level +10. Those swallow the click before the selection
-    -- ever sees it, so the frame looks selectable but cannot be picked up.
-    local selection = LEM.frameSelections and LEM.frameSelections[frame]
-    if selection then
-        -- Match the frame's strata. LibEditMode's selection sits at MEDIUM,
-        -- but the completion popup raises itself to HIGH -- and strata
-        -- outranks frame level, so the frame took every click above its own
-        -- selection child. Its close button still worked (also a child of
-        -- the HIGH frame), which made it look like a layering problem
-        -- within the frame rather than a strata mismatch.
-        selection:SetFrameStrata(frame:GetFrameStrata())
-        -- Then clear the frame's own children within that strata: the
-        -- popup fills its body with secure buttons and both it and the
-        -- tracker draw a lock overlay at level +10.
-        selection:SetFrameLevel(frame:GetFrameLevel() + 20)
-        selection:EnableMouse(true)
-    end
+    ns.EditModeLib.SyncSelection(frame)
 
     if settings and LEM.AddFrameSettings then
         LEM:AddFrameSettings(frame, settings)
@@ -337,64 +339,6 @@ local function RegisterAll()
             }, "Interrupt Tracker")
     end
 
-    -- Ready Check overview
-    if ns.ReadyCheck and _G.YippYappReadyCheck and not done.readyCheck then
-        done.readyCheck = true
-        Register(_G.YippYappReadyCheck, "readyCheck",
-            { point = "CENTER", x = 0, y = 0 }, {
-                Caption("Shown when someone starts a ready check"),
-                FrameScale("readyCheck", _G.YippYappReadyCheck),
-                FrameAlpha("readyCheck", _G.YippYappReadyCheck),
-            }, "Ready Check")
-    end
-
-    -- Mythic+ completion popup
-    if ns.SetCompletionPopupLocked and _G.YippYappMPlusCompletion and not done.mplusCompletion then
-        done.mplusCompletion = true
-        Register(_G.YippYappMPlusCompletion, "mplusCompletion",
-            { point = "CENTER", x = 0, y = 120 }, {
-                Caption("Shown after you finish a keystone"),
-                FrameScale("mplusCompletion", _G.YippYappMPlusCompletion),
-                FrameAlpha("mplusCompletion", _G.YippYappMPlusCompletion),
-            }, "Mythic+ Completion")
-    end
-
-    -- Utility Advisor
-    if ns.UtilityAdvisor and _G.YippYappUtilityAdvisor and not done.utilityAdvisor then
-        done.utilityAdvisor = true
-        Register(_G.YippYappUtilityAdvisor, "utilityAdvisor",
-            { point = "CENTER", x = 0, y = 0 }, {
-                Caption("Shown when you enter a Mythic+ dungeon"),
-                Dropdown("Display", "full", {
-                    { text = "Full notes",     value = "full" },
-                    { text = "Abilities only", value = "compact" },
-                },
-                    function()
-                        local UA = ns.UtilityAdvisor
-                        return (UA and UA:IsCompact()) and "compact" or "full"
-                    end,
-                    function(v)
-                        local UA = ns.UtilityAdvisor
-                        if UA and UA.SetCompact then UA:SetCompact(v == "compact") end
-                    end),
-                {
-                    name = "Icon size", kind = Kind("Slider"), default = 48,
-                    minValue = 24, maxValue = 64, valueStep = 4,
-                    formatter = function(v) return ("%dpx"):format(math.floor(v)) end,
-                    get = function()
-                        local UA = ns.UtilityAdvisor
-                        return (UA and UA.GetIconSize and UA:GetIconSize()) or 48
-                    end,
-                    set = function(_, value)
-                        local UA = ns.UtilityAdvisor
-                        if UA and UA.SetIconSize then UA:SetIconSize(value) end
-                        RepairAfterChange()
-                    end,
-                },
-                FrameScale("utilityAdvisor", _G.YippYappUtilityAdvisor),
-                FrameAlpha("utilityAdvisor", _G.YippYappUtilityAdvisor),
-            }, "Utility Advisor")
-    end
 end
 
 ------------------------------------------------------------
@@ -412,9 +356,8 @@ function ns.EditModeDebug()
     for _, def in ipairs(ns.EditMode:Frames()) do
         local f = def.frame and def.frame()
         local sel = f and LEM.frameSelections and LEM.frameSelections[f]
-        print(("  %-16s want=%s shown=%s sel=%s selShown=%s mouse=%s size=%dx%d strata=%s/%s"):format(
+        print(("  %-16s shown=%s sel=%s selShown=%s mouse=%s size=%dx%d strata=%s/%s"):format(
             def.key,
-            (ns.EditMode.IsShownForEditing and ns.EditMode:IsShownForEditing(def.key)) and "y" or "N",
             (f and f:IsShown()) and "y" or "n",
             sel and "y" or "N",
             (sel and sel:IsShown()) and "y" or "N",
@@ -464,32 +407,22 @@ end
 ---
 --- The interrupt tracker never had this problem because it is persistent,
 --- which is why it alone worked.
---- Show or hide one frame's selection overlay without touching the frame,
---- for frames that are legitimately visible on their own.
-function ns.EditModeLib.SetSelectionShown(frame, on)
-    if not frame or not LEM.frameSelections then return end
-    local sel = LEM.frameSelections[frame]
-    if not sel then return end
-    if on then
-        if sel.ShowHighlighted then sel:ShowHighlighted() else sel:Show() end
-    else
-        sel:Hide()
-    end
-end
-
-function ns.EditModeLib.Reveal()
-    if not LEM.frameSelections then return end
-    for frame, selection in next, LEM.frameSelections do
-        if frame:IsShown() and selection.ShowHighlighted then
-            selection:ShowHighlighted()
-        end
-    end
-end
-
 local function RevealSelections()
     if not LEM.frameSelections then return end
-    for frame, selection in next, LEM.frameSelections do
-        if frame:IsShown() and selection.ShowHighlighted then
+    -- Walks OUR frames, not the library's whole table.
+    --
+    -- LEM.frameSelections lives on the shared LibStub library object, so
+    -- it holds every frame every addon in the session registered. The
+    -- previous version iterated all of them and called ShowHighlighted --
+    -- a Blizzard mixin method on an EditModeSystemSelectionTemplate --
+    -- on frames belonging to addons that had not asked for anything. That
+    -- reaches into another addon's Edit Mode state from our call stack,
+    -- and hands them our taint along with it.
+    --
+    -- `managed` is populated by Register, so it is exactly our own set.
+    for _, entry in ipairs(managed) do
+        local selection = LEM.frameSelections[entry.frame]
+        if selection and entry.frame:IsShown() and selection.ShowHighlighted then
             selection:ShowHighlighted()
         end
     end

@@ -115,7 +115,9 @@ A guide is one opinion at one point in time. Sim your own character —
 the page says so itself.
 
 ### Trinkets
-SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
+SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com),
+and healer rankings from [QE Live](https://questionablyepic.com/live/trinkets)
+— bloodmallet sims damage and publishes nothing for the healing specs.
 
 - **My Spec** — your trinkets ranked, each showing how far behind the
   best pick it sims, at the item level it was simmed at. Trinkets no
@@ -144,7 +146,11 @@ SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
   an upgrade ladder or sit at one fixed item level. Expanding a trinket
   separates the specs that have been re-simmed from the ones still
   awaiting it, so a spec nobody has asked yet does not read as a spec
-  that passed.
+  that passed. Damage specs and healers are listed under their own
+  subheads, with yours first — their percentages divide by different
+  things (a share of total DPS against a share of the best trinket's
+  healing), so a single sorted column would rank by which project simmed
+  you rather than by who wants the item.
 - **Shortlist what you're after** — right-click any row to add or remove
   a trinket; shortlisted ones carry a star. It writes to the same list
   the Loot Browser's favourites star uses, so the two pages cannot
@@ -155,14 +161,22 @@ SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com).
   bags, chat links, Encounter Journal) to see which specs want it and
   where it lands for you. Toggle in Settings → General → Trinkets.
 
-Coverage is 31 of 40 specs; bloodmallet publishes no trinket data at all
-for the seven healer specs, nor for Augmentation or Brewmaster.
+Coverage is 38 of 40 specs: 31 from bloodmallet and the seven healers
+from QE Live. Augmentation and Brewmaster are in neither.
+
+The two sources measure different things — DPS against HPS — so nothing
+compares a number from one with a number from the other; every ranking
+is within one spec. QE splits by content rather than by target count, so
+for a healer the two tabs read **Raid** and **Dungeon** instead of
+single target and AoE, and the footer names whichever site the list on
+screen came from.
 
 bloodmallet re-sims a new season a few specs at a time, so the file holds
-both while that runs. 17 specs have Season 2 numbers; the rest keep their
-Season 1 ranking rather than being dropped, and say so in the list, on
-the loot council rows and in the tooltip. This is per fight style — a
-spec can be Season 2 on single target and Season 1 on 5-target.
+both while that runs. 20 of its 31 specs are fully on Season 2 numbers;
+the other 11 keep a Season 1 ranking for at least one fight style rather
+than being dropped, and say so in the list, on the loot council rows and
+in the tooltip. This is per fight style — a spec can be Season 2 on
+single target and Season 1 on 5-target.
 
 ### Mythic+ Helper
 - Season 2 dungeon overview with clickable teleports.
@@ -279,30 +293,45 @@ race and level.
 | Command | Description |
 |---|---|
 | `/yh` | Open the app (also `/yippyapp`) |
-| `/yh help` | List all commands |
-| `/yh mplus` | Open the Mythic+ page |
-| `/yh raid` | Open raid tools |
-| `/yh loot` | Open the loot browser |
-| `/yh brez` | Battle Res Timer options |
-| `/yh crests` | Show which Mistcrest currency ID resolved per track |
+| `/yh help` | List the commands |
+| `/yh shell <page>` | Open a specific page |
+| `/yh settings` | Open the options panel (also `options`, `opts`) |
+| `/yh skin [id]` | List or choose a skin |
+| `/yh guide` | Boss guide for the current raid |
+| `/yh train [boss]` | Practise a boss's mechanics |
+| `/yh test [panel]` | Show a pop-up window with sample content (`/yh test off` to dismiss) |
+| `/yh brez` | Battle Res Timer options (also `battleres`) |
+| `/yh edit` | Open Edit Mode to move frames |
 | `/yh profile [name]` | Switch profile (normal / heroic / mythic) |
 | `/yh discount <track>` | Toggle a crest discount |
 | `/yh discounts` | Show current discount status |
 | `/yh whatsnew` | What changed this patch |
 | `/yh advisor` | What Mr. Yeeper would say, plus the facts behind it |
-| `/yh edit` | Open Edit Mode to move frames |
 | `/yh fun` | Fun stat counters (`/yh fun reset` to clear) |
-| `/yh debug` | Dump slot data to chat |
-| `/yh lootdebug` | Loot Browser difficulty state and per-boss data |
-| `/yh ejtest` | Probe the Encounter Journal's keystone item levels |
-| `/keys`, `/yhkeys` | Open the Mythic+ page |
-| `/yyhopts`, `/yyhsettings` | Open settings |
-| `/yyhrc` | Preview the ready-check window |
+| `/yh introreset` | Replay Mr. Yeeper's introduction |
+| `/yh classic` | The retired pre-shell window |
+
+Pages for `/yh shell`: `home`, `gear`, `bis`, `trinkets`, `consumables`,
+`progression`, `loot`, `mythicplus`, `raid`, `teleports`, `delves`.
+
+| Shortcut | Description |
+|---|---|
+| `/yhkeys` | Open the Mythic+ page |
+| `/yyhopts` | Open settings |
 | `/yyhmplustest` | Toggle M+ test mode (5 fake teammates) |
-| `/yyhutility` | Preview the utility advisor |
-| `/yyhmpluspopup` | Preview the M+ completion popup |
 | `/yyhintlog` | Toggle interrupt debug logging |
-| `/yyhintdebug` | Fire a fake interrupt cast |
+
+### Developer commands
+
+Deliberately absent from `/yh help` — these print the addon's working, not
+anything a player needs.
+
+| Command | Description |
+|---|---|
+| `/yh debug` | Crest and slot state dumped to chat |
+| `/yh icon [size] [x] [y]` | Tune the minimap icon fit |
+| `/yh editdebug` | Why a frame has no Edit Mode outline |
+| `/yh ejdump [abilities]` | What the Encounter Journal calls these bosses |
 
 ### Settings
 **Escape → Options → AddOns → YippYapp Helper**, or the Settings button
@@ -338,6 +367,7 @@ generated instead:
 |---|---|---|
 | `Features/Consumables/ConsumablesData.lua` | Wowhead per-spec guides | `python Tools/scrape_consumables.py` |
 | `Features/Trinkets/TrinketData.lua` | bloodmallet.com sims | `python Tools/scrape_trinkets.py` |
+| `Features/Trinkets/TrinketDataHealer.lua` | QE Live healer charts | capture with `Tools/qe_capture.js`, then `python Tools/scrape_healer_trinkets.py` |
 | Gear tracks, crests, progression tables | In-game currency descriptions + community sheets | Hand-verified per season |
 
 Both scrapers record the season/tier their data came from, and the addon

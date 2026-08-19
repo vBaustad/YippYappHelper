@@ -232,6 +232,319 @@ function ns:GetTotalCrestBudget(crestTrack)
 end
 
 ------------------------------------------------------------
+-- The crest budget, spent.
+--
+-- Every affordability question the addon asked used to be asked one
+-- slot at a time: can I pay for THIS upgrade, and would paying for it
+-- starve something more important. Each slot answered from a fresh scan
+-- of the other fifteen, so sixteen slots produced sixteen independent
+-- opinions about the same wallet -- and no answer at all to the only
+-- question a capped player actually has, which is "I hold 140 Veteran,
+-- that is seven upgrades, WHICH seven?".
+--
+-- This spends the budget once and records where it went. Ranks are
+-- bought one at a time, each going to the best remaining candidate:
+-- highest slot priority first, and among equals the lowest item level,
+-- because that is the slot the rank is worth most in. Buying a rank
+-- raises that slot's level, so equal-priority slots interleave instead
+-- of one weapon swallowing the wallet -- which is both what players do
+-- and what makes the resulting list read as an order of operations.
+--
+-- The walk continues past the point the crests run out, so the plan
+-- also describes what is NOT affordable and by how much. That is the
+-- half the old code could not express: it could say "hold crests" but
+-- never "you are 60 short of this, and here is what is ahead of it".
+------------------------------------------------------------
+
+local planCache = {}
+
+--- Drop memoised plans. Cheap, and a stale plan is worse than a slow one.
+function ns:InvalidateCrestPlans()
+    wipe(planCache)
+end
+
+do
+    -- The wallet and the gear are the only two inputs, so those are the
+    -- two events that can make a plan stale. Without this the cache
+    -- would serve a pre-purchase plan for the rest of the session --
+    -- the addon's advice frozen at the moment it was first asked.
+    local watcher = CreateFrame("Frame")
+    watcher:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
+    watcher:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+    watcher:SetScript("OnEvent", function() wipe(planCache) end)
+end
+
+--- Everything known about one crest track's budget and where it goes.
+---
+--- Fields:
+---   cost            crests per rank
+---   held            crests in the wallet right now
+---   seasonEarnable  crests the season cap still allows
+---   seasonCapped    true when the cap is reached (and there IS a cap)
+---   uncapped        crests this track can still be given outside the cap
+---   budget          held + seasonEarnable
+---   demand          crests to max every slot on this track
+---   shortfall       demand - budget, floored at zero
+---   steps           every rank, in the order it should be bought
+---   slots           per-slot summary, keyed by slotID
+---   order           slotIDs in the order their first rank comes up
+function ns:GetCrestPlan(crestTrack)
+    if not crestTrack then return nil end
+    if planCache[crestTrack] then return planCache[crestTrack] end
+
+    local cost = ns:GetCrestCost(crestTrack)
+    local held = ns:GetCrestCountByTrack(crestTrack)
+    local seasonEarnable = ns:GetEarnableCrests(crestTrack)
+    local uncapped = ns.GetUncappedCrestIncome and ns:GetUncappedCrestIncome(crestTrack) or 0
+    local budget = held + seasonEarnable
+    local ceiling = ns:GetDropCeiling()
+
+    -- Candidates: every equipped piece this crest can actually be spent
+    -- on. Crests are track-locked, so a slot on another track is not
+    -- competition for this wallet however valuable the slot is.
+    local candidates = {}
+    for _, si in ipairs(ns.SLOT_IDS) do
+        local canUp, up = ns:CanUpgradeItem(si.slot)
+        if canUp and up then
+            local track = up.track or ns:GetTrackFromIlvl(up.currIlvl)
+            if ns.TRACK_CREST[track] == crestTrack then
+                local levels = ns.GEAR_TRACKS[track]
+                local rank = up.currUpgrade or 0
+                local startIlvl = up.currIlvl or (levels and levels[rank]) or 0
+                -- Risk is read once, from the item level the slot starts
+                -- at, and then held fixed for the walk. Recomputing it as
+                -- ranks are bought would let a slot re-rank itself
+                -- mid-plan, and the order would stop being reproducible.
+                local risk = ns:GetReplacementRisk(si.slot, startIlvl)
+                candidates[#candidates + 1] = {
+                    slotID   = si.slot,
+                    slotName = si.name,
+                    priority = ns.SLOT_PRIORITY[si.slot] or 2,
+                    track    = track,
+                    levels   = levels,
+                    rank     = rank,
+                    maxRank  = up.maxUpgrade or 0,
+                    ilvl     = startIlvl,
+                    risk     = risk,
+                    -- Low sorts first. A slot the content is about to
+                    -- replace is a worse home for a scarce crest than an
+                    -- equally important slot that will keep it, and the
+                    -- ORDER is where that belongs -- not in a label that
+                    -- says "spend here last" on the slot the plan just
+                    -- funded first. That contradiction is what this is.
+                    riskRank = (risk == "high" and 2)
+                        or (risk == "moderate" and 1) or 0,
+                }
+            end
+        end
+    end
+
+    local plan = {
+        track          = crestTrack,
+        cost           = cost,
+        held           = held,
+        seasonEarnable = seasonEarnable,
+        seasonCapped   = seasonEarnable <= 0 and ns:IsCrestCapped(crestTrack),
+        uncapped       = uncapped,
+        budget         = budget,
+        affordableNow  = cost > 0 and math.floor(held / cost) or 0,
+        affordableAll  = cost > 0 and math.floor(budget / cost) or 0,
+        steps          = {},
+        slots          = {},
+        order          = {},
+        slotCount      = #candidates,
+        demand         = 0,
+        shortfall      = 0,
+    }
+
+    -- Per-slot summaries exist before the walk, so a slot that gets no
+    -- funding at all still has an entry to report against.
+    for _, c in ipairs(candidates) do
+        plan.slots[c.slotID] = {
+            slotID       = c.slotID,
+            slotName     = c.slotName,
+            priority     = c.priority,
+            track        = c.track,
+            rank         = c.rank,
+            maxRank      = c.maxRank,
+            fromIlvl     = c.ilvl,
+            risk         = c.risk,
+            wantedRanks  = c.maxRank - c.rank,
+            fundedRanks  = 0,
+            paidRanks    = 0,      -- covered by crests in hand today
+            paidIlvl     = c.ilvl,
+            paidCost     = 0,
+            stickyRanks  = 0,      -- paid ranks a drop cannot overtake
+            firstStep    = nil,
+            crestsBefore = nil,    -- spent on better slots ahead of this one
+        }
+        plan.demand = plan.demand + (c.maxRank - c.rank) * cost
+    end
+
+    plan.shortfall = math.max(plan.demand - budget, 0)
+    plan.scarce    = plan.demand > budget
+
+    ------------------------------------------------------------
+    -- Keep something back when the wallet cannot refill.
+    --
+    -- This is the failure the whole feature exists for. Crests capped
+    -- for the season are a stock, not an income: spend to zero and the
+    -- next drop -- which is the thing most worth upgrading, because it
+    -- is new and its slot's floor is already paid for -- sits at its
+    -- drop level until the cap raises. Planning the last crest is how a
+    -- player ends a week unable to touch anything.
+    --
+    -- No reserve when the track still has income, whether that is
+    -- allowance left under the cap or the quest boxes that ignore it:
+    -- holding crests back against a wallet that refills on its own is
+    -- just a slower version of the same waste.
+    --
+    -- One upgrade per slot the content can still replace, two at most.
+    -- More than that and the reserve competes with the upgrades it is
+    -- meant to protect.
+    ------------------------------------------------------------
+    local reserve = 0
+    if plan.seasonCapped and uncapped <= 0 and cost > 0 then
+        local atRisk = 0
+        for _, c in ipairs(candidates) do
+            if c.risk == "high" then atRisk = atRisk + 1 end
+        end
+        reserve = math.min(atRisk, 2) * cost
+        -- Never hold back so much that nothing can be bought at all.
+        -- A reserve that swallows the wallet gives the player the exact
+        -- paralysis it was added to prevent.
+        if reserve >= held then
+            reserve = math.max(held - cost, 0)
+        end
+    end
+    plan.reserve   = reserve
+    plan.spendable = math.max(held - reserve, 0)
+    plan.ceiling   = ceiling
+    -- Recomputed against spendable now that the reserve is known. The
+    -- header prints this, and it has to be the count the walk will
+    -- actually mark payable or the panel contradicts its own list.
+    plan.affordableNow = cost > 0 and math.floor(plan.spendable / cost) or 0
+
+    -- The walk. Pick the best remaining candidate, buy it one rank, repeat.
+    local spent = 0
+    while true do
+        local best
+        for _, c in ipairs(candidates) do
+            if c.rank < c.maxRank then
+                -- Priority, then replacement risk, then item level,
+                -- then slot id. The last key is not cosmetic: two rings
+                -- of the same priority and level would otherwise swap
+                -- places with table iteration order, and the panel would
+                -- reshuffle itself between refreshes.
+                local function better(a, b)
+                    if not b then return true end
+                    if a.priority ~= b.priority then return a.priority > b.priority end
+                    if a.riskRank ~= b.riskRank then return a.riskRank < b.riskRank end
+                    if a.ilvl ~= b.ilvl then return a.ilvl < b.ilvl end
+                    return a.slotID < b.slotID
+                end
+                if better(c, best) then best = c end
+            end
+        end
+        if not best then break end
+
+        best.rank = best.rank + 1
+        best.ilvl = (best.levels and best.levels[best.rank]) or best.ilvl
+        spent = spent + cost
+
+        local summary = plan.slots[best.slotID]
+        local step = {
+            slotID     = best.slotID,
+            slotName   = best.slotName,
+            rank       = best.rank,
+            maxRank    = best.maxRank,
+            toIlvl     = best.ilvl,
+            cumulative = spent,
+            funded     = spent <= budget,
+            -- Against spendable, not held: the reserve is deliberately
+            -- not planned, so a step it would have paid for is not one
+            -- the panel should show above the line.
+            paid       = spent <= plan.spendable,
+            -- Does this rank survive a drop? The slot's high-water mark
+            -- makes any future item in it free up to the level reached,
+            -- so a rank landing ABOVE what the player's content drops is
+            -- banked permanently, and one landing below is overtaken by
+            -- the next piece that falls in that slot.
+            sticks     = best.ilvl > ceiling,
+        }
+        plan.steps[#plan.steps + 1] = step
+
+        if not summary.firstStep then
+            summary.firstStep    = #plan.steps
+            -- Everything bought before this slot's first rank is what a
+            -- "these come first" explanation has to name.
+            summary.crestsBefore = spent - cost
+            plan.order[#plan.order + 1] = best.slotID
+        end
+        if step.funded then
+            summary.fundedRanks = summary.fundedRanks + 1
+        end
+        if step.paid then
+            summary.paidRanks = summary.paidRanks + 1
+            summary.paidIlvl  = best.ilvl
+            summary.paidCost  = summary.paidCost + cost
+            if step.sticks then
+                summary.stickyRanks = summary.stickyRanks + 1
+            end
+        end
+    end
+
+    -- How far down the order the crests in hand reach. The panel draws a
+    -- line here; it is the most useful single fact on the page, and the
+    -- old layout had nowhere to put it.
+    plan.paidSteps = 0
+    for _, step in ipairs(plan.steps) do
+        if step.paid then plan.paidSteps = plan.paidSteps + 1 end
+    end
+
+    planCache[crestTrack] = plan
+    return plan
+end
+
+--- Slot names paid for ahead of `slotID` on its own track, best first.
+--- Answers "why not this one yet" with the actual competition rather
+--- than with a single hardcoded "top slots".
+function ns:GetCrestPlanBlockers(plan, slotID, limit)
+    if not plan then return {} end
+    local mine = plan.slots and plan.slots[slotID]
+    if not mine or not mine.firstStep then return {} end
+
+    local names, seen = {}, {}
+    for i = 1, mine.firstStep - 1 do
+        local step = plan.steps[i]
+        if not seen[step.slotID] then
+            seen[step.slotID] = true
+            names[#names + 1] = step.slotName
+            if limit and #names >= limit then break end
+        end
+    end
+    return names
+end
+
+--- Every crest track with something to spend on, highest track first.
+--- The panel groups by this: a budget is per track, so advice about one
+--- wallet belongs under that wallet and nowhere else.
+function ns:GetActiveCrestPlans()
+    local out, seen = {}, {}
+    for i = #ns.TRACK_ORDER, 1, -1 do
+        local crestTrack = ns.TRACK_CREST[ns.TRACK_ORDER[i]]
+        if crestTrack and not seen[crestTrack] then
+            seen[crestTrack] = true
+            local plan = ns:GetCrestPlan(crestTrack)
+            if plan and plan.slotCount > 0 then
+                out[#out + 1] = plan
+            end
+        end
+    end
+    return out
+end
+
+------------------------------------------------------------
 -- Crest waste: paying a scarce crest for an item level a cheaper
 -- crest already reaches.
 --
@@ -444,6 +757,46 @@ end
 ------------------------------------------------------------
 -- Replacement risk assessment
 ------------------------------------------------------------
+------------------------------------------------------------
+-- The item level the player's own content actually hands out.
+--
+-- Was computed inside GetReplacementRisk and thrown away with the
+-- verdict, so everything downstream could learn that a slot was "high
+-- risk" but never what it was at risk OF. The plan needs the number
+-- itself: whether a crest sticks depends on where the rank lands
+-- relative to this, not on a three-way label.
+------------------------------------------------------------
+function ns:GetDropCeiling()
+    local profile = ns:GetCurrentProfile()
+    local dropIlvl, vaultIlvl = 0, 0
+
+    for _, entry in ipairs(ns.DUNGEON_LOOT) do
+        local keyNum = tonumber(entry.key:match("M(%d+)"))
+        if keyNum and keyNum <= profile.maxKeyLevel then
+            if entry.loot > dropIlvl then dropIlvl = entry.loot end
+            if entry.vault and entry.vault > vaultIlvl then vaultIlvl = entry.vault end
+        end
+    end
+
+    -- The raid contributes the level its loot ARRIVES at, which is the
+    -- bottom of its track -- not GetMaxIlvlForTrack, which is that
+    -- track fully upgraded and reachable only by spending the very
+    -- crests this is meant to advise on. Reading the max had a Mythic
+    -- profile report a 321 "drop" ceiling that nothing below Myth 6/6
+    -- could ever clear, so every rank on every lower track was filed as
+    -- doomed and the distinction stopped carrying information.
+    local raidTrack = ns.RAID_TRACKS[profile.raidTier]
+    local raidLevels = raidTrack and ns.GEAR_TRACKS[raidTrack]
+    if raidLevels and raidLevels[1] and raidLevels[1] > dropIlvl then
+        dropIlvl = raidLevels[1]
+    end
+
+    -- The vault is one pick a week against sixteen slots, so it is not
+    -- what overtakes a slot -- it is what a slot could get lucky with.
+    -- Returned separately rather than folded in.
+    return dropIlvl, vaultIlvl
+end
+
 function ns:GetReplacementRisk(slotID, ilvl)
     local profile = ns:GetCurrentProfile()
 
@@ -514,7 +867,6 @@ function ns:GetRecommendation(slotID)
     local ilvl = info.ilvl
     local track = upgradeInfo.track or ns:GetTrackFromIlvl(ilvl)
     local crestTrack = ns.TRACK_CREST[track]
-    local slotPriority = ns.SLOT_PRIORITY[slotID] or 2
     local replacementRisk = ns:GetReplacementRisk(slotID, ilvl)
     local isFree = ns:IsCrestFree(crestTrack)
     local isPrecious = ns:IsCrestPrecious(crestTrack)
@@ -523,12 +875,8 @@ function ns:GetRecommendation(slotID)
     local maxRank = upgradeInfo.maxUpgrade
 
     local crestCost = ns:GetCrestCost(crestTrack)
-    local affordable = ns:GetAffordableUpgrades(crestTrack)
     local crestCount = ns:GetCrestCountByTrack(crestTrack)
     local upgradesNeeded = maxRank - rank
-    local totalCost = upgradesNeeded * crestCost
-    local totalBudget = ns:GetTotalCrestBudget(crestTrack)
-    local earnable = ns:GetEarnableCrests(crestTrack)
 
     -- High-water mark: upgrades are free up to previously reached ilvl
     local freeIlvl = ns:GetFreeUpgradeIlvl(slotID)
@@ -611,7 +959,12 @@ function ns:GetRecommendation(slotID)
             end
             return ns.RECOMMEND.WASTED_CREST,
                 waste.wastedCrests .. " " .. waste.crestTrack .. " for " ..
-                waste.fromIlvl .. "→" .. waste.toIlvl .. " — a maxed " ..
+                -- "to", not an arrow: U+2192 is outside the client
+                -- font's range and draws as an empty box. Seen on the
+                -- dashboard, and this is the same string built the same
+                -- way. The em dash below is fine -- it is used 180-odd
+                -- times across the addon and renders.
+                waste.fromIlvl .. " to " .. waste.toIlvl .. " — a maxed " ..
                 waste.prevTrack .. " piece lands there too. Spend " ..
                 waste.prevCrestTrack .. " on " .. where ..
                 " (" .. waste.prevCrestCount .. " held); keep " ..
@@ -744,105 +1097,247 @@ function ns:GetRecommendation(slotID)
     end
 
     -- ============================================================
-    -- Crests can ONLY be spent on their own track's gear.
-    -- The question is: which items on this track to prioritize.
-    -- "Precious" means limited supply — prioritize high-value slots.
-    -- "Free" means abundant — upgrade everything.
+    -- RULE 6-8: Where this slot falls in the track's spend plan.
+    --
+    -- Crests are track-locked, so the only competition for this wallet
+    -- is the other slots on this same track. ns:GetCrestPlan spends the
+    -- whole budget once, rank by rank, best slot first -- so instead of
+    -- re-deriving a private opinion here, this reads off the plan and
+    -- reports the slot's actual position in it.
+    --
+    -- Reasons are written to be read at a glance and to survive two
+    -- lines in a narrow panel: what it costs, whether the crests in the
+    -- wallet reach it, and if not, what is ahead of it. The old strings
+    -- appended a raw "140/340 Veteran (+0)" to an unrelated clause,
+    -- which is the thing that made this panel unreadable.
     -- ============================================================
-    -- Afford string: show current/needed, plus earnable if relevant
-    local affordStr
-    if affordable >= upgradesNeeded then
-        affordStr = ", " .. totalCost .. " " .. crestTrack
-    elseif earnable > 0 then
-        affordStr = ", " .. crestCount .. "/" .. totalCost .. " " .. crestTrack .. " (+" .. earnable .. ")"
+    local plan = ns:GetCrestPlan(crestTrack)
+    local mine = plan and plan.slots and plan.slots[slotID]
+
+    if not plan or not mine then
+        -- No plan (unknown crest track, or the slot dropped out of the
+        -- candidate scan between calls). Say the plain cost rather than
+        -- inventing a position in an order that does not exist.
+        return ns.RECOMMEND.UPGRADE_NOW,
+            "Next rank costs " .. crestCost .. " " .. crestTrack
+    end
+
+    -- "Main Hand and Chest come first" / "Head comes first". Worth the
+    -- three lines: the panel prints this on most of its rows, and a list
+    -- that disagrees with its own verb reads as a bug in the advice.
+    local function JoinSlots(names)
+        if #names == 0 then return "better slots", "come" end
+        if #names == 1 then return names[1], "comes" end
+        return names[1] .. " and " .. names[2], "come"
+    end
+
+    local nextIlvl = ns.GEAR_TRACKS[track] and ns.GEAR_TRACKS[track][rank + 1]
+    local step = nextIlvl and (ilvl .. " to " .. nextIlvl) or ("rank " .. (rank + 1))
+
+    ------------------------------------------------------------
+    -- Nothing in the wallet reaches this slot: everything ahead of it
+    -- in the plan spends the crests first.
+    ------------------------------------------------------------
+    if mine.paidRanks == 0 then
+        local who, verb = JoinSlots(ns:GetCrestPlanBlockers(plan, slotID, 2))
+        -- Against spendable, not held. With a reserve in play the crests
+        -- sitting in the wallet are deliberately not on the table, and
+        -- measuring the gap against them produced "0 more Adventurer
+        -- covers this one too" on a slot that plainly was not covered.
+        local short = math.max((mine.crestsBefore or 0) + crestCost - plan.spendable, 0)
+
+        if plan.spendable >= crestCost then
+            -- Affordable on its own, but only by taking the crests off a
+            -- slot worth more. This is the case the old "Hold crests"
+            -- fired on; it now names which slot, and what closing the
+            -- gap would cost.
+            return ns.RECOMMEND.HOLD_CRESTS,
+                who .. " " .. verb .. " first — " .. short .. " more " ..
+                crestTrack .. " covers this one too"
+        end
+        return ns.RECOMMEND.UPGRADE_LATER,
+            "Need " .. short .. " more " .. crestTrack .. " — " ..
+            who .. " " .. verb .. " first"
+    end
+
+    ------------------------------------------------------------
+    -- Funded. Say what the crests buy here and what that costs.
+    ------------------------------------------------------------
+    -- The target level is only worth naming when it is not already the
+    -- level the step's own "279 to 282" just gave. Buying a single rank
+    -- otherwise reads "279 to 282 -- 1 of 5 ranks, to 282".
+    local buys
+    if mine.paidRanks == mine.wantedRanks then
+        buys = "all " .. mine.wantedRanks ..
+            (mine.wantedRanks == 1 and " rank to " or " ranks to ") .. mine.paidIlvl
+    elseif mine.paidRanks == 1 then
+        buys = "1 of " .. mine.wantedRanks .. " ranks"
     else
-        affordStr = ", " .. crestCount .. "/" .. totalCost .. " " .. crestTrack .. " (capped)"
+        buys = mine.paidRanks .. " of " .. mine.wantedRanks .. " ranks, to " .. mine.paidIlvl
+    end
+    -- Against spendable, not held. With a reserve in play "60 of your
+    -- 100 Champion" describes a wallet the plan has already decided is
+    -- only 60 -- two numbers for one thing, in adjacent sentences.
+    local spendStr = mine.paidCost .. " of your " .. plan.spendable ..
+        " " .. crestTrack
+    if plan.reserve > 0 then spendStr = spendStr .. " to spend" end
+
+    -- Whether a spend survives a drop is not the same question as
+    -- whether the item does.
+    --
+    -- The slot keeps a high-water mark, so any future piece in it is
+    -- free up to the level already reached. A rank that lands ABOVE
+    -- what the player's content drops is therefore banked permanently:
+    -- the replacement arrives and is immediately promoted to it for no
+    -- crests. A rank that lands below is the one that gets overtaken --
+    -- the drop is simply better, and the mark never comes into play.
+    --
+    -- This is why the old advice was backwards. It warned loudest about
+    -- deep upgrades, which are the ones the mark protects, and stayed
+    -- quiet about shallow ones, which are the ones a drop erases.
+    local overtaken = (mine.paidRanks > 0) and (mine.stickyRanks == 0)
+        and (mine.risk == "high")
+    local isFirst = mine.firstStep and mine.firstStep <= 1
+
+    local sticksNote = ""
+    if mine.stickyRanks > 0 and plan.ceiling and plan.ceiling > 0 then
+        sticksNote = " — clears the " .. plan.ceiling ..
+            " your content drops, so the slot keeps it"
     end
 
-    -- Calculate total crests needed for ALL items on this track
-    local totalTrackCost = 0
-    for _, si in ipairs(ns.SLOT_IDS) do
-        local canUp2, upInfo2 = ns:CanUpgradeItem(si.slot)
-        if canUp2 and upInfo2 then
-            local t2 = upInfo2.track or ns:GetTrackFromIlvl(upInfo2.currIlvl)
-            if ns.TRACK_CREST[t2] == crestTrack then
-                totalTrackCost = totalTrackCost + (upInfo2.maxUpgrade - upInfo2.currUpgrade) * crestCost
-            end
-        end
-    end
-    -- Are crests scarce? (total budget can't cover all items on this track)
-    local crestsScarce = totalBudget < totalTrackCost
-
-    -- ============================================================
-    -- Calculate upgrade priority rank among all upgradeable items
-    -- on the same crest track, sorted by slot priority descending.
-    -- Also track crest budget reserved for higher-priority items.
-    -- ============================================================
-    local upgradeRank = 1
-    local sameTrackCount = 0
-    local reservedForHigher = 0
-    local topSlotName = nil
-    for _, si in ipairs(ns.SLOT_IDS) do
-        local canUp2, upInfo2 = ns:CanUpgradeItem(si.slot)
-        if canUp2 and upInfo2 then
-            local t2 = upInfo2.track or ns:GetTrackFromIlvl(upInfo2.currIlvl)
-            local ct2 = ns.TRACK_CREST[t2]
-            if ct2 == crestTrack then
-                sameTrackCount = sameTrackCount + 1
-                local pri2 = ns.SLOT_PRIORITY[si.slot] or 2
-                -- Only count as higher rank if STRICTLY higher priority
-                if pri2 > slotPriority then
-                    upgradeRank = upgradeRank + 1
-                    -- Track crests needed to max all higher-priority items
-                    local cost2 = (upInfo2.maxUpgrade - upInfo2.currUpgrade) * crestCost
-                    reservedForHigher = reservedForHigher + cost2
-                    if not topSlotName then topSlotName = si.name end
-                end
-            end
-        end
+    if isFirst then
+        return ns.RECOMMEND.UPGRADE_NOW,
+            "Spend here first: " .. step .. ", " .. buys ..
+            " (" .. spendStr .. ")" .. sticksNote
     end
 
-    -- e.g. "priority #2 of 5" — refers to item priority across the track,
-    -- not upgrade ranks (which are always 6). Action verb shown separately.
-    local rankStr
-    if sameTrackCount <= 1 then
-        rankStr = "top priority"
-    elseif upgradeRank == 1 then
-        rankStr = "top priority of " .. sameTrackCount
-    else
-        rankStr = "priority #" .. upgradeRank .. " of " .. sameTrackCount
+    if overtaken then
+        return ns.RECOMMEND.SAFE_TEMP,
+            step .. " — " .. buys .. ", but stays under the " .. (plan.ceiling or 0) ..
+            " your content drops, so a piece will overtake it (" .. spendStr .. ")"
     end
 
-    -- Would spending on this item leave enough for higher-priority items?
-    local budgetAfterSpend = totalBudget - crestCost
-    local wouldStarveHigher = reservedForHigher > 0 and budgetAfterSpend < reservedForHigher
+    return ns.RECOMMEND.UPGRADE_NOW,
+        step .. " — " .. buys .. " (" .. spendStr .. ")" .. sticksNote
+end
 
-    -- ============================================================
-    -- RULE 6-8: Prioritize by slot value + crest budget
-    -- Top priority items upgrade freely. Lower priority items check
-    -- that spending here won't prevent maxing higher-priority gear.
-    -- ============================================================
-    if upgradeRank <= 2 then
-        if replacementRisk == "high" then
-            return ns.RECOMMEND.SAFE_TEMP, rankStr .. " — may get replaced" .. affordStr
-        end
-        return ns.RECOMMEND.UPGRADE_NOW, rankStr .. affordStr
-    elseif wouldStarveHigher then
-        -- Spending here would leave too few crests for top-priority items
-        return ns.RECOMMEND.HOLD_CRESTS,
-            "Save " .. crestTrack .. " for " .. (topSlotName or "top slots") ..
-            " (" .. reservedForHigher .. " needed)" .. affordStr
-    elseif upgradeRank <= 4 then
-        if crestsScarce then
-            return ns.RECOMMEND.UPGRADE_LATER, rankStr .. " — crests are limited" .. affordStr
-        end
-        return ns.RECOMMEND.UPGRADE_NOW, rankStr .. affordStr
-    else
-        if crestsScarce then
-            return ns.RECOMMEND.UPGRADE_LATER, rankStr .. " — upgrade top slots first" .. affordStr
-        end
-        return ns.RECOMMEND.UPGRADE_LATER, rankStr .. affordStr
+------------------------------------------------------------
+-- Ranking: most worth doing, first.
+--
+-- Two panels draw this list -- the vendor window and the shell's Gear
+-- page -- and neither agreed with the other about order. The shell's
+-- did not sort at all: it walked ns.SLOT_IDS, so the one slot actually
+-- worth spending on today appeared wherever Feet happens to sit in the
+-- equipment list, three rows below advice that says to do nothing. A
+-- second private sort in the caller would have drifted from the first
+-- the same way the reasons did, so the order lives here and both read it.
+--
+-- The list answers one question per row -- should crests go into this
+-- slot right now -- and it is ordered by the answer. Yes and free, yes,
+-- yes but it will be overtaken, not yet, no.
+--
+-- The warnings sat at the top on the theory that a spend you are about
+-- to regret is urgent. That reads backwards in a list titled
+-- Improvements: "Wasteful crest spend" is a slot to keep crests OUT of,
+-- and putting it above three slots to put crests INTO contradicts the
+-- ordering the rest of the list follows. It also put the only red row
+-- on the page at the top, which says "most important" in a list where
+-- position already means that.
+--
+-- Burying it is safe precisely because the order is followed top-down:
+-- a player working the list spends on the good slots first and never
+-- reaches the wasteful one with crests still in hand. The warning is
+-- there when they go looking at that slot, which is when it matters.
+ns.RECOMMEND_ORDER = {
+    [ns.RECOMMEND.FREE_UPGRADE]    = 1,  -- yes, and it costs nothing
+    [ns.RECOMMEND.UPGRADE_NOW]     = 2,  -- yes, spend here
+    [ns.RECOMMEND.SAFE_TEMP]       = 3,  -- yes, but a drop overtakes it
+    ------------------------------------------------ divider falls here
+    [ns.RECOMMEND.HOLD_CRESTS]     = 4,  -- not yet, something first
+    [ns.RECOMMEND.UPGRADE_LATER]   = 5,  -- not yet, cannot afford it
+    [ns.RECOMMEND.CRAFT_INSTEAD]   = 6,
+    [ns.RECOMMEND.USE_LOWER_TRACK] = 7,  -- no, a cheaper crest reaches it
+    [ns.RECOMMEND.WASTED_CREST]    = 8,  -- no, and spending here burns a crest
+    [ns.RECOMMEND.BAD_INVESTMENT]  = 9,
+    [ns.RECOMMEND.SAVE_FOR_DROP]   = 10, -- no, a drop is coming
+    [ns.RECOMMEND.CREST_CAPPED]    = 11,
+    [ns.RECOMMEND.WAIT_BETTER]     = 12, -- nothing to do at all
+    [ns.RECOMMEND.MAXED]           = 13,
+    [ns.RECOMMEND.NO_ITEM]         = 14,
+}
+
+--- The last rank that is still "spend crests here". Panels draw their
+--- divider after it. Named rather than written as a literal in each
+--- caller: the two drifted apart once already, and a divider in the
+--- wrong place silently reclassifies advice.
+ns.RECOMMEND_ACTIONABLE_MAX = 3
+
+--- Sorts `list` (entries from ns:GetAllRecommendations) in place, best
+--- first, and returns it.
+---
+--- Ties inside a label break on the plan: a slot the wallet reaches
+--- sooner is the one to do first. That position is per-track, though,
+--- and a Champion queue position is not comparable to an Adventurer
+--- one -- so it only decides between slots on the SAME track, and
+--- everything else falls through to how much the slot is worth and how
+--- close it is to being affordable.
+function ns:SortRecommendations(list)
+    local rank, gap, track = {}, {}, {}
+    for _, r in ipairs(list) do
+        local crestTrack = nil
+        local up = select(2, ns:CanUpgradeItem(r.slotID))
+        if up then crestTrack = ns.TRACK_CREST[up.track] end
+        track[r.slotID] = crestTrack
+
+        local plan = crestTrack and ns:GetCrestPlan(crestTrack)
+        local mine = plan and plan.slots and plan.slots[r.slotID]
+        rank[r.slotID] = mine and mine.firstStep or math.huge
+        -- How far out of reach: zero for anything already covered, so
+        -- funded slots never sort behind unfunded ones on this key.
+        gap[r.slotID] = (mine and mine.paidRanks == 0 and plan)
+            and math.max((mine.crestsBefore or 0) + plan.cost - plan.spendable, 0)
+            or 0
     end
+
+    table.sort(list, function(a, b)
+        local oa = ns.RECOMMEND_ORDER[a.recommendation] or 99
+        local ob = ns.RECOMMEND_ORDER[b.recommendation] or 99
+        if oa ~= ob then return oa < ob end
+
+        -- Same track: the plan already decided which comes first.
+        if track[a.slotID] and track[a.slotID] == track[b.slotID]
+            and rank[a.slotID] ~= rank[b.slotID] then
+            return rank[a.slotID] < rank[b.slotID]
+        end
+
+        -- Across tracks: whichever is closer to being affordable.
+        if gap[a.slotID] ~= gap[b.slotID] then
+            return gap[a.slotID] < gap[b.slotID]
+        end
+
+        local pa = ns.SLOT_PRIORITY[a.slotID] or 2
+        local pb = ns.SLOT_PRIORITY[b.slotID] or 2
+        if pa ~= pb then return pa > pb end
+        -- Slot id last, so the order is stable between refreshes rather
+        -- than reshuffling with whatever table iteration produced.
+        return (a.slotID or 0) < (b.slotID or 0)
+    end)
+    return list
+end
+
+--- Every slot worth showing, already ranked. The list panels want.
+function ns:GetRankedRecommendations()
+    local recs = ns:GetAllRecommendations()
+    local list = {}
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        local r = recs[si.slot]
+        if r and r.recommendation
+            and r.recommendation ~= ns.RECOMMEND.NO_ITEM
+            and r.recommendation ~= ns.RECOMMEND.MAXED then
+            list[#list + 1] = r
+        end
+    end
+    return ns:SortRecommendations(list)
 end
 
 ------------------------------------------------------------

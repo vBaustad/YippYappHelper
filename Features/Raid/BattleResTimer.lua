@@ -41,11 +41,29 @@ local DIFFICULTIES_WITH_BREZ = {
 
 local DEFAULTS = {
     enabled         = true,
-    locked          = false,
+    -- Locked by default, and see the session reset below for why an
+    -- unlocked timer is not a state this frame should ever boot into.
+    locked          = true,
     scale           = 1.0,
     showOutOfCombat = true,
     position        = { anchor = "CENTER", relativePoint = "CENTER", x = 0, y = -180 },
 }
+
+-- "Unlocked" is a transient positioning state, not a preference.
+--
+-- While it is set the frame is mouse-enabled, and a mouse-enabled frame
+-- parked in the middle of the screen silently eats every mouse-button
+-- keybind pressed over it: the click is delivered to the frame instead
+-- of the binding system, and nothing anywhere says so. The player just
+-- finds that their side buttons stopped casting.
+--
+-- Nothing legitimate leaves it unlocked either. Positioning belongs to
+-- Edit Mode, which drags through its own selection frame and never needs
+-- this, and ApplyLockState keeps the in-place Lock button hidden — so an
+-- unlock had no way back short of knowing the slash command existed.
+-- Clear it once per session, the same way the interrupt tracker's test
+-- mode is cleared, so it can never outlive the session that asked.
+local lockRestored = false
 
 local function db()
     YippYappHelperDB = YippYappHelperDB or {}
@@ -59,6 +77,10 @@ local function db()
     if type(d.scale)           ~= "number"  then d.scale           = DEFAULTS.scale   end
     if type(d.showOutOfCombat) ~= "boolean" then d.showOutOfCombat = DEFAULTS.showOutOfCombat end
     if d.scale < 0.5 then d.scale = 0.5 elseif d.scale > 2.5 then d.scale = 2.5 end
+    if not lockRestored then
+        lockRestored = true
+        d.locked = true
+    end
     if type(d.position) ~= "table" then
         d.position = {
             anchor = DEFAULTS.position.anchor,
@@ -237,14 +259,22 @@ local function ShouldShowDisplay()
     return true
 end
 
+--- Redraws the icon, and returns whether it should be on screen.
+---
+--- The return value exists so callers stop asking the same question
+--- twice. Every one of them used to run Tick() and then call
+--- ShouldShowDisplay() again to decide whether to run the ticker -- and
+--- ShouldShowDisplay calls db() (which re-validates and clamps the whole
+--- saved table) and GetInstanceInfo(). On the event path below that was
+--- two of each, per event, in combat.
 local function Tick()
     -- Preview owns the display state until ClearPreview is called, so
     -- the ticker doesn't overwrite the synthetic charges/cooldown the
     -- user just saw click "Preview".
-    if previewMode then return end
+    if previewMode then return true end
     if not ShouldShowDisplay() then
         if display then display:Hide() end
-        return
+        return false
     end
     EnsureDisplay()
 
@@ -259,7 +289,7 @@ local function Tick()
         display.charges:SetTextColor(1.0, 0.25, 0.25, 1)
         display.icon:SetDesaturated(true)
         display:Show()
-        return
+        return true
     end
 
     local current     = info.currentCharges or 0
@@ -298,6 +328,7 @@ local function Tick()
     end
 
     display:Show()
+    return true
 end
 
 ------------------------------------------------------------
@@ -312,8 +343,21 @@ frame:RegisterEvent("ENCOUNTER_START")
 frame:RegisterEvent("ENCOUNTER_END")
 frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 frame:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- SPELL_UPDATE_CHARGES and not SPELL_UPDATE_COOLDOWN.
+--
+-- Both were registered. COOLDOWN is one of the noisiest events the
+-- client sends: it fires for any spell whose cooldown state moves, which
+-- in combat is several times a second on every spec, and each one ran a
+-- full redraw plus two GetInstanceInfo calls. The ticker below already
+-- redraws at 2Hz, which the comment on it correctly calls the right rate
+-- for a countdown -- so all those events bought was the same picture,
+-- drawn far more often than anyone can read it.
+--
+-- CHARGES stays because it is the one that carries news: it fires when a
+-- battle res is actually spent or comes back, and that is the number
+-- people are looking at. Without it the count could sit half a second
+-- stale, which is exactly the moment it matters.
 frame:RegisterEvent("SPELL_UPDATE_CHARGES")
-frame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 
 local updater = frame:CreateAnimationGroup()
 updater:SetLooping("REPEAT")
@@ -321,16 +365,23 @@ local anim = updater:CreateAnimation()
 anim:SetDuration(0.5)  -- 2Hz refresh — smooth countdown without burning CPU
 updater:SetScript("OnLoop", Tick)
 
-frame:SetScript("OnEvent", function(self, event)
+--- Runs the 2Hz ticker only while the icon is actually up.
+---
+--- Declared here rather than beside Tick: it closes over `updater`, and
+--- written any earlier it would have captured a nil global instead.
+local function SyncUpdater(shown)
+    if shown then
+        if not updater:IsPlaying() then updater:Play() end
+    elseif updater:IsPlaying() then
+        updater:Stop()
+    end
+end
+
+frame:SetScript("OnEvent", function()
     -- Most events just trigger an immediate Tick so the display
     -- catches state changes (zoning out of a raid, charges spent
     -- by a teammate) without waiting for the 0.5s ticker.
-    Tick()
-    if ShouldShowDisplay() then
-        if not updater:IsPlaying() then updater:Play() end
-    else
-        if updater:IsPlaying() then updater:Stop() end
-    end
+    SyncUpdater(Tick())
 end)
 
 ------------------------------------------------------------
@@ -340,12 +391,7 @@ end)
 function BR:IsEnabled() return db().enabled end
 function BR:SetEnabled(on)
     db().enabled = not not on
-    Tick()
-    if ShouldShowDisplay() then
-        if not updater:IsPlaying() then updater:Play() end
-    else
-        if updater:IsPlaying() then updater:Stop() end
-    end
+    SyncUpdater(Tick())
 end
 
 function BR:IsLocked() return db().locked end
@@ -375,12 +421,7 @@ end
 function BR:IsShowOutOfCombat() return db().showOutOfCombat end
 function BR:SetShowOutOfCombat(on)
     db().showOutOfCombat = not not on
-    Tick()
-    if ShouldShowDisplay() then
-        if not updater:IsPlaying() then updater:Play() end
-    else
-        if updater:IsPlaying() then updater:Stop() end
-    end
+    SyncUpdater(Tick())
 end
 
 function BR:Preview()

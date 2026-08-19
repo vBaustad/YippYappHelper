@@ -3,11 +3,17 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Trinkets page.
 --
--- Two views over the same bloodmallet data:
+-- Two views over the same sim data:
 --   "My Spec"      — what should I equip, ranked.
 --   "Loot Council" — pick a trinket, see which specs actually want it,
 --                    so a raid lead can say "only Frost DKs roll on this"
 --                    without alt-tabbing.
+--
+-- Two sources behind it, merged into one index: bloodmallet for
+-- everything that deals damage, QE Live for the seven healing specs
+-- bloodmallet does not publish. They measure different quantities --
+-- DPS against HPS -- so nothing here compares a number from one with a
+-- number from the other. Both views only ever rank within one spec.
 ------------------------------------------------------------
 
 ns.TrinketUI = ns.TrinketUI or {}
@@ -46,8 +52,12 @@ local state = { tab = "spec", selected = nil, style = "ST",
 -- Scaling bars
 --
 -- One bar per trinket, split at every item level it was simmed at, the
--- way bloodmallet draws it. Length is the gain over an empty trinket
--- slot; each segment is what the next item level added.
+-- way bloodmallet draws it. Length is what the trinket is worth --
+-- percent over an empty slot from bloodmallet, HPS from QE Live -- and
+-- each segment is what the next item level added.
+--
+-- The unit never leaves the row: bars are drawn against the best value
+-- in the same list, so the proportions hold whichever source filled it.
 --
 -- The point is the shape, not the length: a trinket whose segments keep
 -- coming is still climbing, and one that stops early has run out of
@@ -388,6 +398,27 @@ local function AcquireRow(self, parent)
     return row
 end
 
+--- How one point on a curve reads out loud.
+---
+--- bloodmallet's numbers are percentages over an empty trinket slot;
+--- QE Live's are HPS. Printing one with the other's suffix is how a
+--- Mistweaver ends up being told a trinket is worth "+33657% over an
+--- empty slot", which is not a rounding problem, it is a different
+--- quantity wearing the wrong unit.
+local function curveValue(gain, unit)
+    if unit == "score" then
+        return ("%+d HPS"):format(gain)
+    end
+    return ("%+.2f%% over an empty slot"):format(gain)
+end
+
+local function curveStep(step, unit)
+    if unit == "score" then
+        return ("%+d HPS from the previous step"):format(step)
+    end
+    return ("%+.2f%% from the previous step"):format(step)
+end
+
 --- Fill a row's bar from one trinket's curve.
 ---
 --- `scale` is the largest total gain in the list, so bars are
@@ -397,7 +428,7 @@ end
 --- `cap` truncates the bar at a chosen item level, so the picked level
 --- shows what the trinket is worth there rather than what it will
 --- eventually be worth.
-local function drawCurve(row, points, steps, scale, source, cap, barW)
+local function drawCurve(row, points, steps, scale, source, cap, barW, unit)
     if not points or not steps or not scale or scale <= 0 then return end
     barW = barW or BAR_MIN
 
@@ -445,11 +476,9 @@ local function drawCurve(row, points, steps, scale, source, cap, barW)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
             GameTooltip:AddLine(row.itemName or "")
             GameTooltip:AddLine(("Item level %d"):format(ilvl), 1, 1, 1)
-            GameTooltip:AddLine(("%+.2f%% over an empty slot"):format(gain),
-                0.7, 0.9, 0.7)
+            GameTooltip:AddLine(curveValue(gain, unit), 0.7, 0.9, 0.7)
             if n > 1 then
-                GameTooltip:AddLine(("%+.2f%% from the previous step"):format(step),
-                    0.6, 0.6, 0.66)
+                GameTooltip:AddLine(curveStep(step, unit), 0.6, 0.6, 0.66)
             end
             if source then
                 GameTooltip:AddLine(source, 0.6, 0.6, 0.66)
@@ -629,10 +658,31 @@ end
 ------------------------------------------------------------
 -- Views
 ------------------------------------------------------------
-local function relColor(rel)
-    if rel >= -0.5 then return "|cff40ff40" end
-    if rel >= -2.0 then return "|cffd0ff40" end
-    if rel >= -5.0 then return "|cffffcc00" end
+--- Colour a "percent behind the best" number by how close it is.
+---
+--- Two sets of bands, because the two sources put the same distance on
+--- very different scales. bloodmallet divides by the profile's total
+--- DPS, so a spec's whole list spans about three and a half percent;
+--- QE Live divides by the best trinket's own healing, so the same list
+--- spans forty. One set of bands would paint every healer row past the
+--- top three red and call a spec's fourth best trinket a bad pick.
+---
+--- The healer bands are not invented: they are the cutoffs that put the
+--- same share of rows in each colour as the DPS bands do -- roughly a
+--- tenth green, half by the second band, all but a twentieth by the
+--- third -- measured across every block in the file.
+local REL_BANDS = {
+    percent = { -0.5, -2.0, -5.0 },
+    score   = { -5.0, -22.0, -38.0 },
+}
+
+local REL_COLORS = { "|cff40ff40", "|cffd0ff40", "|cffffcc00" }
+
+local function relColor(rel, unit)
+    local bands = REL_BANDS[unit or "percent"] or REL_BANDS.percent
+    for i, edge in ipairs(bands) do
+        if rel >= edge then return REL_COLORS[i] end
+    end
     return "|cffff8080"
 end
 
@@ -650,7 +700,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     end
 
     local list, _, stamp, tier = T:GetForSpec(specKey, state.style)
-    local curve, steps, source = T:GetCurve(specKey, state.style)
+    local curve, steps, source, unit = T:GetCurve(specKey, state.style)
 
     -- Asking for a specific item level replaces the list with the one
     -- that holds there, which is shorter: only trinkets simmed at that
@@ -669,10 +719,26 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         -- fight style" -- a few specs have single target only, and saying
         -- "no sims for you" there reads as a data failure.
         local otherStyle = (state.style == "ST") and "AOE" or "ST"
-        if T:GetForSpec(specKey, otherStyle) then
-            fs.text:SetText(("|cff%sbloodmallet has no %s sims for %s -- try the other tab.|r"):format(ns.Widgets:Hex("muted"), state.style == "ST" and "single-target" or "AoE", T:SpecName(specKey)))
+        local other = T:GetBlock(specKey, otherStyle)
+        -- Named after whoever would be publishing it. For a healer that
+        -- is QE Live; bloodmallet's absence is not news there.
+        local who = T:ProviderInfo(T:Provider(specKey, other and otherStyle
+            or state.style)).label
+        if other then
+            -- The word for the tab that is EMPTY, which cannot be read
+            -- off a block that does not exist. The half that is present
+            -- says which vocabulary this spec is in, and the missing one
+            -- is then the other word in that pair.
+            local missing
+            if other.profile then
+                missing = (state.style == "ST") and "raid" or "dungeon"
+            else
+                missing = (state.style == "ST") and "single-target" or "AoE"
+            end
+            fs.text:SetText(("|cff%s%s has no %s chart for %s -- try the other tab.|r"):format(
+                ns.Widgets:Hex("muted"), who, missing, T:SpecName(specKey)))
         else
-            fs.text:SetText(("|cff%sbloodmallet has no trinket sims for %s this tier.|r"):format(ns.Widgets:Hex("muted"), T:SpecName(specKey)))
+            fs.text:SetText(("|cff%sNo trinket sims for %s this tier.|r"):format(ns.Widgets:Hex("muted"), T:SpecName(specKey)))
         end
         return y - ROW_H
     end
@@ -693,9 +759,10 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     -- current and the next one's is not. The warning belongs on the list
     -- it applies to; the page-level banner only fires when nothing at all
     -- has been re-simmed yet.
+    local provider = T:Provider(specKey, state.style)
     local warning
     if T:IsStaleTier(tier) and not T:IsStale() then
-        warning = T:StaleSpecText(tier)
+        warning = T:StaleSpecText(tier, provider)
     end
 
     -- Without a curve there are no bars and no stepper, and dropping a
@@ -706,7 +773,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     if not curve or next(curve) == nil then
         local why = "There are no scaling bars or item level stepper for it either -- that detail arrives with the re-sim."
         warning = warning and (warning .. " " .. why)
-            or (ns.Widgets:Tint("muted", "No item-level detail for this spec, so no scaling bars or item level stepper. bloodmallet publishes it with the next run."))
+            or (ns.Widgets:Tint("muted", ("No item-level detail for this spec, so no scaling bars or item level stepper. %s publishes it with the next run."):format(T:ProviderInfo(provider).label)))
     end
 
     if warning then
@@ -823,7 +890,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
                 r.text:SetWidth(nameW)
                 if scale then
                     drawCurve(r, curve[row.id], steps, scale,
-                        source and source[row.id], state.ilvl, barW)
+                        source and source[row.id], state.ilvl, barW, unit)
                 end
                 -- After the column width, or the clamp reads the old one.
                 fitHover(r)
@@ -837,7 +904,7 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
                 if rank == 1 then
                     r.value:SetText(at .. "|cff40ff40best|r")
                 else
-                    r.value:SetText(("%s%s%.1f%%|r"):format(at, relColor(row.rel), row.rel))
+                    r.value:SetText(("%s%s%.1f%%|r"):format(at, relColor(row.rel, unit), row.rel))
                 end
                 y = y - ROW_H * rowScale
                 shown = shown + 1
@@ -898,7 +965,25 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
         fs:SetPoint("TOPLEFT", PAD, fy)
         fs:SetWidth(width - PAD * 2)
         alignToIcons(fs, rowScale)
-        fs.text:SetText("|cff666666Simmed " .. stamp .. " — bloodmallet.com|r")
+        -- Attributed per spec, because the page is showing one spec's
+        -- list and the two sources do not cover the same ones. A healer
+        -- reading "bloodmallet.com" under a QE Live ranking would be
+        -- pointed at a site that has never published their spec.
+        local info = T:ProviderInfo(provider)
+        local block = T:GetBlock(specKey, state.style)
+        -- The playstyle rides along because it is not a footnote: QE
+        -- ranks a Holy Paladin's trinkets differently as Herald of the
+        -- Sun than as Lightsmith, and the list above is one of them.
+        local how = ""
+        if block and block.profile then
+            how = ", " .. block.profile:lower() .. " profile"
+            if block.playstyle and block.playstyle ~= "Default" then
+                how = how .. " (" .. block.playstyle .. ")"
+            end
+        end
+        fs.text:SetText(("|cff666666%s %s%s — %s|r"):format(
+            info.unit == "score" and "Modelled" or "Simmed", stamp, how,
+            info.site))
         y = y - ROW_H - 6
     end
 
@@ -1019,8 +1104,37 @@ function UI:RenderCouncil(content, width, viewH)
             -- the per-trinket version comes out empty for exactly the
             -- items where the caveat is worth making.
             local pending = T:PendingSpecs(state.style)
-            for _, entry in ipairs(bucket.specs) do
-                if not T:IsStaleTier(entry.tier) then
+
+            -- Split by what the percentage divides by -- see
+            -- GroupedSpecsFor. A DPS spec's -0.5% and a healer's -16.4%
+            -- are both "how far behind their own best", measured against
+            -- different totals, so they get a subhead each instead of
+            -- one column that sorts healers to the bottom for being
+            -- measured differently.
+            local groups = T:GroupedSpecsFor(bucket.id, state.style) or {}
+            for _, group in ipairs(groups) do
+                local fresh = {}
+                for _, entry in ipairs(group.entries) do
+                    if not T:IsStaleTier(entry.tier) then
+                        fresh[#fresh + 1] = entry
+                    end
+                end
+                -- A subhead only when there is something to tell apart.
+                -- Most trinkets are ranked by one side or the other
+                -- alone, and heading a single group is a caption on a
+                -- list of one thing.
+                if #fresh > 0 and #groups > 1 then
+                    local gh = AcquireRow(self, content)
+                    gh:SetPoint("TOPLEFT", PAD + 26, y)
+                    gh:SetWidth(width - PAD * 2 - 26)
+                    gh.icon:SetTexture(nil)
+                    gh.text:SetText(("|cff%s%s|r  |cff666666%s — %s|r"):format(
+                        ns.Widgets:Hex("muted"), group.label, group.source,
+                        group.note))
+                    gh:SetScript("OnClick", function() toggle(bucket.id) end)
+                    y = y - ROW_H + 2
+                end
+                for _, entry in ipairs(fresh) do
                     local sr = AcquireRow(self, content)
                     sr:SetPoint("TOPLEFT", PAD + 26, y)
                     sr:SetWidth(width - PAD * 2 - 26)
@@ -1036,7 +1150,7 @@ function UI:RenderCouncil(content, width, viewH)
                         sr.value:SetText("|cff40ff40top pick|r")
                     else
                         sr.value:SetText(("%s%.1f%%|r")
-                            :format(relColor(entry.rel), entry.rel))
+                            :format(relColor(entry.rel, group.unit), entry.rel))
                     end
                     y = y - ROW_H
                 end
@@ -1183,6 +1297,9 @@ end
 function UI:Refresh()
     if not self._content then return end
     self:RefreshStepper()
+    -- The tab words follow the player's spec, so a spec swap while the
+    -- page is open has to move them.
+    if self.LayoutStyles then self:LayoutStyles() end
 
     -- One pass, because the scale is known before anything is drawn.
     -- Zero width means the frame has not been laid out yet, which is
@@ -1220,7 +1337,11 @@ function UI:BuildFilters(bar, ctx)
     -- Fight style, right-aligned so it reads as a modifier on the view
     -- rather than a third view. Styles with no data anywhere are skipped
     -- outright instead of offered as a tab onto an empty list.
+    -- Kept on the page, the way the stepper and the filter bar are:
+    -- the labels are the only place the two vocabularies show up, so
+    -- something outside the closure has to be able to read them back.
     local styleButtons = {}
+    self._styleButtons = styleButtons
     local function selectStyle(id)
         state.style = id
         state.selected = nil
@@ -1231,19 +1352,47 @@ function UI:BuildFilters(bar, ctx)
         self:Refresh()
     end
 
-    local sx = 0
+    -- Labelled from the player's own spec, because the two tabs do not
+    -- mean the same thing for everyone: bloodmallet splits by target
+    -- count and QE Live splits by content, so a Mistweaver's "AoE" tab
+    -- is really their dungeon chart. The mapping holds either way round
+    -- -- a raid boss is the single-target question and a dungeon pull is
+    -- the AoE one -- so the council list stays coherent under either
+    -- pair of words.
+    --
+    -- Re-laid out rather than rebuilt on refresh: the label changes when
+    -- the player swaps spec, and the buttons are right-aligned, so the
+    -- one that moves is the one further from the edge.
     for i = #STYLES, 1, -1 do
         local def = STYLES[i]
         if T:HasStyle(def.id) then
             local btn = ns.CreateUnderlineTab(bar, def.label, ACCENT)
-            local w = (def.id == "ST") and 100 or 60
-            btn:SetSize(w, 24)
-            btn:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -sx, 0)
+            btn:SetSize(100, 24)
             btn:SetScript("OnClick", function() selectStyle(def.id) end)
             styleButtons[def.id] = btn
-            sx = sx + w + 6
         end
     end
+
+    function self:LayoutStyles()
+        local specKey = T:GetPlayerSpecKey()
+        local sx = 0
+        for i = #STYLES, 1, -1 do
+            local def = STYLES[i]
+            local btn = styleButtons[def.id]
+            if btn then
+                btn.label:SetText(T:StyleLabel(specKey, def.id))
+                -- Room for the word plus the padding a tab reads with;
+                -- a floor so "AoE" and "Raid" still present as tabs
+                -- rather than as two cramped words jammed together.
+                local w = math.max(60, math.floor((btn.label:GetStringWidth() or 40) + 22))
+                btn:SetSize(w, 24)
+                btn:ClearAllPoints()
+                btn:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -sx, 0)
+                sx = sx + w + 6
+            end
+        end
+    end
+    self:LayoutStyles()
     -- Fall back to whatever style does exist, so the page is never blank.
     if not styleButtons[state.style] then
         state.style = next(styleButtons) or "ST"

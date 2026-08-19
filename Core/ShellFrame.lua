@@ -42,6 +42,52 @@ local TAB_EDGE = 12
 
 local frame
 
+------------------------------------------------------------
+-- Escape, and why it needs a combat guard
+--
+-- The window is a plain frame, but the Mythic+ and Teleports pages mount
+-- SecureActionButtonTemplate tiles inside it, and a frame holding a
+-- protected frame is itself protected: once either page has been opened,
+-- YippYappShell:Show and :Hide are protected calls for the rest of the
+-- session. In combat the client refuses them outright, which is the
+-- ADDON_ACTION_BLOCKED reported against 'YippYappShell:Show()'.
+--
+-- UISpecialFrames is the client hiding the window for us on Escape, so
+-- while it is listed, every Escape press in combat is another blocked
+-- call charged to this addon. Core/AppFrame.lua guards its entry the
+-- same way; the shell never got the same treatment.
+------------------------------------------------------------
+local function registerSpecialFrame()
+    for _, n in ipairs(UISpecialFrames) do if n == "YippYappShell" then return end end
+    tinsert(UISpecialFrames, "YippYappShell")
+end
+
+local function unregisterSpecialFrame()
+    for i = #UISpecialFrames, 1, -1 do
+        if UISpecialFrames[i] == "YippYappShell" then table.remove(UISpecialFrames, i); break end
+    end
+end
+
+-- Set when a close was asked for during combat, so the window can go
+-- away the moment the fight ends rather than the request being lost.
+local closePending = false
+
+local combatGuard = CreateFrame("Frame")
+combatGuard:RegisterEvent("PLAYER_REGEN_DISABLED")
+combatGuard:RegisterEvent("PLAYER_REGEN_ENABLED")
+combatGuard:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_DISABLED" then
+        unregisterSpecialFrame()
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        if closePending then
+            closePending = false
+            if frame then frame:Hide() end
+            return
+        end
+        if frame and frame:IsShown() then registerSpecialFrame() end
+    end
+end)
+
 local function Panel(parent, role)
     local skin = ns.Skin and ns.Skin:Active()
     if skin and skin.Panel then return skin:Panel(parent, role) end
@@ -77,7 +123,14 @@ local function Build()
     bg:SetAllPoints(frame)
     frame.bg = bg
 
-    tinsert(UISpecialFrames, "YippYappShell")
+    -- On every Show, not once at build. OnHide takes the window back out
+    -- of UISpecialFrames, so registering only here meant Escape worked
+    -- for the first open of the session and never again.
+    frame:HookScript("OnShow", function()
+        if not InCombatLockdown() then registerSpecialFrame() end
+    end)
+    frame:HookScript("OnHide", unregisterSpecialFrame)
+    if frame:IsShown() and not InCombatLockdown() then registerSpecialFrame() end
 
     ------------------------------------------------------------
     -- Title bar and medallion
@@ -220,18 +273,36 @@ end
 --- version did, and only that -- silently leaves the texture unset. That
 --- is the empty gold ring: the frame art drew, the portrait never
 --- arrived, and nothing retried.
+-- The window's own mark, not the player's face.
+--
+-- The medallion showed the character portrait, and the hero card two
+-- inches below it shows the same portrait -- so the window opened with
+-- one face on it twice. The dashboard already made this argument about
+-- itself and dropped its own hero card for the same reason.
+--
+-- The logo is the thing that makes the window identifiably this addon's,
+-- and this is the one place on screen that is shaped for a badge.
+local LOGO_TEXTURE = "Interface\\AddOns\\YippYappHelper\\Media\\LogoRound"
+
 function Shell:RefreshMedallion()
     if not (frame and frame.medallion) then return end
-    if not SetPortraitTexture then return end
-    local ok = pcall(SetPortraitTexture, frame.medallion, "player")
-    -- A fallback beats an empty circle. The class emblem is always
-    -- available, where the portrait can still be loading.
-    if not ok or not frame.medallion:GetTexture() then
-        local _, classFile = UnitClass("player")
-        if classFile and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[classFile] then
-            frame.medallion:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-            frame.medallion:SetTexCoord(unpack(CLASS_ICON_TCOORDS[classFile]))
-        end
+
+    frame.medallion:SetTexCoord(0, 1, 0, 1)
+    frame.medallion:SetTexture(LOGO_TEXTURE)
+    if frame.medallion:GetTexture() then return end
+
+    -- No round logo shipped yet, so fall back to the square one that is
+    -- already here. It loses its corners to the mask, which is exactly
+    -- why the round one is being drawn -- but a clipped badge beats an
+    -- empty ring, and this keeps the addon working from the commit that
+    -- changes the code to the commit that adds the art.
+    frame.medallion:SetTexture("Interface\\AddOns\\YippYappHelper\\Media\\YippYappHelper")
+    if frame.medallion:GetTexture() then return end
+
+    -- And if even that is missing, the player's own portrait rather than
+    -- an empty circle.
+    if SetPortraitTexture then
+        pcall(SetPortraitTexture, frame.medallion, "player")
     end
 end
 ------------------------------------------------------------
@@ -277,8 +348,22 @@ function Shell:BuildBottomTabs(parent)
         -- Sized to its own text. Padding is modest now: the row is
         -- scaled to fit afterwards, so buying room with padding here
         -- would only force a smaller scale later.
+        --
+        -- The MINIMUM is 72, not 40, and that is not padding by another
+        -- name. This template's art is three pieces -- a left cap, a
+        -- stretched middle, a right cap -- and the caps are about twenty
+        -- pixels each. At a 40px floor the middle has essentially no
+        -- width to stretch into, and a short label lands there and draws
+        -- as a smear with no proper end. "Raid" is four characters where
+        -- the next shortest page is seven, so it was the only tab that
+        -- reached the floor, and it did so the moment the label was
+        -- shortened from "Raid Tools".
+        --
+        -- Raising the floor rather than the padding on purpose: padding
+        -- widens every tab and the row is auto-scaled to fit, so paying
+        -- for one short label there would shrink all ten.
         if PanelTemplates_TabResize then
-            pcall(PanelTemplates_TabResize, tab, 10, nil, 40, 150)
+            pcall(PanelTemplates_TabResize, tab, 10, nil, 72, 150)
         end
 
         tab:ClearAllPoints()
@@ -374,6 +459,33 @@ local STAT_ROWS = {
     { key = "vers",    label = "Versatility" },
 }
 
+--- What the accent on a stat row means, and where the rest of it lives.
+---
+--- Declared above BuildCharacter rather than beside the button that
+--- uses it. A local defined below its call site is not an upvalue, it
+--- is a nil global, and the call throws the first time anyone hovers.
+local function StatPriorityTooltip(btn)
+    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Stat Priority", 1, 1, 1)
+
+    local entry = btn._entry
+    if entry then
+        if btn._build then GameTooltip:AddLine(btn._build, 0.45, 0.85, 1.00) end
+        if entry.context and entry.context ~= "" then
+            GameTooltip:AddLine(entry.context, 0.62, 0.62, 0.68)
+        end
+        for i, line in ipairs(entry.stats or {}) do
+            GameTooltip:AddLine(("%d. %s"):format(i, line), 0.92, 0.92, 0.95)
+        end
+    elseif btn._why then
+        GameTooltip:AddLine(btn._why, 0.62, 0.62, 0.68, true)
+    end
+
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Click for the full list.", 0.45, 0.85, 1.00)
+    GameTooltip:Show()
+end
+
 -- A scenic backdrop for the whole character column.
 --
 -- Plumber uses this one, so it is known to be live in the client rather
@@ -398,9 +510,38 @@ function Shell:BuildCharacter(col)
     ------------------------------------------------------------
     -- Stats
     ------------------------------------------------------------
-    local statTitle = W:SectionTitle(col, "stats")
+    local statTitle = W:SectionTitle(col, "Stats")
     statTitle:SetPoint("TOPLEFT", hero, "BOTTOMLEFT", 0, -14)
     statTitle:SetPoint("RIGHT", hero, "RIGHT", 0, 0)
+
+    -- The heading doubles as the way into the full priority list.
+    --
+    -- On the heading rather than beside it. This column has no other
+    -- control in it, so a lone "stat prio" link floating among static
+    -- rows reads as debris; hung off the heading it reads as what that
+    -- heading is about. The rule under the text leaves the right end of
+    -- the line box free, which is where the hint goes.
+    local statLink = CreateFrame("Button", nil, statTitle)
+    statLink:SetAllPoints(statTitle)
+    statLink.hint = W:Label(statLink, "GameFontNormalSmall", "RIGHT")
+    statLink.hint:SetPoint("TOPRIGHT", 0, -3)
+    statLink.hint:SetText("Stat Priority >")
+    statLink.hint:SetTextColor(W:Color("faint"))
+
+    statLink:SetScript("OnEnter", function(btn)
+        btn.hint:SetTextColor(W:Color("accent"))
+        StatPriorityTooltip(btn)
+    end)
+    statLink:SetScript("OnLeave", function(btn)
+        btn.hint:SetTextColor(W:Color("faint"))
+        GameTooltip:Hide()
+    end)
+    statLink:SetScript("OnClick", function() Shell:Open("bis") end)
+    -- Only where there is somewhere to go. Best in Slot registers in
+    -- Core/ShellPages.lua, which loads after this file, so the question
+    -- has to be asked at build time rather than at file scope.
+    statLink:SetShown(Shell:GetPage("bis") ~= nil)
+    self._statLink = statLink
 
     self._statRows = {}
     local anchor = statTitle
@@ -430,7 +571,7 @@ function Shell:BuildCharacter(col)
     ------------------------------------------------------------
     -- Crests
     ------------------------------------------------------------
-    local crestTitle = W:SectionTitle(col, "item upgrades")
+    local crestTitle = W:SectionTitle(col, "Item Upgrades")
     crestTitle:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -16)
     crestTitle:SetPoint("RIGHT", hero, "RIGHT", 0, 0)
     self._railCrests = crestTitle
@@ -450,13 +591,14 @@ function Shell:BuildCharacter(col)
         tiles[i] = W:IconTile(col, CREST_TILE)
         tiles[i]:SetPoint("TOPLEFT", crestTitle, "BOTTOMLEFT",
             startX + (i - 1) * (CREST_TILE + CREST_GAP), -8)
+
     end
     self._crestTiles = tiles
 
     ------------------------------------------------------------
     -- Wallet
     ------------------------------------------------------------
-    local wallet = W:SectionTitle(col, "currencies")
+    local wallet = W:SectionTitle(col, "Currencies")
     wallet:SetPoint("TOPLEFT", crestTitle, "BOTTOMLEFT", 0, -(CREST_TILE + 34))
     wallet:SetPoint("RIGHT", hero, "RIGHT", 0, 0)
     self._railWallet = wallet
@@ -465,6 +607,32 @@ function Shell:BuildCharacter(col)
     self._walletScroll:SetPoint("TOPLEFT", wallet, "BOTTOMLEFT", 0, -6)
     self._walletScroll:SetPoint("BOTTOMRIGHT", col, "BOTTOMRIGHT", -pad - 18, pad)
     self._walletRows = {}
+
+    ------------------------------------------------------------
+    -- Keeping the accent honest
+    --
+    -- Which stat is lit depends on your spec and on which hero talent
+    -- you took, and both can change with this window open -- comparing
+    -- stats is a thing people do WHILE respeccing. Nothing else redraws
+    -- this column: Shell:Open does, once, and a page switch deliberately
+    -- does not touch it.
+    --
+    -- Coalesced, because TRAIT_CONFIG_UPDATED arrives in bursts as a
+    -- loadout applies and there is no reason to re-read the guide once
+    -- per trait.
+    ------------------------------------------------------------
+    local watcher = CreateFrame("Frame", nil, col)
+    watcher:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    watcher:RegisterEvent("TRAIT_CONFIG_UPDATED")
+    local pending = false
+    watcher:SetScript("OnEvent", function()
+        if pending or not col:IsShown() then return end
+        pending = true
+        C_Timer.After(0.25, function()
+            pending = false
+            if col:IsShown() then Shell:RefreshCharacter() end
+        end)
+    end)
 
     self:RefreshRail()
 end
@@ -485,10 +653,55 @@ end
 function Shell:RefreshCharacter()
     if self._charHero then self._charHero:Refresh() end
     if not self._statRows then return end
+    -- Local, and it has to be: W at this file's scope is the window
+    -- WIDTH, a number. The same shadowing already cost RefreshRail a
+    -- round of nil indexing.
+    local W = ns.Widgets
+
+    -- Which of the four the guide puts first, for the spec and hero
+    -- talent this character is in. Nil is a real answer and the common
+    -- one for a spec whose builds disagree, so every use below has to
+    -- tolerate it rather than defaulting to a rank.
+    local ranks, entry, build
+    if ns.StatPriorityRanks then ranks, entry, build = ns:StatPriorityRanks() end
+
     local pct = statPercents()
     for key, row in pairs(self._statRows) do
         local v = tonumber(pct[key])
         row.value:SetText(v and ("%.2f%%"):format(v) or "|cff8a8a92--|r")
+
+        -- One step of contrast, not four. The rows answer "how much
+        -- crit do I have"; the question people open this column with is
+        -- "should I care", and lighting the stat the guide leads with
+        -- answers it without spending a row or a pixel of height. The
+        -- rest of the order is a hover away on the heading.
+        if ranks and ranks[key] == 1 then
+            row.label:SetTextColor(W:Color("accent"))
+            row.value:SetTextColor(W:Color("accent"))
+        else
+            row.label:SetTextColor(W:Color("muted"))
+            row.value:SetTextColor(W:Color("text"))
+        end
+    end
+
+    local link = self._statLink
+    if link then
+        link._entry, link._build = entry, build
+        if entry then
+            link._why = nil
+        elseif ranks then
+            -- Marked from agreement rather than from one build. Say so,
+            -- because the alternative is a lit row the tooltip cannot
+            -- account for.
+            link._why = "Your hero talent builds rank the stats below "
+                .. "this one differently. They agree on the one lit above."
+        elseif ns.PlayerSpecKey and ns.ClassGuideData
+            and ns.ClassGuideData[ns:PlayerSpecKey() or ""] then
+            link._why = "Your hero talent builds want different stats, "
+                .. "and this addon cannot tell which one you are in."
+        else
+            link._why = "No stat priority for this specialization yet."
+        end
     end
 end
 
@@ -507,15 +720,35 @@ function Shell:RefreshRail()
             local def = ns.CRESTS and ns.CRESTS[i]
             if data then
                 tile.icon:SetTexture(data.icon)
+
+                -- Just the number held. The cap is on hover.
+                --
+                -- Two attempts at putting it on the tile both made it
+                -- worse: "90/100" wrapped onto two lines under a 40px
+                -- icon, and a bar under five icons added a row of rails
+                -- to a strip whose whole job is to be glanceable. The
+                -- tooltip is SetCurrencyByID -- Blizzard's own, with the
+                -- cap and the season total already in it -- so there was
+                -- never anything to add here, only something to point
+                -- at.
                 tile.count:SetText("|c" .. (def and def.color or "ffffffff")
                     .. tostring(data.quantity or data.count or 0) .. "|r")
-                -- Rarity from the game, not from our track legend. Those
-                -- two are not the same thing: the legend paints Hero
-                -- orange and Myth red because that is how the gear tracks
-                -- read, but the currencies themselves carry their own
-                -- quality, and a border is where rarity belongs. The
-                -- track colour stays on the count below it.
-                W:SetIconQuality(tile.border, data.quality)
+                -- The track legend, not the currency's own rarity.
+                --
+                -- Rarity was the earlier choice and the argument for it
+                -- was that a border is where quality belongs. It reads
+                -- badly here: the five crests are a ladder, green
+                -- through red, and that ladder is the only thing anyone
+                -- looks at this strip to see. Item quality tells you
+                -- almost nothing by comparison -- several of them share
+                -- it -- so the border was spending the strongest signal
+                -- on the least useful fact.
+                local cr, cg, cb = W:HexToRGB(def and def.color)
+                if cr then
+                    tile:SetEdge(cr, cg, cb)
+                else
+                    W:SetIconQuality(tile.border, data.quality)
+                end
                 -- Stashed per refresh, not captured at build: which crest
                 -- a tile shows can change when ResolveCrestIDs settles.
                 tile._currencyID = data.currencyID or (def and def.id)
@@ -574,7 +807,50 @@ end
 ------------------------------------------------------------
 -- Open / close
 ------------------------------------------------------------
+--- The gate every way into the window passes through, in combat.
+---
+--- Here rather than only at ns:OpenMain because the nav tabs, the stat
+--- link in the character column and the after-key summary all call Open
+--- directly, and a guard the front door alone knows about is a guard
+--- three callers walk around.
+---
+--- Changing page is refused as flatly as opening is, and for the same
+--- reason: every host lives inside a window that counts as protected the
+--- moment a secure page has been mounted in it, so showing one host and
+--- hiding another are both protected calls. Refusing the whole switch is
+--- the conservative reading -- a page of plain fontstrings may well swap
+--- in fine -- but the failure mode for guessing wrong is a blocked-action
+--- error mid-pull, and nobody is reading the Consumables page while the
+--- boss is casting.
+local function combatRefusesPage(self, id)
+    if not InCombatLockdown() then return false end
+
+    if not (frame and frame:IsShown()) then
+        if ns.CombatNotice then
+            ns.CombatNotice("can't open in combat — try again after the fight.")
+        end
+        return true
+    end
+
+    if id and id ~= self._lastPage then
+        local def = self.GetPage and self:GetPage(id)
+        local label = (def and def.label) or id
+        if ns.CombatNotice then
+            ns.CombatNotice("can't switch to " .. label .. " in combat — the window stays on this page until the fight ends.")
+        end
+        return true
+    end
+
+    -- Already open, already on that page. Nothing to do, and re-mounting
+    -- would rebuild the very tiles the client is refusing to let us touch.
+    return true
+end
+
 function Shell:Open(id)
+    -- Before Build, not after: building in combat is legal but pointless
+    -- when the Show at the end of it is going to be refused anyway.
+    if combatRefusesPage(self, id) then return end
+
     local f = Build()
     f:Show()
 
@@ -589,9 +865,15 @@ function Shell:Open(id)
     -- and then shown or hidden. Re-parenting one shared frame would mean
     -- every page rebuilding on every switch, which is what the old
     -- dispatch did and why switching pages was not free.
+    --
+    -- Only touched when the answer actually changes. SetShown on a frame
+    -- already in that state still counts as a Show or Hide call, and the
+    -- hosts holding teleport tiles are protected, so the unconditional
+    -- version spent a blocked call per page on every switch.
     self._hosts = self._hosts or {}
     for pageId, host in pairs(self._hosts) do
-        host:SetShown(pageId == id)
+        local want = (pageId == id)
+        if host:IsShown() ~= want then host:SetShown(want) end
     end
     if not self._hosts[id] then
         local host = CreateFrame("Frame", nil, frame.content)
@@ -618,15 +900,30 @@ function Shell:DiscardChrome()
     frame:SetParent(nil)
     frame = nil
     self._navButtons, self._hosts = nil, nil
-    self._charHero, self._statRows = nil, nil
+    self._charHero, self._statRows, self._statLink = nil, nil, nil
     self._railCrests, self._crestTiles = nil, nil
     self._railWallet, self._walletScroll, self._walletRows = nil, nil, nil
     self:ResetMounts()
     if wasShown then self:Open(page) end
 end
 
+--- Closes the window, or promises to as soon as combat ends.
+---
+--- Hiding is as protected as showing once a secure page has been mounted
+--- (see the note above registerSpecialFrame), so calling Hide here
+--- mid-fight would trade one blocked-action error for another.
+--- Remembering the request instead means the X button and Escape still
+--- do what they look like they do, one fight later.
 function Shell:Close()
-    if frame then frame:Hide() end
+    if not frame then return end
+    if InCombatLockdown() and frame:IsShown() then
+        closePending = true
+        if ns.CombatNotice then
+            ns.CombatNotice("can't close in combat — it will close itself when the fight ends.")
+        end
+        return
+    end
+    frame:Hide()
 end
 
 function Shell:Toggle(id)

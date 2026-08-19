@@ -1,5 +1,72 @@
 # YippYapp Helper - Changelog
 
+## v3.1.0 - The raid guide, the boss trainer, and healer trinkets (2026-08-19)
+
+### Raid
+- **A boss guide for the current raid, `/yh guide`.** Every boss rewritten
+  against a real per-boss source rather than paraphrased generalities:
+  the Tidebound Grotto added, Nymrissa made playable, Nek'zali written by
+  someone who actually watched the fight, Vashnik's three phases stated
+  plainly as the guide's own sections, and the Soulcoil Well and Jawae's
+  Echoes named as the fight names them. Laid out by a solver, so a card
+  grows with its text instead of being guessed at a fixed width.
+- **A boss trainer, `/yh train [boss]`.** Practise the mechanics without
+  the raid: eight fights run end to end, the two-boss encounters get
+  their second boss, the Sentinels' stasis is a solvable puzzle rather
+  than a coin flip, alternating soaks alternate, Frostfire Volley carries
+  one element and clears in the other, and the Coiled Altar's orbs
+  survive the push. Difficulty comes off one dial rather than forty.
+  Nothing fires or spawns before the countdown says GO, ranged hold
+  station instead of running into melee, and every instant mechanic
+  names itself as it happens. Per-frame garbage cut by 44%, measured.
+
+### Trinkets
+- **Healer rankings, from QE Live.** bloodmallet sims damage and
+  publishes nothing for the seven healing specs, so those now come from
+  questionablyepic.com instead -- raid and dungeon, ranked at each
+  trinket's own ceiling with the item-level curve that goes with it.
+  Coverage goes from 31 specs to 38 of 40; Augmentation and Brewmaster
+  are in neither source.
+- **The loot council list splits damage specs from healers.** The two
+  sources divide by different things to reach "percent behind your best"
+  -- a share of total DPS against a share of the best trinket's healing
+  -- so one sorted column ranked by which project simmed you rather than
+  by who wants the item, and buried a Holy Priest's fourth best trinket
+  under an Arcane Mage's sixteenth. Each side now has its own subhead
+  saying what its percentages measure, with yours first. The colours
+  follow the same split: the healer bands are the cutoffs that put the
+  same share of rows in each colour as the damage bands do.
+- Trinket tooltips split their five lines between the two sources, so a
+  healer hovering a trinket is no longer shown five damage specs, and
+  the attribution names whichever project ranked what you are reading.
+- **Re-scraped from bloodmallet.** 21 specs came back with fresh runs.
+  Assassination gained a single-target list it did not have, and
+  Assassination AoE, both Outlaw lists, both Demonology lists and
+  Protection Warrior's AoE moved onto this season's numbers. Eleven
+  specs still carry last season's ranking for at least one fight style
+  and say so, rather than being dropped.
+
+### Delves
+- **A Delves page.** Your companion and where its next upgrade sits, the
+  week's coffer keys, and the tier ladder. Everything is asked of the
+  client at runtime -- no companion, faction, curio or season ids are
+  written down, because a stale one does not error, it reads as zero and
+  turns the page into a confident lie.
+
+### Elsewhere
+- **The windows that open on their own now share a home.** Ready check,
+  dungeon utility notes and the after-key summary can be dragged
+  wherever you like whenever they are open, and each remembers its own
+  place.
+- **A key binding** to toggle the window, under Blizzard's own bindings.
+- **Stat priority is answered in one place.** The Best in Slot page can
+  afford to show two hero builds disagreeing; the character column has
+  four rows and has to pick the build you are actually specced into.
+  Both read the same parse of the same guide.
+- **Mythic+ utility notes per dungeon and class**, generated rather than
+  hand-kept. The mechanic-to-utility mapping is derived from Mythic Plus
+  Utility's curated tags (by Nikyou); the prose is ours.
+
 ## v3.0.6 - Post-tuning re-sim, and trinket shortlisting (2026-08-15)
 
 ### Data

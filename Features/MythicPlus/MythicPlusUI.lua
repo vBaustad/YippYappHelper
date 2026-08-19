@@ -30,14 +30,15 @@ ns.SmoothFrame(frame)
 frame:Hide()
 ns.MythicPlusFrame = frame
 
--- Quick slash command to jump straight to the Mythic+ page in the app.
-SLASH_YYHKEYS1 = "/keys"
-SLASH_YYHKEYS2 = "/yhkeys"
+-- Quick slash command to jump straight to the Mythic+ page.
+-- /keys is gone: far too generic a global for one addon to hold, and
+-- several Mythic+ addons register it, so whoever loaded last won.
+SLASH_YYHKEYS1 = "/yhkeys"
 SlashCmdList.YYHKEYS = function()
-    if ns.ShowAppPage and ns.AppFrame then
-        ns.AppFrame:Show()
-        ns:ShowAppPage("mythicplus")
-    end
+    -- Keyed off OpenTo, not off the app frame: gating on ns.AppFrame
+    -- meant this went nowhere in a session where the shell had loaded
+    -- and the old window had not.
+    if ns.OpenTo then ns:OpenTo("mythicplus") end
 end
 
 -- ESC to close (standalone)
@@ -260,12 +261,19 @@ end
 ------------------------------------------------------------
 -- Content area (below tabs)
 ------------------------------------------------------------
--- A surface under the content area, created first so it sits behind it:
--- siblings at the same frame level draw in creation order.
+-- A surface under the content area (standalone window only -- app mode
+-- hides it, because the shell's content region already is one).
+--
+-- Creation order does not put it behind anything. That is true of
+-- regions inside one frame, not of sibling FRAMES, and frame level beats
+-- draw layer -- so this has to say outright that it is below the frame
+-- whose content it backs. Same mistake, four times, elsewhere in the
+-- addon.
 local contentSurface = ns.Widgets and ns.Widgets:Panel(frame, "inset")
 if contentSurface then
     contentSurface:SetPoint("TOPLEFT", PAD - 8, TAB_Y - TAB_H + 2)
     contentSurface:SetPoint("BOTTOMRIGHT", -PAD + 8, PAD - 6)
+    contentSurface:SetFrameLevel(math.max(frame:GetFrameLevel() - 1, 0))
 end
 
 local content = CreateFrame("Frame", nil, frame)
@@ -332,6 +340,10 @@ local function AcquireBtn(parent)
         btn:SetParent(parent)
     end
     btn:ClearAllPoints()
+    -- Re-levelled on every acquire, not just on creation. A pooled frame
+    -- carries whatever level it last had, and SetParent re-deriving it
+    -- is not something to depend on.
+    btn:SetFrameLevel((parent:GetFrameLevel() or 1) + 1)
     btn:SetScript("OnClick", nil)
     btn:SetScript("OnEnter", nil)
     btn:SetScript("OnLeave", nil)
@@ -360,6 +372,15 @@ local function AcquireSecureBtn(parent)
     end
     btn:SetScript("OnEnter", nil)
     btn:SetScript("OnLeave", nil)
+    btn:SetScript("PostClick", nil)
+    -- Cast art left over from whichever dungeon this frame showed last
+    -- time. An in-flight cast is re-targeted by the driver on its next
+    -- frame; this is only so nothing stale is on screen in between.
+    if btn._castSweep then btn._castSweep:Hide() end
+    if btn._castFlash then
+        btn._castFlash:SetAlpha(0)
+        btn._castFlash:Hide()
+    end
     btn:Show()
     return btn
 end
@@ -371,6 +392,11 @@ end
 -- it. SectionCard makes that rule the top edge of the card its content
 -- sits on, which is the shape the rest of the addon now uses.
 local secPool, secPoolIdx = {}, 0
+
+-- Exposed for Tools/loadcheck.py, which reads the cards' real
+-- coordinates back off a render rather than reconstructing them. Same
+-- contract the Best in Slot page publishes for the same check.
+frame._sections = secPool
 
 local function AcquireSection(parent)
     secPoolIdx = secPoolIdx + 1
@@ -384,12 +410,27 @@ local function AcquireSection(parent)
     sec:ClearAllPoints()
     sec:SetValue("")
     sec:Show()
+    frame._sectionCount = secPoolIdx
     return sec
 end
 
+-- Which tile is currently showing which dungeon, so a cast event can
+-- find the tile it belongs to. Rebuilt every render: these are pooled
+-- frames, and the one showing Kings' Rest this time is not necessarily
+-- the one that showed it last time.
+local tilesByDungeon = {}
+
+-- Published for Tools/loadcheck.py. The lookup is by name across two
+-- tables that are keyed independently -- the client's map names on one
+-- side, the teleport table's on the other -- and a mismatch does not
+-- error, it just never animates.
+frame._tilesByDungeon = tilesByDungeon
+
 local function ResetPools()
+    wipe(tilesByDungeon)
     for i = 1, secPoolIdx do secPool[i]:Hide() end
     secPoolIdx = 0
+    frame._sectionCount = 0
     for i = 1, fsPoolIdx do fsPool[i]:Hide() end
     fsPoolIdx = 0
     for i = 1, texPoolIdx do texPool[i]:Hide() end
@@ -465,7 +506,319 @@ local function ColorRating(score)
     return string.format("|cff%02x%02x%02x%d|r", r * 255, g * 255, b * 255, score)
 end
 
+--- The dungeon's own art, with the teleport spell icon only as a
+--- fallback.
+---
+--- Every list on this page had it the other way round, and the Focus
+--- rows are where it showed: a dungeon whose teleport this character has
+--- not earned resolves to the same generic Hero's Path glyph, so three
+--- of four rows in the column that exists to tell dungeons apart carried
+--- one identical icon. The tiles along the top never had the problem
+--- because they use map.icon, which is this.
+local function DungeonIcon(mapID)
+    local _, _, _, mapTex = C_ChallengeMode.GetMapUIInfo(mapID)
+    if mapTex then return mapTex end
+    local spellID = ns:GetDungeonTeleportSpell(mapID)
+    return (spellID and C_Spell.GetSpellTexture(spellID)) or 134400
+end
+
 local tooltip = GameTooltip
+
+------------------------------------------------------------
+-- Teleport cast feedback
+------------------------------------------------------------
+-- A secure button gives back no signal at all: the click either starts a
+-- cast or is swallowed in silence -- in combat, on cooldown, or the
+-- teleport simply not learned. That was survivable while the window was
+-- small and the tile sat under the cursor. Across a full-width page the
+-- tile is nowhere near where the eye ends up, and a dead click is
+-- indistinguishable from a missed one.
+--
+-- Driven off the cast events and not off the click, deliberately. The
+-- click is not the interesting event; whether a cast actually started
+-- is, and those two come apart often enough to be worth the difference.
+local castToast, castToastSeq = nil, 0
+
+local function EnsureCastToast()
+    if castToast then return castToast end
+
+    -- On UIParent, not on the page.
+    --
+    -- Parented to the page it could only ever appear while that page was
+    -- open, which is precisely when it is least needed -- and a teleport
+    -- is very often cast from the Teleports page, or from a bar, with
+    -- Mythic+ nowhere on screen. A hidden parent hides its children no
+    -- matter what the handler decides, so no guard could have rescued
+    -- this; it had to stop being a child.
+    local t = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    t:SetSize(280, 44)
+    t:SetFrameStrata("DIALOG")
+    ns.Widgets:Apply(t, "panel")
+    t:Hide()
+
+    t.icon = t:CreateTexture(nil, "ARTWORK")
+    t.icon:SetSize(28, 28)
+    t.icon:SetPoint("LEFT", t, "LEFT", 8, 0)
+    t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    t.label = t:CreateFontString(nil, "OVERLAY")
+    t.label:SetPoint("TOPLEFT", t.icon, "TOPRIGHT", 8, -2)
+    t.label:SetPoint("RIGHT", t, "RIGHT", -8, 0)
+    t.label:SetJustifyH("LEFT")
+    t.label:SetFont(STANDARD_TEXT_FONT, 12, "")
+
+    t.barBg = t:CreateTexture(nil, "ARTWORK")
+    t.barBg:SetHeight(6)
+    t.barBg:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMRIGHT", 8, 3)
+    t.barBg:SetPoint("RIGHT", t, "RIGHT", -8, 0)
+    t.barBg:SetColorTexture(0.1, 0.1, 0.1, 0.9)
+
+    t.barFill = t:CreateTexture(nil, "OVERLAY")
+    t.barFill:SetHeight(6)
+    t.barFill:SetPoint("TOPLEFT", t.barBg, "TOPLEFT", 0, 0)
+    t.barFill:SetColorTexture(0.0, 0.83, 1.0, 0.9)
+
+    castToast = t
+    frame._castToast = t   -- for Tools/loadcheck.py
+    return t
+end
+
+--- state is "casting", "done", "failed" or "locked".
+local function ShowCastToast(state, dungeonName, icon)
+    local t = EnsureCastToast()
+
+    -- Sits under the page when the page is up, so it reads as belonging
+    -- to the tiles above it; otherwise clear of the action bars.
+    t:ClearAllPoints()
+    if frame:IsShown() then
+        t:SetPoint("BOTTOM", frame, "BOTTOM", 0, 14)
+    else
+        t:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 180)
+    end
+    t.icon:SetTexture(icon or 134400)
+
+    castToastSeq = castToastSeq + 1
+    local seq = castToastSeq
+
+    if state == "casting" then
+        t.label:SetText("Teleporting to |cffffffff" .. dungeonName .. "|r")
+        t.barBg:Show()
+        t.barFill:Show()
+        -- Read off UnitCastingInfo rather than assuming a duration.
+        -- These spells do not all share one cast time, and a bar that
+        -- finishes before the cast does is worse than no bar.
+        t:SetScript("OnUpdate", function(self)
+            local _, _, _, startMS, endMS = UnitCastingInfo("player")
+            if not startMS or not endMS then
+                self:SetScript("OnUpdate", nil)
+                return
+            end
+            local pct = (GetTime() * 1000 - startMS) / math.max(endMS - startMS, 1)
+            pct = math.min(math.max(pct, 0), 1)
+            self.barFill:SetWidth(math.max((self.barBg:GetWidth() or 1) * pct, 1))
+        end)
+    else
+        t:SetScript("OnUpdate", nil)
+        t.barBg:Hide()
+        t.barFill:Hide()
+        if state == "done" then
+            t.label:SetText("|cff00cc00Teleporting to|r |cffffffff" .. dungeonName .. "|r")
+        elseif state == "locked" then
+            t.label:SetText("|cffff8800Teleport not unlocked|r\n|cff888888" .. dungeonName .. "|r")
+        else
+            t.label:SetText("|cffff4444Teleport interrupted|r")
+        end
+        -- Sequence-guarded so a timer from the previous cast cannot
+        -- close the toast belonging to the next one.
+        C_Timer.After(state == "locked" and 2.5 or 1.5, function()
+            if castToastSeq == seq then t:Hide() end
+        end)
+    end
+
+    t:Show()
+end
+
+------------------------------------------------------------
+-- The same cast, on the tile that started it
+------------------------------------------------------------
+-- The toast says what is happening; this says where. Feedback that
+-- appears somewhere other than the thing you clicked makes you check
+-- whether you clicked the right one, which is most of what the missing
+-- feedback cost in the first place.
+--
+-- Everything is driven from one OnUpdate on one driver frame rather than
+-- a script per tile. There is only ever one cast.
+local FLASH_TIME = 0.6
+local ACCENT_R, ACCENT_G, ACCENT_B = 0.0, 0.83, 1.0
+
+local castTile, castDungeon, castBorder, castFlashLeft = nil, nil, nil, 0
+
+local castDriver = CreateFrame("Frame")
+castDriver:Hide()
+
+local function EnsureTileCastArt(tile)
+    if tile._castSweep then return end
+
+    -- Grows from the bottom of the tile as the cast runs. Inset by the
+    -- same 3px the icon is, so it fills the art and not the border.
+    local sweep = tile:CreateTexture(nil, "OVERLAY", nil, 1)
+    sweep:SetPoint("BOTTOMLEFT", tile, "BOTTOMLEFT", 3, 3)
+    sweep:SetPoint("BOTTOMRIGHT", tile, "BOTTOMRIGHT", -3, 3)
+    sweep:SetColorTexture(ACCENT_R, ACCENT_G, ACCENT_B, 0.3)
+    sweep:SetHeight(1)
+    sweep:Hide()
+    tile._castSweep = sweep
+
+    -- White, and tinted per outcome at the moment it fires -- one
+    -- texture rather than one per colour.
+    local flash = tile:CreateTexture(nil, "OVERLAY", nil, 2)
+    flash:SetPoint("TOPLEFT", tile, "TOPLEFT", 3, -3)
+    flash:SetPoint("BOTTOMRIGHT", tile, "BOTTOMRIGHT", -3, 3)
+    flash:SetColorTexture(1, 1, 1, 1)
+    flash:SetAlpha(0)
+    flash:Hide()
+    tile._castFlash = flash
+end
+
+-- Hand the tile back the border colour the render gave it. The border
+-- carries a meaning of its own -- green means this dungeon matches a
+-- keystone in the group -- so the pulse has to be a loan, not a repaint.
+--
+-- `restore` is false when letting go because the page re-rendered. The
+-- render has already painted this tile's border for whatever dungeon it
+-- now shows, and putting the saved colour back would overwrite a fresh
+-- value with a stale one.
+local function ReleaseTile(restore)
+    local tile = castTile
+    if not tile then return end
+    if tile._castSweep then tile._castSweep:Hide() end
+    if restore ~= false and castBorder and tile.SetBackdropBorderColor then
+        tile:SetBackdropBorderColor(castBorder[1], castBorder[2],
+                                    castBorder[3], castBorder[4])
+    end
+    castTile, castBorder = nil, nil
+end
+
+local function AttachTile(tile)
+    EnsureTileCastArt(tile)
+    castTile = tile
+    castBorder = { tile:GetBackdropBorderColor() }
+    tile._castSweep:SetHeight(1)
+    tile._castSweep:Show()
+end
+
+local function StartTileCast(dungeonName)
+    ReleaseTile()
+    castDungeon, castFlashLeft = dungeonName, 0
+
+    local tile = tilesByDungeon[dungeonName]
+    if not tile or not tile:IsShown() then return end
+    AttachTile(tile)
+    castDriver:Show()
+end
+
+local function FinishTileCast(ok)
+    if not castTile then
+        castDungeon = nil
+        return
+    end
+    if castTile._castSweep then castTile._castSweep:Hide() end
+
+    local flash = castTile._castFlash
+    if flash then
+        if ok then flash:SetVertexColor(0.25, 1.0, 0.4)
+        else flash:SetVertexColor(1.0, 0.25, 0.25) end
+        flash:SetAlpha(0.75)
+        flash:Show()
+    end
+    castFlashLeft = FLASH_TIME
+    castDungeon = nil
+    castDriver:Show()
+end
+
+castDriver:SetScript("OnUpdate", function(self, elapsed)
+    local tile = castTile
+    if not tile then
+        self:Hide()
+        return
+    end
+
+    -- Fading out after the cast ended, one way or the other.
+    if castFlashLeft > 0 then
+        castFlashLeft = castFlashLeft - elapsed
+        local flash = tile._castFlash
+        if castFlashLeft <= 0 then
+            if flash then flash:SetAlpha(0) flash:Hide() end
+            ReleaseTile()
+            self:Hide()
+        elseif flash then
+            flash:SetAlpha(0.75 * (castFlashLeft / FLASH_TIME))
+        end
+        return
+    end
+
+    -- A refresh mid-cast hands this dungeon a different pooled frame, or
+    -- none at all. Re-target rather than animating a tile that has since
+    -- been recycled onto another dungeon.
+    local live = castDungeon and tilesByDungeon[castDungeon]
+    if live ~= tile then
+        ReleaseTile(false)
+        if not live or not live:IsShown() then
+            self:Hide()
+            return
+        end
+        AttachTile(live)
+        tile = live
+    end
+
+    local _, _, _, startMS, endMS = UnitCastingInfo("player")
+    if not startMS or not endMS then return end   -- the events end this
+
+    local pct = (GetTime() * 1000 - startMS) / math.max(endMS - startMS, 1)
+    pct = math.min(math.max(pct, 0), 1)
+    tile._castSweep:SetHeight(math.max((tile:GetHeight() - 6) * pct, 1))
+
+    -- A pulse rather than a solid colour: a static border already means
+    -- something here, and movement is what separates "casting now" from
+    -- "this one is special".
+    local a = 0.55 + 0.45 * math.abs(math.sin(GetTime() * 4))
+    tile:SetBackdropBorderColor(ACCENT_R, ACCENT_G, ACCENT_B, a)
+end)
+
+local castWatch = CreateFrame("Frame")
+-- Published so Tools/loadcheck.py can fire a cast at it. Nothing else
+-- reaches this path offline: no event ever arrives, so every line of the
+-- toast and the tile animation is otherwise unexecuted.
+frame._castWatch = castWatch
+castWatch:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
+castWatch:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player")
+castWatch:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
+castWatch:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
+castWatch:SetScript("OnEvent", function(_, event, _, _, spellID)
+    -- No check that the page is open. It was here, and it was the whole
+    -- bug: LeaveCurrentPage hides this frame the moment you navigate off
+    -- Mythic+, so casting a teleport from anywhere else returned on this
+    -- line. Every cast the character makes reaches this handler, so the
+    -- filter that belongs here is the spell -- and only the spell.
+    local dungeon = ns:GetDungeonForTeleportSpell(spellID)
+    if not dungeon then return end
+
+    local icon = C_Spell.GetSpellTexture(spellID)
+    if event == "UNIT_SPELLCAST_START" then
+        ShowCastToast("casting", dungeon, icon)
+        StartTileCast(dungeon)
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        -- Also the only event an instant cast fires, so this doubles as
+        -- the whole story for one. StartTileCast first so the flash has
+        -- a tile to land on even when no START ever arrived.
+        if not castTile then StartTileCast(dungeon) end
+        ShowCastToast("done", dungeon, icon)
+        FinishTileCast(true)
+    else
+        ShowCastToast("failed", dungeon, icon)
+        FinishTileCast(false)
+    end
+end)
 
 ------------------------------------------------------------
 -- Refresh
@@ -593,16 +946,8 @@ local function RefreshGuildTab()
         ksIcon:SetSize(KS_ICON_SIZE, KS_ICON_SIZE)
         ksIcon:SetPoint("LEFT", ksBg, "LEFT", 8, 0)
         ksIcon:SetDrawLayer("ARTWORK", 0)
-        local spellID = ns:GetDungeonTeleportSpell(ks.mapID)
-        local spellTex = spellID and C_Spell.GetSpellTexture(spellID)
-        if spellTex then
-            ksIcon:SetTexture(spellTex)
-            ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        else
-            local _, _, _, mapTex = C_ChallengeMode.GetMapUIInfo(ks.mapID)
-            ksIcon:SetTexture(mapTex or 134400)
-            ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-        end
+        ksIcon:SetTexture(DungeonIcon(ks.mapID))
+        ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
         -- Key level
         local ksLvl = AcquireFS(content)
@@ -626,8 +971,26 @@ local function RefreshGuildTab()
     end
 end
 
+-- Redrawing this page re-parents, re-anchors and re-attributes the
+-- dungeon teleport tiles, and those are SecureActionButtonTemplate
+-- frames. Every one of those calls is blocked while the player is in
+-- combat, and the block is SILENT: the client suppresses the "interface
+-- action failed" message unless scriptErrors is on, so the only symptom
+-- is a keybind that quietly stops working for the rest of the session.
+--
+-- GROUP_ROSTER_UPDATE fires on every death and every roster change, so
+-- inside a key this ran mid-pull, repeatedly. Defer instead. The page is
+-- redrawn the instant combat drops, and nobody reads their vault
+-- progress during a boss.
+local refreshPending = false
+
 function ns:RefreshMythicPlus()
     if not frame:IsShown() then return end
+    if InCombatLockdown() then
+        refreshPending = true
+        return
+    end
+    refreshPending = false
 
     ResetPools()
     UpdateTabHighlights()
@@ -640,6 +1003,21 @@ function ns:RefreshMythicPlus()
 
     local cw = content:GetWidth()
     if cw < 10 then cw = (ns:GetAppFrameSize()) - PAD * 2 end
+
+    -- This page does not scroll, so the last card down has to know where
+    -- the floor is. Read rather than assumed: the shell hands this page
+    -- a very different height on a 450px window than on a 580, and the
+    -- difference is several rows' worth.
+    local contentH = content:GetHeight()
+    if contentH < 10 then
+        contentH = select(2, ns:GetAppFrameSize()) - VAULT_ROW_H - PAD * 2
+    end
+    local floorY = -contentH
+    -- The same budget the layout below spends, published so
+    -- Tools/loadcheck.py can check the result against it rather than
+    -- against a number of its own.
+    frame._contentH = contentH
+
     local y = 0
 
     local members = GetGroupMembers()
@@ -810,6 +1188,8 @@ function ns:RefreshMythicPlus()
         local tile = AcquireSecureBtn(content)
         tile:SetSize(ICON_SIZE, ICON_SIZE)
         tile:SetPoint("TOPLEFT", content, "TOPLEFT", ix, y)
+        -- Keyed by name because that is what a cast event resolves to.
+        tilesByDungeon[map.name] = tile
         -- Left on its own backdrop deliberately: transparent fill, and
         -- the border is the signal (this dungeon matches your keystone).
         -- See the matching tile in Features/Teleports/TeleportUI.lua.
@@ -894,6 +1274,7 @@ function ns:RefreshMythicPlus()
         end)
 
         -- Secure teleport via macro attribute
+        local tileIcon = map.icon
         if canTele then
             local spellName = C_Spell.GetSpellName(ns:GetDungeonTeleportSpell(mapID))
             if spellName then
@@ -901,6 +1282,16 @@ function ns:RefreshMythicPlus()
                 tile:SetAttribute("macrotext", "/cast " .. spellName)
             end
         end
+
+        -- A tile whose teleport is not learned carries no macrotext, so
+        -- the click does nothing and nothing says why -- which looks
+        -- exactly like a broken button. PostClick sits outside the
+        -- secure path, so it is free to answer.
+        tile:SetScript("PostClick", function()
+            if not canTele then
+                ShowCastToast("locked", mapName, tileIcon)
+            end
+        end)
     end
 
     y = y - (ICON_SIZE + 6)
@@ -1034,103 +1425,216 @@ function ns:RefreshMythicPlus()
         y = y - (CARD_H + CARD_GAP)
     end
 
-    -- ── Bottom: Group Keystones (left) + Rating Goals (right) ──
+    -- ── Bottom: two columns, each flowing its own stack of cards ──
+    --
+    -- Not a grid. These cards have nothing to say about each other's
+    -- heights -- Group Keystones is empty most nights, This Week is
+    -- empty every Tuesday -- and a grid makes every card as tall as the
+    -- worst one beside it. Two independent cursors let each column close
+    -- up behind whatever it actually holds.
     y = y - SECTION_GAP
 
-    local bottomY = y
-    -- Not an even split. The left column is a handful of short keystone
-    -- rows; the right carries three progress bars AND the focus list
-    -- under them, and it was the one whose text had to wrap. Giving the
-    -- space to the column that has something to put in it.
-    local halfW = math.floor(cw * 0.42) - 6
     local SEC_H = ns.Widgets:SectionTitleHeight()
     local SEC_PAD = 8
 
-    -- ── Left: Group Keystones ──
-    -- Acquired now and sized once its rows are placed: the card has to
-    -- exist first so it draws behind them, but how many keystones the
-    -- group is carrying is not known until they have been laid out.
-    local ksSec = AcquireSection(content)
-    ksSec:SetPoint("TOPLEFT", content, "TOPLEFT", 0, bottomY)
-    ksSec:SetText(ns.Widgets:Tint("muted", "Group Keystones"))
-    local ksTop = bottomY - SEC_H - SEC_PAD
-    local ksY = ksTop
+    -- Not an even split. The left column is a fixed affix list and short
+    -- keystone rows; the right carries three progress bars, the focus
+    -- list under them, and the week's runs, and it was the one whose
+    -- text had to wrap.
+    --
+    -- Each column leads with the card that does not change -- affixes
+    -- are set for the week, the rating goals are set for the season --
+    -- and puts the one that fills up over the week underneath it, where
+    -- it has somewhere to grow into.
+    local leftX,  leftW  = 0, math.floor(cw * 0.42) - 6
+    local rightX = leftW + 12
+    local rightW = cw - rightX
+    local leftY,  rightY = y, y
 
-    if #keystones > 0 then
-        local KS_CARD_H = 36
-        local KS_CARD_GAP = 3
-        local KS_ICON_SIZE = 28
-        local ksCardW = halfW
+    -- Every card below is the same shape: a heading, a card under it,
+    -- contents inset by SEC_PAD on all four sides. Written once, because
+    -- hand-rolled copies is how the left column ended up flush against
+    -- its card edges while the right column beside it was inset 8px --
+    -- invisible until the group actually carried a key.
+    --
+    -- The card is acquired first and sized last: it has to exist before
+    -- the rows so it draws behind them, but how tall it needs to be is
+    -- not known until they have been laid out.
+    local function BeginCard(x, cursorY, title)
+        local sec = AcquireSection(content)
+        sec:SetPoint("TOPLEFT", content, "TOPLEFT", x, cursorY)
+        sec:SetText(ns.Widgets:Tint("muted", title))
+        return sec, cursorY - SEC_H - SEC_PAD
+    end
 
-        for ki, ks in ipairs(keystones) do
-            local cc = ks.class and RAID_CLASS_COLORS[ks.class]
+    -- Returns where the NEXT card in this column starts. The card's own
+    -- bottom edge lands SEC_PAD past the last row, so the gap between
+    -- two cards is measured edge to edge rather than from the content
+    -- inside them.
+    local function EndCard(sec, w, topY, cursorY)
+        sec:Layout(w, (topY - cursorY) + SEC_PAD * 2)
+        return cursorY - SEC_PAD - SECTION_GAP
+    end
 
-            local ksBg = AcquireTex(content)
-            ksBg:SetSize(ksCardW, KS_CARD_H)
-            ksBg:SetPoint("TOPLEFT", content, "TOPLEFT", 0, ksY)
-            ksBg:SetColorTexture(0.09, 0.09, 0.09, 0.7)
-            ksBg:SetDrawLayer("BACKGROUND", 1)
+    -- The last card in each column runs to the floor instead of stopping
+    -- at its contents, so both columns end on the same line and the page
+    -- is the size it actually is. Two short cards finishing halfway down
+    -- an empty page is what made the old layout read as unfinished.
+    --
+    -- The card grows; the rows do not spread out. Contents stay at the
+    -- top and the slack falls below them, which is also what leaves room
+    -- for a card to fill up over the week rather than jumping in height
+    -- every time a run lands.
+    local function EndCardToFloor(sec, w, topY, cursorY, emptyFs)
+        local natural = (topY - cursorY) + SEC_PAD * 2
+        -- Body top sits SEC_PAD above topY, so this is its distance to
+        -- the bottom of the content region.
+        local toFloor = (topY + SEC_PAD) - floorY
+        sec:Layout(w, math.max(natural, toFloor))
+        -- A stretched card with nothing in it leaves its one line of
+        -- text in the top corner of a tall void, which reads as content
+        -- that failed to load rather than as an empty section. Centred
+        -- on the second pass because the final height is not known until
+        -- Layout has run.
+        if emptyFs then
+            emptyFs:ClearAllPoints()
+            emptyFs:SetPoint("CENTER", sec.body, "CENTER", 0, 0)
+            emptyFs:SetJustifyH("CENTER")
+        end
+        return math.min(cursorY - SEC_PAD, floorY)
+    end
 
-            if cc then
-                local ksAccent = AcquireTex(content)
-                ksAccent:SetSize(3, KS_CARD_H)
-                ksAccent:SetPoint("TOPLEFT", ksBg, "TOPLEFT", 0, 0)
-                ksAccent:SetColorTexture(cc.r, cc.g, cc.b, 0.8)
-                ksAccent:SetDrawLayer("BACKGROUND", 2)
+    ------------------------------------------------------------
+    -- Left column, card 1: this week's affixes
+    ------------------------------------------------------------
+    -- The page has listened for MYTHIC_PLUS_CURRENT_AFFIX_UPDATE since
+    -- it was written and never drew the affixes it was refreshing for.
+    -- ns:GetCurrentAffixes had no caller anywhere in the addon.
+    -- Only the affixes that differ from last week -- in practice the
+    -- week's Xal'atath's Bargain. The other four are up every week
+    -- (Fortified and Tyrannical included; they are both always present
+    -- and only trade keystone levels), and those rows are worth more to
+    -- the group's keystones underneath. See ns:GetAffixSplit -- which
+    -- ones those are is learned from watching, not written down.
+    local affixes, standing, learned = ns:GetAffixSplit()
+    local afSec, afTop = BeginCard(leftX, leftY, "Affixes")
+    local afY = afTop
+    local afInnerX = leftX + SEC_PAD
+    local afInnerW = leftW - SEC_PAD * 2
+
+    if #affixes > 0 then
+        local AF_ROW_H, AF_ICON = 28, 22
+        for _, af in ipairs(affixes) do
+            local row = AcquireBtn(content)
+            row:SetSize(afInnerW, AF_ROW_H)
+            row:SetPoint("TOPLEFT", content, "TOPLEFT", afInnerX, afY)
+
+            local afIcon = AcquireTex(row)
+            afIcon:SetSize(AF_ICON, AF_ICON)
+            afIcon:SetPoint("LEFT", row, "LEFT", 0, 0)
+            afIcon:SetTexture(af.icon or 134400)
+            afIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            -- Room held back for the level badge, so a long affix name
+            -- ellipsises rather than running under the number.
+            local afLvlText = ns.GetAffixLevelText and ns:GetAffixLevelText(af)
+            local afName = AcquireFS(row)
+            afName:SetPoint("LEFT", afIcon, "RIGHT", 8, 0)
+            afName:SetWidth(afInnerW - AF_ICON - 8 - (afLvlText and 52 or 0))
+            afName:SetJustifyH("LEFT")
+            afName:SetFont(STANDARD_TEXT_FONT, 12, "")
+            -- The +10 row names both affixes: from that level Fortified
+            -- and Tyrannical stop alternating and are up together, and a
+            -- row naming only one of them reads as the other having been
+            -- replaced.
+            local label = (ns.GetAffixLabel and ns:GetAffixLabel(af, affixes))
+                or af.name
+            afName:SetText("|cff" .. ns.Widgets:Hex("text") .. label .. "|r")
+
+            -- The keystone levels it applies over. Absent rather than
+            -- zeroed when the season's thresholds are not recorded.
+            if afLvlText then
+                local afLvl = AcquireFS(row)
+                afLvl:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+                afLvl:SetJustifyH("RIGHT")
+                afLvl:SetFont(STANDARD_TEXT_FONT, 11, "")
+                afLvl:SetText("|cff00d4ff" .. afLvlText .. "|r")
             end
 
-            local ksIcon = AcquireTex(content)
-            ksIcon:SetSize(KS_ICON_SIZE, KS_ICON_SIZE)
-            ksIcon:SetPoint("LEFT", ksBg, "LEFT", 8, 0)
-            ksIcon:SetDrawLayer("ARTWORK", 0)
-            -- Use the teleport spell icon (reliable) or fallback to map icon
-            local spellID = ns:GetDungeonTeleportSpell(ks.mapID)
-            local spellTex = spellID and C_Spell.GetSpellTexture(spellID)
-            if spellTex then
-                ksIcon:SetTexture(spellTex)
-                ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-            else
-                -- Try map icon
-                local _, _, _, mapIconTex = C_ChallengeMode.GetMapUIInfo(ks.mapID)
-                ksIcon:SetTexture(mapIconTex or 134400)
-                ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            -- The description is two or three sentences of rules text.
+            -- Inline it and the card's height stops being predictable
+            -- from the affix count; on hover it costs no layout at all,
+            -- and hovering an affix is where people look for it anyway.
+            local hoverName, hoverDesc = af.name, af.desc
+            row:SetScript("OnEnter", function(self)
+                tooltip:SetOwner(self, "ANCHOR_RIGHT")
+                tooltip:AddLine(hoverName, 1, 1, 1)
+                if hoverDesc and hoverDesc ~= "" then
+                    tooltip:AddLine(hoverDesc, 0.8, 0.8, 0.8, true)
+                end
+                tooltip:Show()
+            end)
+            row:SetScript("OnLeave", function() tooltip:Hide() end)
+
+            afY = afY - AF_ROW_H
+        end
+
+        -- The rest are hidden, not dropped. One muted line says how many
+        -- and holds them on hover, so the card is smaller without the
+        -- week's other affixes becoming unreadable from here.
+        if learned and #standing > 0 then
+            local moreRow = AcquireBtn(content)
+            moreRow:SetSize(afInnerW, 16)
+            moreRow:SetPoint("TOPLEFT", content, "TOPLEFT", afInnerX, afY)
+
+            local moreFs = AcquireFS(moreRow)
+            moreFs:SetPoint("LEFT", moreRow, "LEFT", 0, 0)
+            moreFs:SetWidth(afInnerW)
+            moreFs:SetFont(STANDARD_TEXT_FONT, 10, "")
+            -- "every week", not "seasonal": two of these are Fortified
+            -- and Tyrannical, which are not seasonal affixes at all.
+            -- What they have in common is only that they are always up.
+            moreFs:SetText("|cff" .. ns.Widgets:Hex("faint") .. "+" .. #standing
+                .. " every week|r")
+
+            local hidden = {}
+            for _, af in ipairs(standing) do
+                local lt = ns.GetAffixLevelText and ns:GetAffixLevelText(af)
+                hidden[#hidden + 1] = {
+                    af.name .. (lt and ("  |cff00d4ff" .. lt .. "|r") or ""),
+                    af.desc,
+                }
             end
-
-            local ksLvl = AcquireFS(content)
-            ksLvl:SetPoint("LEFT", ksIcon, "RIGHT", 6, 0)
-            ksLvl:SetFont(STANDARD_TEXT_FONT, 18, "OUTLINE")
-            ksLvl:SetText("|cff00d4ff+" .. ks.level .. "|r")
-
-            local ksName = AcquireFS(content)
-            ksName:SetPoint("TOPLEFT", ksIcon, "TOPRIGHT", 58, -1)
-            ksName:SetWidth(ksCardW - KS_ICON_SIZE - 74)
-            ksName:SetFont(STANDARD_TEXT_FONT, 10, "")
-            ksName:SetText(cc and cc:WrapTextInColorCode(ks.name) or ks.name)
-
-            local ksDung = AcquireFS(content)
-            ksDung:SetPoint("BOTTOMLEFT", ksIcon, "BOTTOMRIGHT", 58, 1)
-            ksDung:SetWidth(ksCardW - KS_ICON_SIZE - 74)
-            ksDung:SetFont(STANDARD_TEXT_FONT, 9, "")
-            ksDung:SetText("|cff" .. ns.Widgets:Hex("muted") .. ks.dungeonName .. "|r")
-
-            ksY = ksY - (KS_CARD_H + KS_CARD_GAP)
+            moreRow:SetScript("OnEnter", function(self)
+                tooltip:SetOwner(self, "ANCHOR_RIGHT")
+                tooltip:AddLine("Up every week", 1, 1, 1)
+                for _, pair in ipairs(hidden) do
+                    tooltip:AddLine(" ")
+                    tooltip:AddLine(pair[1], 1, 0.82, 0)
+                    if pair[2] and pair[2] ~= "" then
+                        tooltip:AddLine(pair[2], 0.8, 0.8, 0.8, true)
+                    end
+                end
+                tooltip:Show()
+            end)
+            moreRow:SetScript("OnLeave", function() tooltip:Hide() end)
+            afY = afY - 18
         end
     else
-        local noKs = AcquireFS(content)
-        noKs:SetPoint("TOPLEFT", content, "TOPLEFT", 4, ksY)
-        noKs:SetText(ns.Widgets:Tint("faint", "No keystones in group"))
-        ksY = ksY - ROW_H
+        local noAf = AcquireFS(content)
+        noAf:SetPoint("TOPLEFT", content, "TOPLEFT", afInnerX, afY)
+        noAf:SetText(ns.Widgets:Tint("faint", "No affixes this week"))
+        afY = afY - ROW_H
     end
-    ksSec:Layout(halfW, (ksTop - ksY) + SEC_PAD * 2)
+    leftY = EndCard(afSec, leftW, afTop, afY)
 
-    -- ── Right: Rating Goals ──
-    local goalX = halfW + 12
-    local goalW = cw - goalX - SEC_PAD * 2
-    local goalSec = AcquireSection(content)
-    goalSec:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, bottomY)
-    goalSec:SetText(ns.Widgets:Tint("muted", "Rating Goals"))
-    local goalTop = bottomY - SEC_H - SEC_PAD
+    ------------------------------------------------------------
+    -- Right column, card 1: Rating Goals
+    ------------------------------------------------------------
+    local goalSec, goalTop = BeginCard(rightX, rightY, "Rating Goals")
     local goalY = goalTop
+    local goalX = rightX + SEC_PAD
+    local goalW = rightW - SEC_PAD * 2
 
     local MILESTONES = { 2000, 2500, 3000 }
     local ownScore = ownRating
@@ -1162,7 +1666,7 @@ function ns:RefreshMythicPlus()
         -- Bar background
         local barBg = AcquireTex(content)
         barBg:SetSize(goalW, BAR_H)
-        barBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
+        barBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
         barBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
         barBg:SetDrawLayer("ARTWORK", 0)
 
@@ -1217,14 +1721,12 @@ function ns:RefreshMythicPlus()
             for _, map in ipairs(maps) do
                 local runData = ownSummary and ownSummary.runs[map.mapID]
                 local score = runData and runData.score or 0
-                -- Get spell icon for dungeon
-                local spellID = ns:GetDungeonTeleportSpell(map.mapID)
-                local spellTex = spellID and C_Spell.GetSpellTexture(spellID)
-                local _, _, _, mapTex = C_ChallengeMode.GetMapUIInfo(map.mapID)
                 table.insert(dungeonScores, {
                     name = map.name,
                     score = score,
-                    icon = spellTex or mapTex,
+                    -- map.icon is already the dungeon's art; the lookup
+                    -- is only here for a map that arrived without one.
+                    icon = map.icon or DungeonIcon(map.mapID),
                 })
             end
             table.sort(dungeonScores, function(a, b) return a.score < b.score end)
@@ -1232,7 +1734,7 @@ function ns:RefreshMythicPlus()
             goalY = goalY - 2
 
             local focusHdr = AcquireFS(content)
-            focusHdr:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
+            focusHdr:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
             focusHdr:SetFont(STANDARD_TEXT_FONT, 13, "")
             focusHdr:SetText(string.format("|cffbbbbbbFocus for |cff%02x%02x%02x%d|r",
                 tr * 255, tg * 255, tb * 255, target))
@@ -1248,7 +1750,7 @@ function ns:RefreshMythicPlus()
                     -- Row background
                     local rowBg = AcquireTex(content)
                     rowBg:SetSize(goalW, FOCUS_ROW_H)
-                    rowBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX + SEC_PAD, goalY)
+                    rowBg:SetPoint("TOPLEFT", content, "TOPLEFT", goalX, goalY)
                     rowBg:SetColorTexture(0.08, 0.08, 0.08, 0.5)
                     rowBg:SetDrawLayer("BACKGROUND", 1)
 
@@ -1292,11 +1794,253 @@ function ns:RefreshMythicPlus()
             break  -- only show focus for the next unachieved milestone
         end
     end
-    goalSec:Layout(cw - goalX, (goalTop - goalY) + SEC_PAD * 2)
+    rightY = EndCard(goalSec, rightW, goalTop, goalY)
 
-    -- Past whichever column ran longer, and past its card's bottom
-    -- padding: the two sit side by side and the page has to clear both.
-    y = math.min(ksY, goalY) - SEC_PAD
+    ------------------------------------------------------------
+    -- Right column, card 2: This Week
+    ------------------------------------------------------------
+    local weekRuns = ns:GetWeeklyRuns()
+    -- Where the This Week card starts. Group Keystones is drawn after
+    -- this one so it can begin at the same line, which it cannot do
+    -- while it runs first -- the right column's height is not known
+    -- until Rating Goals has been laid out.
+    local wkCardTop = rightY
+    local wkSec, wkTop = BeginCard(rightX, rightY, "This Week")
+    local wkY = wkTop
+    local wkInnerX = rightX + SEC_PAD
+    local wkInnerW = rightW - SEC_PAD * 2
+    local wkEmptyFs
+
+    if #weekRuns > 0 then
+        local WK_ICON = 18
+        -- Two heights. A run the journal recorded carries a second line
+        -- -- score, margin, deaths -- and one it did not has nothing to
+        -- put there, so giving every row the taller size would pad out a
+        -- week of runs finished before the journal existed.
+        local WK_ROW_PLAIN, WK_ROW_DETAIL = 22, 33
+
+        --- m:ss, or h:mm:ss when a run ran long enough to need it.
+        local function Clock(sec)
+            sec = math.floor(math.abs(sec or 0) + 0.5)
+            local h = math.floor(sec / 3600)
+            local m = math.floor((sec % 3600) / 60)
+            local s2 = sec % 60
+            if h > 0 then return string.format("%d:%02d:%02d", h, m, s2) end
+            return string.format("%d:%02d", m, s2)
+        end
+
+        -- Eight is what the vault counts and what a full week looks
+        -- like; past that the list is history rather than information.
+        --
+        -- But this is the last card down a column on a page that does
+        -- not scroll, so the real ceiling is whatever room is left under
+        -- everything above it. Rows are no longer a fixed height, so the
+        -- budget is spent row by row rather than divided up front.
+        local room = wkY - floorY - (SEC_PAD * 2 + 18)
+
+        wkSec:SetValue(ns.Widgets:Tint("faint",
+            #weekRuns .. (#weekRuns == 1 and " run" or " runs")))
+
+        local shown = 0
+        for i = 1, #weekRuns do
+            local run = weekRuns[i]
+            local d = run.detail
+            local rowH = d and WK_ROW_DETAIL or WK_ROW_PLAIN
+            -- Room is the only limit. There used to be a hard cap of
+            -- eight on the grounds that eight is what the vault counts,
+            -- but the card runs to the bottom of the page now and a
+            -- "+3 more this week" under half a screen of empty card is
+            -- withholding rows it has the space to draw.
+            if room < rowH + 2 then break end
+            room = room - (rowH + 2)
+            shown = shown + 1
+
+            local rowBg = AcquireTex(content)
+            rowBg:SetSize(wkInnerW, rowH)
+            rowBg:SetPoint("TOPLEFT", content, "TOPLEFT", wkInnerX, wkY)
+            rowBg:SetColorTexture(0.08, 0.08, 0.08, 0.5)
+            rowBg:SetDrawLayer("BACKGROUND", 1)
+
+            local rIcon = AcquireTex(content)
+            rIcon:SetSize(WK_ICON, WK_ICON)
+            rIcon:SetPoint("TOPLEFT", rowBg, "TOPLEFT", 3, -2)
+            rIcon:SetTexture(DungeonIcon(run.mapID))
+            rIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            rIcon:SetDrawLayer("ARTWORK", 0)
+
+            local short = run.name
+            if short:sub(1, 4) == "The " then short = short:sub(5) end
+
+            local rName = AcquireFS(content)
+            rName:SetPoint("TOPLEFT", rIcon, "TOPRIGHT", 5, -3)
+            rName:SetWidth(wkInnerW - WK_ICON - 96)
+            rName:SetJustifyH("LEFT")
+            rName:SetFont(STANDARD_TEXT_FONT, 11, "")
+            rName:SetText("|cff" .. ns.Widgets:Hex("text") .. short .. "|r")
+
+            local rLvl = AcquireFS(content)
+            rLvl:SetPoint("TOPRIGHT", rowBg, "TOPRIGHT", -6, -4)
+            rLvl:SetJustifyH("RIGHT")
+            rLvl:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+
+            if d then
+                -- The keystone's own verdict. keystoneUpgradeLevels is
+                -- how many levels the key gained, which is the thing
+                -- players call chests -- and it is 0 on a run that beat
+                -- the timer by too little to upgrade, so "in time" has
+                -- to be its own case rather than "0 chest".
+                if d.onTime then
+                    local chest = (d.chests or 0) > 0
+                        and (d.chests .. " chest") or "in time"
+                    rLvl:SetText(string.format("|cff00d4ff+%d|r  |cff00cc00%s|r",
+                        run.level, chest))
+                else
+                    rLvl:SetText(string.format("|cff888888+%d|r  |cffff6644over time|r",
+                        run.level))
+                end
+
+                -- Second line: what it paid and what it cost.
+                local bits = {}
+                if d.gain and d.gain > 0 then
+                    bits[#bits + 1] = "|cffffd100+" .. d.gain .. "|r score"
+                end
+                local elapsed = (d.ms or 0) / 1000
+                if d.limit and d.limit > 0 then
+                    local delta = d.limit - elapsed
+                    if delta >= 0 then
+                        bits[#bits + 1] = Clock(delta) .. " under"
+                    else
+                        bits[#bits + 1] = "|cffff6644" .. Clock(delta) .. "|r over"
+                    end
+                end
+                if (d.deaths or 0) > 0 then
+                    bits[#bits + 1] = d.deaths
+                        .. (d.deaths == 1 and " death" or " deaths")
+                end
+
+                if #bits > 0 then
+                    local rSub = AcquireFS(content)
+                    rSub:SetPoint("TOPLEFT", rIcon, "BOTTOMRIGHT", 5, -1)
+                    rSub:SetPoint("RIGHT", rowBg, "RIGHT", -6, 0)
+                    rSub:SetJustifyH("LEFT")
+                    rSub:SetFont(STANDARD_TEXT_FONT, 9, "")
+                    rSub:SetText("|cff" .. ns.Widgets:Hex("muted")
+                        .. table.concat(bits, "  ") .. "|r")
+                end
+            else
+                -- No journal entry: GetRunHistory answers only whether
+                -- the run finished, so this says that and no more. It
+                -- is the honest half of the old "counts"/"left" -- a
+                -- finished key filled a vault slot whether or not it
+                -- beat the timer, and claiming otherwise would be
+                -- inventing a result.
+                if run.completed then
+                    rLvl:SetText(string.format("|cff00d4ff+%d|r  |cff777777finished|r",
+                        run.level))
+                else
+                    rLvl:SetText(string.format("|cff888888+%d|r  |cffff4444depleted|r",
+                        run.level))
+                end
+            end
+
+            wkY = wkY - (rowH + 2)
+        end
+
+        if #weekRuns > shown then
+            local more = AcquireFS(content)
+            more:SetPoint("TOPLEFT", content, "TOPLEFT", wkInnerX + 3, wkY - 2)
+            more:SetFont(STANDARD_TEXT_FONT, 10, "")
+            more:SetText(ns.Widgets:Tint("faint",
+                string.format("+%d more this week", #weekRuns - shown)))
+            wkY = wkY - 16
+        end
+    else
+        wkEmptyFs = AcquireFS(content)
+        wkEmptyFs:SetPoint("TOPLEFT", content, "TOPLEFT", wkInnerX, wkY)
+        wkEmptyFs:SetText(ns.Widgets:Tint("faint", "No runs since the reset"))
+        wkY = wkY - ROW_H
+    end
+    rightY = EndCardToFloor(wkSec, rightW, wkTop, wkY, wkEmptyFs)
+
+    ------------------------------------------------------------
+    -- Left column, card 2: Group Keystones
+    --
+    -- Drawn last, but positioned beside This Week rather than
+    -- under the affixes. Both columns' second card starts on the
+    -- same line that way, instead of the left one floating up
+    -- wherever the affix card happened to end.
+    ------------------------------------------------------------
+    local ksSec, ksTop = BeginCard(leftX, wkCardTop, "Group Keystones")
+    local ksY = ksTop
+    local ksInnerX = leftX + SEC_PAD
+    local ksInnerW = leftW - SEC_PAD * 2
+    local ksEmptyFs
+
+    if #keystones > 0 then
+        local KS_CARD_H = 36
+        local KS_CARD_GAP = 3
+        local KS_ICON_SIZE = 28
+        local ksCardW = ksInnerW
+
+        for ki, ks in ipairs(keystones) do
+            local cc = ks.class and RAID_CLASS_COLORS[ks.class]
+
+            local ksBg = AcquireTex(content)
+            ksBg:SetSize(ksCardW, KS_CARD_H)
+            ksBg:SetPoint("TOPLEFT", content, "TOPLEFT", ksInnerX, ksY)
+            ksBg:SetColorTexture(0.09, 0.09, 0.09, 0.7)
+            ksBg:SetDrawLayer("BACKGROUND", 1)
+
+            if cc then
+                local ksAccent = AcquireTex(content)
+                ksAccent:SetSize(3, KS_CARD_H)
+                ksAccent:SetPoint("TOPLEFT", ksBg, "TOPLEFT", 0, 0)
+                ksAccent:SetColorTexture(cc.r, cc.g, cc.b, 0.8)
+                ksAccent:SetDrawLayer("BACKGROUND", 2)
+            end
+
+            local ksIcon = AcquireTex(content)
+            ksIcon:SetSize(KS_ICON_SIZE, KS_ICON_SIZE)
+            ksIcon:SetPoint("LEFT", ksBg, "LEFT", 8, 0)
+            ksIcon:SetDrawLayer("ARTWORK", 0)
+            ksIcon:SetTexture(DungeonIcon(ks.mapID))
+            ksIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            local ksLvl = AcquireFS(content)
+            ksLvl:SetPoint("LEFT", ksIcon, "RIGHT", 6, 0)
+            ksLvl:SetFont(STANDARD_TEXT_FONT, 18, "OUTLINE")
+            ksLvl:SetText("|cff00d4ff+" .. ks.level .. "|r")
+
+            local ksName = AcquireFS(content)
+            ksName:SetPoint("TOPLEFT", ksIcon, "TOPRIGHT", 58, -1)
+            ksName:SetWidth(ksCardW - KS_ICON_SIZE - 74)
+            ksName:SetFont(STANDARD_TEXT_FONT, 10, "")
+            ksName:SetText(cc and cc:WrapTextInColorCode(ks.name) or ks.name)
+
+            local ksDung = AcquireFS(content)
+            ksDung:SetPoint("BOTTOMLEFT", ksIcon, "BOTTOMRIGHT", 58, 1)
+            ksDung:SetWidth(ksCardW - KS_ICON_SIZE - 74)
+            ksDung:SetFont(STANDARD_TEXT_FONT, 9, "")
+            ksDung:SetText("|cff" .. ns.Widgets:Hex("muted") .. ks.dungeonName .. "|r")
+
+            ksY = ksY - (KS_CARD_H + KS_CARD_GAP)
+        end
+    else
+        ksEmptyFs = AcquireFS(content)
+        ksEmptyFs:SetPoint("TOPLEFT", content, "TOPLEFT", ksInnerX, ksY)
+        ksEmptyFs:SetText(ns.Widgets:Tint("faint", "No keystones in group"))
+        ksY = ksY - ROW_H
+    end
+    if #keystones > 0 then ksSec:SetValue(tostring(#keystones)) end
+    -- Floored, so it runs to the bottom of the page alongside This
+    -- Week. Hugging its content left a short box beside a tall one,
+    -- which reads as the card having failed to draw rather than as
+    -- the group holding one key.
+    leftY = EndCardToFloor(ksSec, leftW, ksTop, ksY, ksEmptyFs)
+
+    -- Past whichever column ran longer: the two sit side by side and
+    -- anything added below has to clear both.
+    y = math.min(leftY, rightY)
 end
 
 ------------------------------------------------------------
@@ -1386,7 +2130,17 @@ eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 -- follow a completion.
 eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 
-eventFrame:SetScript("OnEvent", function()
+-- The other half of the combat deferral above: whatever we refused to
+-- draw mid-pull gets drawn the moment the lockdown lifts.
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+
+eventFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_ENABLED" then
+        if refreshPending and frame:IsShown() then
+            ns:RefreshMythicPlus()
+        end
+        return
+    end
     if frame:IsShown() then
         C_Timer.After(0.5, function()
             if frame:IsShown() then

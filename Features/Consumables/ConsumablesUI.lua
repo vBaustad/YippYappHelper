@@ -268,6 +268,42 @@ classBtn:SetScript("OnEnter", function(self) EdgeAccent(self, 0.55) end)
 classBtn:SetScript("OnLeave", EdgeIdle)
 EdgeIdle(classBtn)
 
+-- Popout, at the far end of the strip.
+--
+-- Right-aligned rather than trailing the spec buttons, so it does not
+-- move when you switch from a three-spec class to a four-spec one --
+-- a control that changes place when you change an unrelated filter is a
+-- control you have to look for every time.
+local popBtn = CreateFrame("Button", nil, filterBar, "BackdropTemplate")
+popBtn:SetSize(70, 24)
+popBtn:SetPoint("RIGHT", filterBar, "RIGHT", -10, 0)
+ns.Widgets:Apply(popBtn, "row")
+ns.SmoothFrame(popBtn)
+ns.AddGlowHighlight(popBtn, 0.06)
+
+local popBtnFs = popBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+popBtnFs:SetPoint("CENTER")
+popBtnFs:SetText("Popout")
+popBtnFs:SetTextColor(ns.Widgets:Color("muted"))
+ns.ApplyTextShadow(popBtnFs)
+
+popBtn:SetScript("OnEnter", function(self)
+    EdgeAccent(self, 0.55)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:AddLine("Popout")
+    GameTooltip:AddLine("These items in a small movable window, for parking "
+        .. "beside the Auction House. Shift-click a name there to search "
+        .. "for it.", 0.8, 0.8, 0.85, true)
+    GameTooltip:Show()
+end)
+popBtn:SetScript("OnLeave", function(self) EdgeIdle(self); GameTooltip:Hide() end)
+EdgeIdle(popBtn)
+-- Resolved at click time: the toggle is defined at the foot of the file,
+-- with the window it opens.
+popBtn:SetScript("OnClick", function()
+    if ns.ToggleConsumablesPopout then ns:ToggleConsumablesPopout() end
+end)
+
 -- Class dropdown popup
 local classDropdown = CreateFrame("Frame", "YippYappConsumClassDropdown", UIParent, "BackdropTemplate")
 classDropdown:SetSize(160, 10)
@@ -539,6 +575,10 @@ local function UpdateTabs()
             scrolls[id]:Hide()
         end
     end
+    -- The popout mirrors whichever tab is open, and switching tabs does
+    -- not go through RefreshConsumables. Guarded because this runs once
+    -- at load, before the foot of the file has defined it.
+    if ns.RefreshConsumablesPopout then ns:RefreshConsumablesPopout() end
 end
 
 for id, btn in pairs(tabButtons) do
@@ -818,6 +858,66 @@ local function CloseSection(parent, sec, top, y)
     return y - SEC_PAD - SEC_GAP
 end
 
+--- Shift-click sends the item wherever something is listening.
+---
+--- HandleModifiedItemClick is the game's own router for this and knows
+--- more destinations than we do -- the chat box, the socket UI, a trade
+--- skill's search field -- so it goes first and its answer is trusted.
+--- It was previously gated behind an IsModifiedClick("CHATLINK") test of
+--- our own, which is a check it already makes internally and which threw
+--- away every other modifier it handles.
+---
+--- The fallback is for one destination in particular. The Auction House
+--- is the whole reason this list gets opened beside something else, and a
+--- shift-click that does nothing in front of an auctioneer reads as the
+--- addon being broken. Guarded on the method existing rather than on a
+--- client version, so where it does not apply it is inert rather than
+--- wrong.
+local function LinkClick(link)
+    if not link then return end
+    if HandleModifiedItemClick and HandleModifiedItemClick(link) then return end
+    if not IsModifiedClick("CHATLINK") then return end
+    local ah = _G.AuctionHouseFrame
+    if ah and ah.SetSearchText and ah:IsShown() then
+        local name = GetItemInfo(link)
+        if name then pcall(ah.SetSearchText, ah, name) end
+    end
+end
+
+--- The hit area for a row's item: its icon and its name, and nothing
+--- else on the line.
+---
+--- This was the whole row, edge to edge. So the tooltip fired over the
+--- "Flask" label, over the empty half of the row past the name, and over
+--- the dead space between two names -- running the pointer down the list
+--- popped a tooltip the entire way, and there was nowhere on the panel
+--- to rest the cursor without one. Hugging the text also puts the
+--- shift-click target on the thing that looks like a link, which is what
+--- a reader will aim at anyway.
+---
+--- Sized from the FontString, not from the panel: GetStringWidth is the
+--- text's natural width, which is what the reader can see, capped at the
+--- width the row allotted it so a long name cannot hand out a hit area
+--- wider than the row holding it.
+local function HookItemHit(parent, x, y, nameFs, link)
+    local textW = math.min(nameFs:GetStringWidth() or 0, nameFs:GetWidth() or 0)
+    local btn = AcquireHitBtn(parent)
+    btn:SetSize(ICON_SIZE + 6 + math.max(textW, 20), ROW_H - 2)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    btn:SetScript("OnEnter", function(self)
+        -- ANCHOR_CURSOR still, even though the hit area is small now.
+        -- This list is meant to be parked at the edge of the screen
+        -- beside the Auction House, and anchoring off the frame's own
+        -- side puts the tooltip half off the screen there.
+        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+        GameTooltip:SetHyperlink(link)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    btn:SetScript("OnClick", function() LinkClick(link) end)
+    return btn
+end
+
 local function DrawRow(parent, y, itemID, label)
     local icon = GetItemIcon(itemID)
     local link = GetItemLink(itemID)
@@ -853,25 +953,7 @@ local function DrawRow(parent, y, itemID, label)
         nameFs:SetText("|cffffffff" .. name .. "|r")
     end
 
-    local itemLink = link or ("item:" .. itemID)
-    local btn = AcquireHitBtn(parent)
-    btn:SetSize(pw - ROW_X * 2, ROW_H)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
-    btn:SetScript("OnEnter", function(self)
-        -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
-        -- row, so anchoring to the owner's right edge put the tooltip
-        -- against the far side of the panel however close to the left
-        -- the pointer actually was.
-        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
-        GameTooltip:SetHyperlink(itemLink)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    btn:SetScript("OnClick", function()
-        if IsModifiedClick("CHATLINK") then
-            HandleModifiedItemClick(itemLink)
-        end
-    end)
+    HookItemHit(parent, itemX, y - 2, nameFs, link or ("item:" .. itemID))
 
     return y - ROW_H
 end
@@ -911,25 +993,7 @@ local function DrawAltRow(parent, y, itemID)
         nameFs:SetText("|cffffffff" .. name .. "|r")
     end
 
-    local altLink = link or ("item:" .. itemID)
-    local btn = AcquireHitBtn(parent)
-    btn:SetSize(pw - ROW_X * 2, ROW_H)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", ROW_X, y)
-    btn:SetScript("OnEnter", function(self)
-        -- ANCHOR_CURSOR, not ANCHOR_RIGHT. The hit area spans the whole
-        -- row, so anchoring to the owner's right edge put the tooltip
-        -- against the far side of the panel however close to the left
-        -- the pointer actually was.
-        GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
-        GameTooltip:SetHyperlink(altLink)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    btn:SetScript("OnClick", function()
-        if IsModifiedClick("CHATLINK") then
-            HandleModifiedItemClick(altLink)
-        end
-    end)
+    HookItemHit(parent, itemX, y - 2, nameFs, link or ("item:" .. itemID))
 
     return y - ROW_H
 end
@@ -1190,4 +1254,304 @@ function ns:RefreshConsumables()
         cy = CloseSection(cp, sec, top, DrawGuide(cp, top, data.consumableGuide))
     end
     SizeContent(cp, cy)
+
+    -- Changing class or spec behind an open popout has to reach it, or
+    -- it sits there listing the last spec you looked at.
+    if ns.RefreshConsumablesPopout then ns:RefreshConsumablesPopout() end
+end
+
+------------------------------------------------------------
+-- Popout
+--
+-- The Auction House is the reason this exists. The panel is 460 wide
+-- before the shell around it, and what you want while standing at an
+-- auctioneer is fifteen names you can shift-click -- not a class
+-- dropdown, a spec strip and a guide underneath. So: the open tab's
+-- rows, in a window small enough to park beside something else, that
+-- remembers where you put it.
+--
+-- Its own row pool, deliberately. ResetPools wipes the page's pools on
+-- every refresh of the main panel, so a popout drawing from them would
+-- be blanked by a spec click behind it.
+------------------------------------------------------------
+local POP_W, POP_ROW_H = 250, 22
+local popout, popRows = nil, {}
+
+local function PopoutDB()
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.consumablesPopout = YippYappHelperDB.consumablesPopout or {}
+    return YippYappHelperDB.consumablesPopout
+end
+
+--- What the open tab is showing, flattened.
+---
+--- Alternatives come through as rows of their own, marked so they can be
+--- indented -- the page distinguishes them with an "or" in a column this
+--- window has no room for, and two names at the same indent with no word
+--- between them read as two things to buy rather than a choice.
+local function PopoutList()
+    local data = ns.ConsumablesDB and ns.ConsumablesDB[GetConsumableKey() or ""]
+    if not data then return {} end
+    local src = (currentTab == "enchants" and data.enchants)
+        or (currentTab == "gems" and data.gems)
+        or data.consumables
+    local out = {}
+    for _, e in ipairs(src or {}) do
+        out[#out + 1] = { itemID = e.itemID }
+        if e.alt then out[#out + 1] = { itemID = e.alt.itemID, alt = true } end
+    end
+    return out
+end
+
+--- Switch views, taking the rest of the addon with it.
+---
+--- Through the shell when the page is mounted there, so its sub-tab
+--- strip does not sit underlining a view that is no longer the one
+--- showing. Both calls, not one or the other: Shell:SetSubTab returns
+--- early when the page was never mounted -- the standalone window, or
+--- the app never opened this session -- and SetConsumablesTab returns
+--- early when the id is already current, which is what it will be once
+--- the shell path has run. Either order, one of them does the work and
+--- the other is a no-op.
+local function PopoutSetTab(id)
+    if ns.Shell and ns.Shell.SetSubTab then
+        ns.Shell:SetSubTab("consumables", id)
+    end
+    if ns.SetConsumablesTab then ns:SetConsumablesTab(id) end
+end
+
+--- Move `step` views along, wrapping.
+---
+--- Wrapping rather than stopping at the ends. Three views is short
+--- enough that a greyed-out arrow is more to read than it saves, and
+--- next-from-the-last landing back on the first is what a three-item
+--- pager is expected to do.
+local function PopoutCycle(step)
+    local n = #TAB_DEFS
+    if n == 0 then return end
+    local at = 1
+    for i, def in ipairs(TAB_DEFS) do
+        if def.id == currentTab then at = i break end
+    end
+    local nxt = TAB_DEFS[(at - 1 + step) % n + 1]
+    if nxt then PopoutSetTab(nxt.id) end
+end
+
+--- One arrow of the pager.
+---
+--- Text rather than art. The obvious candidates are Blizzard's spellbook
+--- page arrows, which are 32px of chunky gilt frame built for a book --
+--- next to a 12px title in a 250px window they would be the loudest
+--- thing on it.
+local function PopArrow(parent, glyph, step)
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(16, 18)
+    b:RegisterForClicks("LeftButtonUp")
+    local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fs:SetPoint("CENTER")
+    fs:SetText(glyph)
+    fs:SetTextColor(ns.Widgets:Color("muted"))
+    b._fs = fs
+    b:SetScript("OnEnter", function(s2)
+        s2._fs:SetTextColor(ns.Widgets:Color("accent"))
+        GameTooltip:SetOwner(s2, "ANCHOR_TOP")
+        GameTooltip:AddLine(step < 0 and "Previous view" or "Next view")
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function(s2)
+        s2._fs:SetTextColor(ns.Widgets:Color("muted"))
+        GameTooltip:Hide()
+    end)
+    b:SetScript("OnClick", function() PopoutCycle(step) end)
+    return b
+end
+
+--- One row, which is itself the hit area -- sized to the icon and the
+--- name, as on the page, so the highlight hugs the item rather than
+--- sweeping the full width of an empty window.
+local function PopRow(i)
+    local r = popRows[i]
+    if not r then
+        r = CreateFrame("Button", nil, popout.body)
+        r:SetHeight(POP_ROW_H)
+        r:RegisterForClicks("LeftButtonUp")
+        r.icon = r:CreateTexture(nil, "ARTWORK")
+        r.icon:SetSize(16, 16)
+        r.icon:SetPoint("LEFT", 0, 0)
+        r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        r.name = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        r.name:SetPoint("LEFT", r.icon, "RIGHT", 5, 0)
+        r.name:SetJustifyH("LEFT")
+        local hl = r:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 1, 1, 0.06)
+        hl:SetBlendMode("ADD")
+        popRows[i] = r
+    end
+    r:Show()
+    return r
+end
+
+local function BuildPopout()
+    if popout then return popout end
+
+    local f = CreateFrame("Frame", "YippYappConsumablesPopout", UIParent,
+                          "BackdropTemplate")
+    f:SetSize(POP_W, 120)
+    -- DIALOG, not HIGH.
+    --
+    -- HIGH is what the app frame itself sits at, and equal strata is
+    -- settled by frame level -- which the app wins, so the popout opened
+    -- UNDER the window it popped out of. DIALOG is where this file
+    -- already puts its class dropdown and where the addon puts every
+    -- other loose frame, and it clears both the app and the Auction
+    -- House, which is the one thing this is meant to sit in front of.
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", function(s)
+        s:StopMovingOrSizing()
+        local db = PopoutDB()
+        local point, _, rel, x, y = s:GetPoint()
+        db.point, db.rel, db.x, db.y = point, rel, x, y
+    end)
+    ns.Widgets:Apply(f, "panel")
+
+    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    close:SetSize(24, 24)
+    -- Inside the panel. The template's art carries its own padding, so a
+    -- positive offset hangs the button off the corner.
+    close:SetPoint("TOPRIGHT", -4, -4)
+    close:SetScript("OnClick", function() f:Hide() end)
+
+    -- The pager, tucked in beside the close button rather than flanking
+    -- the title. The title changes width with the view and the spec
+    -- name, so arrows anchored to it would shuffle along the bar every
+    -- time you pressed one.
+    f.nextBtn = PopArrow(f, ">", 1)
+    f.nextBtn:SetPoint("RIGHT", close, "LEFT", -2, 0)
+    f.prevBtn = PopArrow(f, "<", -1)
+    f.prevBtn:SetPoint("RIGHT", f.nextBtn, "LEFT", 0, 0)
+
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.title:SetPoint("TOPLEFT", 10, -8)
+    -- Stopped clear of the pager. Without a cap a long spec name runs
+    -- under the arrows and out the side of the window.
+    f.title:SetWidth(POP_W - 10 - 62)
+    f.title:SetJustifyH("LEFT")
+    f.title:SetWordWrap(false)
+    ns.ApplyTextShadow(f.title)
+
+    f.body = CreateFrame("Frame", nil, f)
+    f.body:SetPoint("TOPLEFT", 10, -26)
+    f.body:SetPoint("BOTTOMRIGHT", -10, 8)
+
+    -- Escape closes it, like the class dropdown above and every other
+    -- loose frame this addon puts on the screen.
+    f:SetScript("OnShow", function()
+        tinsert(UISpecialFrames, "YippYappConsumablesPopout")
+    end)
+    f:SetScript("OnHide", function()
+        for i = #UISpecialFrames, 1, -1 do
+            if UISpecialFrames[i] == "YippYappConsumablesPopout" then
+                table.remove(UISpecialFrames, i)
+                break
+            end
+        end
+    end)
+
+    local db = PopoutDB()
+    f:ClearAllPoints()
+    if db.point then
+        f:SetPoint(db.point, UIParent, db.rel or db.point, db.x or 0, db.y or 0)
+    else
+        -- Parked at the right edge of the screen, not offset from the
+        -- centre: the app frame is centred and has grown, so "centre
+        -- plus 300" was landing on top of it. The screen edge is clear
+        -- of both the app and a centred Auction House, and it is where
+        -- someone would drag this anyway.
+        f:SetPoint("RIGHT", UIParent, "RIGHT", -40, 0)
+    end
+    f:Hide()
+
+    popout = f
+    return f
+end
+
+--- Redraw, if it is open. Cheap enough to call from anywhere that
+--- changes what it should be showing.
+function ns:RefreshConsumablesPopout()
+    if not (popout and popout:IsShown()) then return end
+
+    local tabLabel = "Consumables"
+    for _, def in ipairs(TAB_DEFS) do
+        if def.id == currentTab then tabLabel = def.label break end
+    end
+    local specName = selectedSpecID and GetSpecInfo(selectedSpecID) or ""
+    popout.title:SetText(("|cff%s%s|r  |cff%s%s|r"):format(
+        ns.Widgets:Hex("accent"), tabLabel,
+        ns.Widgets:Hex("muted"), specName))
+
+    local list = PopoutList()
+    local y = 0
+    for i, e in ipairs(list) do
+        local r = PopRow(i)
+        local indent = e.alt and 14 or 0
+        r:ClearAllPoints()
+        r:SetPoint("TOPLEFT", popout.body, "TOPLEFT", indent, y)
+        r.icon:SetTexture(GetItemIcon(e.itemID) or 134400)
+
+        local link = GetItemLink(e.itemID)
+        -- Width cleared before measuring: GetStringWidth reports the
+        -- text's natural width, but a FontString still carrying last
+        -- render's cap would report that instead.
+        r.name:SetWidth(0)
+        r.name:SetText(link
+            or ("|cffffffff" .. (GetItemName(e.itemID)
+                or ("item:" .. e.itemID)) .. "|r"))
+        local textW = math.min(r.name:GetStringWidth() or 0,
+                               POP_W - 46 - indent)
+        r.name:SetWidth(textW)
+        r:SetWidth(21 + math.max(textW, 20))
+
+        local hover = link or ("item:" .. e.itemID)
+        r:SetScript("OnEnter", function(s)
+            GameTooltip:SetOwner(s, "ANCHOR_CURSOR")
+            GameTooltip:SetHyperlink(hover)
+            GameTooltip:Show()
+        end)
+        r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        r:SetScript("OnClick", function() LinkClick(hover) end)
+
+        y = y - POP_ROW_H
+    end
+    for i = #list + 1, #popRows do popRows[i]:Hide() end
+
+    -- Sized to its contents: the title band, the rows, and the bottom
+    -- padding. A fixed height would be empty for Gems and short for
+    -- Consumables.
+    popout:SetHeight(math.max(-y + 26 + 10, 64))
+end
+
+function ns:ToggleConsumablesPopout()
+    local f = BuildPopout()
+    if f:IsShown() then
+        f:Hide()
+        return
+    end
+    -- Names may not be cached yet if the page has never been drawn for
+    -- this spec; CacheItem re-fires RefreshConsumables when they land,
+    -- which reaches the popout through the hook at the end of it.
+    local data = ns.ConsumablesDB and ns.ConsumablesDB[GetConsumableKey() or ""]
+    for _, e in ipairs(PopoutList()) do
+        local _ = data and CacheItem(e.itemID)
+    end
+    f:Show()
+    -- Above anything else already at DIALOG, including a dropdown left
+    -- open behind it.
+    f:Raise()
+    ns:RefreshConsumablesPopout()
 end

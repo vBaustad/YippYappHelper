@@ -140,11 +140,69 @@ function I:OnFriendlyInterruptCast(unit, spellID)
     end
 end
 
--- When an enemy nameplate cast is interrupted, attribute it to whichever
--- party unit cast something within MATCH_WINDOW of the event. We never
--- read spellID or GUID content — only unit tokens and timestamps.
-function I:OnNameplateInterrupted(nameplateUnit)
+--- Units an enemy interrupt can be reported on.
+---
+--- Nameplates alone used to be the entire net, and it has a hole exactly
+--- the size of the nameplate settings: no plate for that mob -- enemy
+--- nameplates switched off, out of nameplateMaxDistance, or simply
+--- capped out in a big pull -- and the event never arrives, so a party
+--- member's kick is never attributed and the tracker looks like it only
+--- notices your own. target/focus/boss cover the mob you are actually
+--- looking at, which is usually the one being kicked.
+local function isEnemyUnit(unit)
+    if type(unit) ~= "string" then return false end
+    return unit:sub(1, 9) == "nameplate"
+        or unit == "target" or unit == "focus"
+        or unit:sub(1, 4) == "boss"
+end
+
+-- One kick arrives once per unit token pointing at that mob: nameplate1
+-- and target are the same enemy interrupted once. A duplicate would
+-- consume a DIFFERENT party member's cast and start a cooldown on
+-- somebody who never kicked, so the second report inside this window is
+-- dropped.
+local DUP_WINDOW = 0.35
+local lastUnit, lastAt = nil, 0
+
+-- "Is this the same mob as the last report?" answered without ever
+-- holding a guid.
+--
+-- The guid answer was the obvious one and it died: enemy nameplate
+-- guids come back secret in Midnight, and comparing two secret strings
+-- while tainted raises instead of returning false. UnitIsUnit answers
+-- the same question from two unit tokens and hands back a plain
+-- boolean, so nothing secret passes through us at all. Still pcalled --
+-- the guid was "not supposed to" be secret either.
+--
+-- Cost of the swap: a nameplate token recycled onto a different mob
+-- inside DUP_WINDOW now reads as the same enemy, and the second kick
+-- goes unattributed. That needs a plate to die and be reissued inside
+-- 0.35s, and it loses one cooldown rather than pinning a kick on
+-- somebody who did not cast.
+local function isSameEnemy(a, b)
+    if not a or not b then return false end
+    if a == b then return true end
+    local ok, same = pcall(UnitIsUnit, a, b)
+    return ok and same == true
+end
+
+-- When an enemy's cast is interrupted, attribute it to whichever party
+-- unit cast something within MATCH_WINDOW of the event. We never read
+-- spellID or GUID content of a PARTY member — only unit tokens and
+-- timestamps. Telling one interrupt from two is done with unit tokens
+-- as well -- see isSameEnemy.
+function I:OnEnemyInterrupted(nameplateUnit)
     local t = now()
+
+    if (t - lastAt) < DUP_WINDOW and isSameEnemy(nameplateUnit, lastUnit) then
+        if self._debug then
+            print(("|cff00ff00YYH|r interrupt: %s — duplicate, same enemy"):format(
+                tostring(nameplateUnit)))
+        end
+        return
+    end
+    lastUnit, lastAt = nameplateUnit, t
+
     local bestUnit, bestDt
     for unit, rec in pairs(partyCasts) do
         local dt = t - rec.t
@@ -167,7 +225,10 @@ function I:OnNameplateInterrupted(nameplateUnit)
     partyCasts[bestUnit] = nil
 
     if self._debug then
-        print(("|cff00ff00YYH|r attribute: %s → %s (%s, dt=%.3f)"):format(
+        -- "->" rather than an arrow glyph: this prints to the chat
+        -- frame, which uses the same font as everything else and draws
+        -- U+2192 as an empty box.
+        print(("|cff00ff00YYH|r attribute: %s -> %s (%s, dt=%.3f)"):format(
             tostring(nameplateUnit), bestUnit, class or "?", bestDt))
     end
 
@@ -219,6 +280,16 @@ f:RegisterUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player",
                     "party1", "party2", "party3", "party4")
 f:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
 
+-- Hoisted out of the handler below.
+--
+-- The lookup used to be pcall(function() return I.SPELLS[spellID] end),
+-- which builds a fresh closure every time it runs -- and it runs on every
+-- successful player cast, so once a global cooldown, all combat long,
+-- purely to be thrown away. Same protection, same semantics, no garbage.
+local function lookupSpell(spellID)
+    return I.SPELLS[spellID]
+end
+
 f:SetScript("OnEvent", function(_, event, ...)
     if ns.InterruptsSettings and ns.InterruptsSettings.Get
         and not ns.InterruptsSettings:Get("enabled") then return end
@@ -228,7 +299,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 
         if unit == "player" then
             -- Own data isn't tainted — direct lookup works.
-            local ok, cd = pcall(function() return I.SPELLS[spellID] end)
+            local ok, cd = pcall(lookupSpell, spellID)
             if I._debug then
                 print(("|cff00ff00YYH|r cast: unit=player spellID=%s hit=%s"):format(
                     tostring(spellID), (ok and cd) and "yes" or "no"))
@@ -241,7 +312,18 @@ f:SetScript("OnEvent", function(_, event, ...)
 
         -- Party cast — spellID may be secret-tainted. Don't touch it.
         -- Just record that this unit cast something at this time.
-        partyCasts[unit] = { t = now() }
+        --
+        -- The record is reused rather than replaced. There are at most
+        -- four of these and they are written on every party GCD, so
+        -- allocating a fresh table each time handed the collector a
+        -- steady drip of garbage for a single number that could just be
+        -- overwritten in place.
+        local rec = partyCasts[unit]
+        if rec then
+            rec.t = now()
+        else
+            partyCasts[unit] = { t = now() }
+        end
         if I._debug then
             print(("|cff00ff00YYH|r cast: unit=%s (timestamp only)"):format(tostring(unit)))
         end
@@ -251,8 +333,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         if I._debug then
             print(("|cff00ff00YYH|r interrupt: unit=%s"):format(tostring(unit)))
         end
-        if unit and type(unit) == "string" and unit:sub(1, 9) == "nameplate" then
-            I:OnNameplateInterrupted(unit)
+        if isEnemyUnit(unit) then
+            I:OnEnemyInterrupted(unit)
         end
 
     elseif event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" then

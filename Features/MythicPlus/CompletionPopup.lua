@@ -24,76 +24,25 @@ local function classColor(class)
     return c.r, c.g, c.b
 end
 
--- Position persistence. Save anchor + offset on drag-stop and restore
--- on first build, so the user only positions the popup once.
-local DEFAULT_POS = { anchor = "LEFT", relativePoint = "LEFT", x = 40, y = 100 }
-
-local function posDB()
-    YippYappHelperDB = YippYappHelperDB or {}
-    YippYappHelperDB.mplusCompletion = YippYappHelperDB.mplusCompletion or {}
-    local d = YippYappHelperDB.mplusCompletion
-    if type(d.position) ~= "table" then
-        d.position = {
-            anchor = DEFAULT_POS.anchor, relativePoint = DEFAULT_POS.relativePoint,
-            x = DEFAULT_POS.x, y = DEFAULT_POS.y,
-        }
-    end
-    if type(d.locked) ~= "boolean" then d.locked = true end
-    return d
-end
-
-local function ApplySavedPosition(f)
-    local p = posDB().position
-    f:ClearAllPoints()
-    f:SetPoint(p.anchor, UIParent, p.relativePoint, p.x, p.y)
-end
+-- Position, scale and the lock all belong to the shared situation
+-- window now (Core/Hud.lua). Nothing here reads
+-- YippYappHelperDB.mplusCompletion any more; the key is left in place so
+-- a rollback still finds the position it saved.
 
 local function build()
     if win then return win end
     win = CreateFrame("Frame", "YippYappMPlusCompletion", UIParent, "BackdropTemplate")
     win:SetSize(320, 310)
-    win:SetClampedToScreen(true)
-    win:SetMovable(true)
     win:EnableMouse(true)
-    win:RegisterForDrag("LeftButton")
-    win:SetScript("OnDragStart", function(self)
-        if not posDB().locked then self:StartMoving() end
-    end)
-    win:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local point, _, relPoint, x, y = self:GetPoint()
-        local p = posDB().position
-        p.anchor = point
-        p.relativePoint = relPoint
-        p.x = math.floor(x + 0.5)
-        p.y = math.floor(y + 0.5)
-    end)
     win:SetFrameStrata("HIGH")
     styleBox(win)
-    ApplySavedPosition(win)
     win:Hide()
 
-    -- Drag overlay: cyan border + faint fill + "drag to move" label,
-    -- shown whenever the popup is unlocked. Mirrors the Interrupt
-    -- Tracker's unlock affordance so the visual cue is consistent.
-    local overlay = CreateFrame("Frame", nil, win, "BackdropTemplate")
-    overlay:SetAllPoints(win)
-    overlay:SetFrameLevel(win:GetFrameLevel() + 10)
-    overlay:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 2,
-        insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-    })
-    overlay:SetBackdropColor(0, 0.6, 1.0, 0.12)
-    overlay:SetBackdropBorderColor(0, 0.8, 1.0, 0.9)
-    overlay:EnableMouse(false)
-    local oLabel = overlay:CreateFontString(nil, "OVERLAY", "GameFontNormalSmallOutline")
-    oLabel:SetPoint("CENTER")
-    oLabel:SetText("drag to move")
-    oLabel:SetTextColor(0, 0.9, 1.0)
-    overlay:SetShown(not posDB().locked)
-    win.lockOverlay = overlay
+    -- No unlock overlay and no drag handler of its own: Core/Hud.lua
+    -- makes this draggable whenever it is open and remembers where it
+    -- was dropped, so the old "drag to move" hint -- which only appeared
+    -- after unlocking it in a settings panel that covered it -- has
+    -- nothing left to explain.
 
     -- ESC to close via local key (avoid UISpecialFrames taint)
     local title = win:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -137,13 +86,28 @@ local function build()
     openBtn:SetScript("OnLeave", function(self) self:SetBackdropBorderColor(0.35, 0.35, 0.35, 1) end)
     openBtn:SetScript("OnClick", function()
         win:Hide()
-        if ns.AppFrame and ns.ShowAppPage then
-            if not ns.AppFrame:IsShown() then ns.AppFrame:Show() end
-            ns:ShowAppPage("mythicplus")
-        elseif ns.MythicPlusFrame then
+        if not (ns.OpenTo and ns:OpenTo("mythicplus")) and ns.MythicPlusFrame then
             ns.MythicPlusFrame:Show()
         end
     end)
+
+    -- Adopted by the shared situation window. It ranks below the ready
+    -- check and above the dungeon notes: a key you just finished is over
+    -- and its summary can wait 30 seconds, but the notes for a dungeon
+    -- you already cleared cannot possibly matter more than this.
+    if ns.Hud then
+        ns.Hud:Register("mplusCompletion", win, {
+            label   = "After a key",
+            aliases = { "key", "completion", "mplus", "afterkey" },
+            -- Left of centre, which is where it has always opened. It
+            -- appears three seconds after a key ends, when the middle of
+            -- the screen belongs to the run's own completion banner.
+            default = { point = "LEFT", relativePoint = "LEFT", x = 40, y = 100 },
+            preview = function()
+                if ns.ShowCompletionPopupTest then ns.ShowCompletionPopupTest() end
+            end,
+        })
+    end
 
     return win
 end
@@ -371,8 +335,20 @@ local function refresh()
 end
 
 local function show()
+    -- Ask the group before drawing. Their keys changed the moment this
+    -- run ended, and a push-only scheme means whatever we have cached is
+    -- from before it -- so the window would open listing the keystones
+    -- everyone was holding on the way in.
+    if ns.RequestPartyKeystones then ns:RequestPartyKeystones() end
     refresh()
     win:Show()
+end
+
+--- Redraws if it is up. Called when a keystone arrives over the addon
+--- channel, because the replies to the request above land a moment after
+--- the window is already on screen.
+function ns.RefreshCompletionPopup()
+    if win and win:IsShown() then refresh() end
 end
 
 local function showTest()
@@ -402,25 +378,8 @@ local function showTest()
 end
 ns.ShowCompletionPopupTest = showTest
 
-local function ApplyLockState()
-    if not win or not win.lockOverlay then return end
-    win.lockOverlay:SetShown(not posDB().locked)
-end
-
 function ns.HideCompletionPopup()
     if win then win:Hide() end
-end
-
-function ns.IsCompletionPopupLocked()
-    return posDB().locked and true or false
-end
-
-function ns.SetCompletionPopupLocked(on)
-    posDB().locked = not not on
-    ApplyLockState()
-    -- Locking clears the move affordance AND dismisses the preview so
-    -- the popup stays out of the way during normal play.
-    if posDB().locked and win then win:Hide() end
 end
 
 ------------------------------------------------------------

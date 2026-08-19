@@ -374,6 +374,10 @@ function Shell:BuildSubTabs(m)
     if not tabs then return end
 
     local accent = m.def.accent or { 0.45, 0.85, 1.0 }
+    -- The rule the tabs sit on, across the whole strip rather than only
+    -- under the tabs -- so the row reads as a rail with a segment lit,
+    -- which is the part that makes it look like tabs at all.
+    if ns.TabBaseline then ns.TabBaseline(m.subTabBar) end
     local x = 0
     for i, t in ipairs(tabs) do
         local btn = m.subTabButtons[i]

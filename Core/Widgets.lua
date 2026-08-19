@@ -65,6 +65,24 @@ function W:Hex(key)
         math.floor(b * 255 + 0.5))
 end
 
+--- The inverse of Hex, for colours the addon stores as escape codes.
+---
+--- Accepts "aarrggbb" or "rrggbb" and returns r, g, b as floats, or nil
+--- if it is neither. ns.CRESTS keeps its track colours as "ff1eff00"
+--- because their commonest use is string concatenation, but a texture
+--- tint needs numbers, and parsing them at each call site is how two
+--- copies of this drift apart.
+function W:HexToRGB(hex)
+    if type(hex) ~= "string" then return nil end
+    if #hex == 8 then hex = hex:sub(3) end
+    if #hex ~= 6 then return nil end
+    local r = tonumber(hex:sub(1, 2), 16)
+    local g = tonumber(hex:sub(3, 4), 16)
+    local b = tonumber(hex:sub(5, 6), 16)
+    if not (r and g and b) then return nil end
+    return r / 255, g / 255, b / 255
+end
+
 --- Wrap text in a skin colour.
 ---
 --- The companion to Hex, for the commonest shape in the pages: a whole
@@ -154,6 +172,45 @@ local function gradient(tex, orientation, fromAlpha, toAlpha)
     end
     if not applied then
         tex:SetColorTexture(0, 0, 0, math.max(fromAlpha, toAlpha) * 0.5)
+    end
+end
+
+--- Set an atlas only if this client actually ships it, and say whether
+--- it took.
+---
+--- Asked of C_Texture first rather than just pcall'd: SetAtlas with an
+--- unknown name can succeed and leave the texture blank, which is a
+--- silent hole rather than a caught failure. Callers use the return to
+--- choose a fallback, which is the whole point -- every atlas in this
+--- addon has to survive not existing.
+function W:TrySetAtlas(tex, name)
+    if not (tex and name) then return false end
+    if C_Texture and C_Texture.GetAtlasInfo and not C_Texture.GetAtlasInfo(name) then
+        return false
+    end
+    local ok = pcall(tex.SetAtlas, tex, name)
+    return (ok and tex:GetAtlas() ~= nil) and true or false
+end
+
+--- A chosen colour fading to nothing along one axis.
+---
+--- The private `gradient` above is black-only, for shading. This is the
+--- same three-step guard for an arbitrary colour, because a surface
+--- tinted by its state wants the tint to fall away rather than sit
+--- there as a flat panel of colour competing with its own contents.
+function W:ColourWash(tex, orientation, r, g, b, fromAlpha, toAlpha)
+    tex:SetTexture("Interface\\Buttons\\WHITE8x8")
+    local applied = false
+    if tex.SetGradient and CreateColor then
+        applied = pcall(tex.SetGradient, tex, orientation,
+            CreateColor(r, g, b, fromAlpha), CreateColor(r, g, b, toAlpha))
+    end
+    if not applied and tex.SetGradientAlpha then
+        applied = pcall(tex.SetGradientAlpha, tex, orientation,
+            r, g, b, fromAlpha, r, g, b, toAlpha)
+    end
+    if not applied then
+        tex:SetColorTexture(r, g, b, (fromAlpha + toAlpha) * 0.5)
     end
 end
 
@@ -583,12 +640,96 @@ function W:Label(parent, template, justify)
     return fs
 end
 
+--- A mouse target the width of a FontString's TEXT, not of its row.
+---
+--- Rows are as wide as their column, and their text almost never is. A
+--- tooltip hung off the row therefore fires anywhere along it -- three
+--- inches of empty space to the right of a short item name still counts
+--- as hovering that item -- which makes the whole list feel like one
+--- twitchy surface and makes a second thing in the same row (a source, a
+--- count, a link) impossible to hover on its own.
+---
+--- FontStrings cannot take mouse input themselves, so this is the frame
+--- that stands in for one. It is re-fitted on every call because the
+--- text changes with every render and its width changes with it.
+---
+--- Clicks pass through to the row.
+---
+--- The target sits ON TOP of the row to receive the mouse, and a
+--- mouse-enabled frame consumes clicks as well as motion -- the same
+--- thing that made the battle-res timer eat keybinds. A row that carries
+--- a right-click menu would have lost it over exactly the text people
+--- aim at, so anything landing here is forwarded to the row's own
+--- handler.
+---
+--- Pass `pad` where the text is followed by something you want included
+--- in the same target (a trailing marker, say).
+function W:TextHover(fs, pad)
+    if not fs then return nil end
+    local row = fs:GetParent()
+    if not row then return nil end
+
+    local hover = fs._yyHover
+    if not hover then
+        hover = CreateFrame("Button", nil, row)
+        hover:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        hover:SetScript("OnClick", function(self, button, ...)
+            local owner = self._row
+            local fn = owner and owner:GetScript("OnClick")
+            if fn then fn(owner, button, ...) end
+        end)
+        fs._yyHover = hover
+    end
+
+    hover._row = row
+    hover:SetParent(row)
+    -- Above the row, or the row's own surface takes the mouse first.
+    -- See the frame-level rule: strata and level decide who gets the
+    -- pointer, and draw layer has nothing to do with it.
+    hover:SetFrameLevel((row:GetFrameLevel() or 1) + 1)
+    hover:ClearAllPoints()
+    hover:SetPoint("TOPLEFT", fs, "TOPLEFT", 0, 0)
+
+    -- The text's own extent, clamped to the room the FontString was
+    -- given: GetStringWidth reports what the string WOULD take, which on
+    -- a truncated name is wider than what is drawn.
+    local textW = fs:GetStringWidth() or 0
+    local boxW = fs:GetWidth() or 0
+    if boxW > 0 and textW > boxW then textW = boxW end
+    hover:SetWidth(math.max(textW + (pad or 0), 1))
+    hover:SetHeight(math.max(fs:GetStringHeight() or 0, 10))
+
+    hover:EnableMouse(true)
+    hover:Show()
+    return hover
+end
+
+--- Puts a text hover away with the row that owned it.
+---
+--- Pools hide the row, and a child hidden by its parent is fine -- but a
+--- re-used row is re-fitted before it is shown again, and a target left
+--- at the previous render's width would take the mouse over text that is
+--- no longer there.
+function W:ClearTextHover(fs)
+    local hover = fs and fs._yyHover
+    if hover then
+        hover:EnableMouse(false)
+        hover:Hide()
+    end
+end
+
+-- The heading's own line box, above the rule that sits under it.
+local RULE_TOP = 18
+
 --- A section heading with the rule under it. One call rather than the
 --- four every page currently writes, which is why no two of them line
 --- up to the same baseline.
 function W:SectionTitle(parent, text)
     local holder = CreateFrame("Frame", nil, parent)
-    holder:SetHeight(22)
+    -- The text's line box plus the rule under it. Callers stack their
+    -- content off this frame's bottom, so the rule has to be inside the
+    -- height rather than hanging out of it.
+    holder:SetHeight(RULE_TOP + 14)
 
     -- GameFontNormal, not Small. A section heading set smaller than the
     -- body text under it reads as a caption rather than as a heading,
@@ -609,8 +750,6 @@ function W:SectionTitle(parent, text)
     -- shape Blizzard uses for this anyway: label, then rule.
     holder.rule = holder:CreateTexture(nil, "ARTWORK")
     holder.rule:SetHeight(14)
-    holder.rule:SetPoint("LEFT", holder.text, "RIGHT", 12, -1)
-    holder.rule:SetPoint("RIGHT", holder, "RIGHT", 0, 0)
     -- Guarded like the backdrops, and this one matters most: every
     -- section heading on every page goes through here, so an atlas the
     -- client does not ship would not spoil one decoration -- it would
@@ -626,7 +765,30 @@ function W:SectionTitle(parent, text)
     end
     holder.rule:SetAlpha(1)
 
+    -- Under the heading, and the full width of it.
+    --
+    -- Beside the heading the rule could only ever start where that
+    -- heading's text ended, so its length was decided by how long the
+    -- word happened to be -- "Stats" got a long one, "Item Upgrades" a
+    -- short one -- and this ornament carries its motif at its own
+    -- centre, which put a row of diamonds at as many different offsets
+    -- as there were headings. Underneath, every rule is the same length
+    -- and every motif lands on one vertical line, because none of it
+    -- depends on the text any more.
+    holder.rule:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, -RULE_TOP)
+    holder.rule:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -RULE_TOP)
+
+    -- A right-aligned aside on the heading's own line, for the one fact
+    -- that qualifies a whole section. SectionCard has had this since it
+    -- was written; SectionTitle did not, so pages that wanted it were
+    -- spending a whole section -- heading, rule and a row of cells -- on
+    -- something that fits in six words.
+    holder.value = self:Label(holder, "GameFontNormalSmall", "RIGHT")
+    holder.value:SetPoint("TOPRIGHT", 0, -3)
+    holder.value:SetTextColor(self:Color("muted"))
+
     function holder:SetText(t) holder.text:SetText(t) end
+    function holder:SetValue(t) holder.value:SetText(t or "") end
     return holder
 end
 
@@ -659,6 +821,24 @@ function W:SectionCard(parent, radius)
     s.value = self:Label(s, "GameFontNormalSmall", "RIGHT")
     s.value:SetPoint("TOPRIGHT", 0, -4)
     s.value:SetTextColor(self:Color("faint"))
+
+    -- The title stops where the value starts, and does not wrap.
+    --
+    -- Both were anchored by one corner with nothing between them, so a
+    -- long value grew leftward UNDER the title -- which is what put the
+    -- raid guide's fight summary on top of the words "Before you pull".
+    -- Bounded, the worst case is a title that ellipsises, which is a
+    -- readable failure instead of two strings in the same pixels. Wrap
+    -- stays off because the heading has a fixed 24px line to live in and
+    -- a second line would print over the card's top edge.
+    --
+    -- Anchored corner to corner rather than by RIGHT to LEFT: a RIGHT
+    -- anchor sets the vertical CENTRE, and a string already given its top
+    -- by TOPLEFT would then be over-constrained and have its height
+    -- solved from the two. The +4 cancels the value's own offset so both
+    -- anchors agree the top is 0.
+    s.title:SetWordWrap(false)
+    s.title:SetPoint("TOPRIGHT", s.value, "TOPLEFT", -8, 4)
 
     s.body = CreateFrame("Frame", nil, s, "BackdropTemplate")
     s.body:SetPoint("TOPLEFT", s, "TOPLEFT", 0, -SECTION_TITLE_H)

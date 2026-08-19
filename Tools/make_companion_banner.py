@@ -4,35 +4,41 @@ Source of truth is Art/companion-banner-master.jpg -- a full-resolution
 WoW screenshot with the Journeys panel open on the companion row. The
 crop rectangle below is measured against 2560x1440; a screenshot at
 another resolution needs BOUNDS re-measured, which is why they are named
-constants rather than buried in the slicing.
+constants rather than buried in the cut.
 
 Output:
 
   * Media/CompanionBanner.tga (512x128, uncompressed 32-bit)
 
-Three slices packed into one texture, because the card is a variable
-width and the banner is not:
+ONE texture, drawn at its native 341x103 and never stretched.
 
-    left  (103x103)  left chevron, frame edge, and the portrait on top
-    right  (34x103)  right chevron ornament
-    mid    (128x103) the flat middle, stretched between the two
+It was three slices for several cuts -- two caps at native width and a
+stretched middle -- so the card could be any width. That bought nothing
+and cost a great deal: the middle had the companion's name baked into
+it, so it had to be rebuilt from sampled columns, which flattened the
+banner's mottled gold into a smear; and every slice boundary was a seam
+that needed edge padding to stop the GPU sampling into its neighbour.
 
-The portrait is BAKED into the left slice rather than drawn separately.
-It sits on top of the frame in the original, overlapping its left edge,
-so there is no clean frame underneath to recover -- and the two are one
-piece of art in the same sense the window medallion's ring and portrait
-are. The consequence is that this file is Valeera specifically, and a
-season that changes the companion needs a new cut.
+Fixing the width at the art's own size makes all of that go away. The
+name stays baked because nothing stretches it, the texture is used
+exactly as photographed, and there are no internal edges to bleed. The
+consequence is that this file is Valeera specifically -- but it always
+was, because the portrait is in it too.
 
-The middle is a cross-fade between a column taken from each END of the
-flat region rather than one column repeated. The banner is lit warmer on
-the left, so a single sampled column matches one side and leaves a visible
-vertical seam against the other -- which is exactly what the first cut did.
+The corners are cut to transparent. The frame is a rounded rectangle
+photographed on the Journeys panel's dark background, so a rectangular
+crop brings four black triangles with it -- which read as chipped
+corners against any surface that is not that same black. They are
+removed by flooding inward from each corner over dark pixels, bounded to
+a box at each corner -- the gold bevel is NOT a closed curve, and an
+unbounded flood walks through a notch in the chevron ornaments and empties
+the frame's whole dark interior.
 
 Run:  python Tools/make_companion_banner.py
 """
 
 from PIL import Image
+from collections import deque
 import os
 import sys
 
@@ -40,8 +46,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "Art", "companion-banner-master.jpg")
 OUT = os.path.join(ROOT, "Media", "CompanionBanner.tga")
 
-# Measured against a 2560x1440 screenshot. Top/bottom are the frame's
-# outer edges; the columns are the slice boundaries.
+# Measured against a 2560x1440 screenshot: the frame's outer edges.
 #
 # These were wrong once in a way worth recording: the first cut took
 # 542..618 and 305..634, which is the frame's INNER lit area. That
@@ -50,29 +55,64 @@ OUT = os.path.join(ROOT, "Media", "CompanionBanner.tga")
 # still a rectangle of banner. The giveaway is that the top border was
 # present and the bottom was not -- a frame is symmetrical, so a crop
 # that keeps one and loses the other is a crop, not the art.
-TOP, BOTTOM = 540, 643        # 103 tall, both gold borders included
-LEFT_0, LEFT_1 = 297, 400     # left chevron + frame edge + baked portrait
-RIGHT_0, RIGHT_1 = 604, 638   # right chevron ornament
-FADE_A = (400, 404)           # clean column just right of the portrait
-FADE_B = (590, 594)           # clean column just left of the ornament
+LEFT, TOP, RIGHT, BOTTOM = 297, 540, 638, 643
 
-MID_W = 128
+# A pixel is "background" below this luminance. The panel behind the
+# banner sits near 20; the gold bevel that has to stop the flood runs
+# well above 90 all the way round.
+DARK = 60
+
+# How far in from each corner the flood may reach. The rounding is about
+# a dozen pixels; this is generous enough to clear it and far short of
+# anything the frame needs to keep.
+CORNER = 26
+
 CANVAS = (512, 128)
 
-# Where each slice's CONTENT starts. Each is written with PAD columns of
-# its own edge pixel repeated on either side.
-#
-# The padding is not cosmetic. The card stretches the middle slice, so
-# the GPU samples it with bilinear filtering, and at a slice's edge that
-# blend reaches one texel PAST the texcoord -- into whatever sits next to
-# it in the sheet. Packed tight against transparent gaps that meant every
-# internal edge faded to nothing, which drew as a hard dark seam at each
-# slice boundary. Repeating the edge pixel means the sample reaches into
-# a copy of itself and the join disappears.
-PAD = 2
-PACK_LEFT_X = 2
-PACK_RIGHT_X = 112
-PACK_MID_X = 256
+
+def cut_corners(im):
+    """Flood transparent inward from each corner over dark pixels.
+
+    A flood rather than a drawn rounded-rectangle mask: the corner radius
+    and the bevel's exact profile are the art's, not numbers worth
+    guessing at, and a mask a pixel off either shaves the gold or leaves
+    a black rind. The flood finds the real boundary because the boundary
+    is what stops it.
+
+    Each flood is confined to a CORNER-sized box. Unbounded, it does not
+    stay outside the frame: the chevron ornaments have notches cut into
+    them, and the dark inside a notch joins the dark outside the banner,
+    so the fill walks through and empties the frame's whole dark interior
+    -- 79% of the image on the first attempt. The gold is not a closed
+    curve, so it cannot be relied on as a wall; the box is the wall.
+
+    Returns the number of pixels cleared, so a run that quietly clears
+    nothing -- or far too much -- is visible instead of silent.
+    """
+    px = im.load()
+    w, h = im.size
+    seen = [[False] * h for _ in range(w)]
+    cleared = 0
+
+    for cx, cy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        x0, x1 = (0, CORNER) if cx == 0 else (w - CORNER, w)
+        y0, y1 = (0, CORNER) if cy == 0 else (h - CORNER, h)
+        q = deque([(cx, cy)])
+        while q:
+            x, y = q.popleft()
+            if x < x0 or y < y0 or x >= x1 or y >= y1 or seen[x][y]:
+                continue
+            seen[x][y] = True
+            r, g, b, _ = px[x, y]
+            # Rec. 601 luma; the bevel is yellow, which a plain average
+            # would under-weight enough to leak through in places.
+            if (0.299 * r + 0.587 * g + 0.114 * b) >= DARK:
+                continue
+            px[x, y] = (r, g, b, 0)
+            cleared += 1
+            q.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+
+    return cleared
 
 
 def main():
@@ -87,53 +127,29 @@ def main():
         print("warning: master is %dx%d, bounds were measured on 2560x1440"
               % im.size)
 
-    h = BOTTOM - TOP
-    left = im.crop((LEFT_0, TOP, LEFT_1, BOTTOM))
-    right = im.crop((RIGHT_0, TOP, RIGHT_1, BOTTOM))
+    banner = im.crop((LEFT, TOP, RIGHT, BOTTOM)).copy()
+    w, h = banner.size
+    cleared = cut_corners(banner)
 
-    a = im.crop((FADE_A[0], TOP, FADE_A[1], BOTTOM)).resize((MID_W, h), Image.LANCZOS)
-    b = im.crop((FADE_B[0], TOP, FADE_B[1], BOTTOM)).resize((MID_W, h), Image.LANCZOS)
-
-    # Blended column by column rather than with a rotated gradient mask.
-    # The rotate-a-linear_gradient trick worked but ran backwards, so the
-    # middle started at the RIGHT end's tone and stepped visibly against
-    # the left cap -- the one seam this cross-fade exists to remove. Which
-    # way rotate() takes a gradient is not worth having to remember, and
-    # getting it wrong is invisible in the code and obvious on the page.
-    mid = Image.new("RGBA", (MID_W, h))
-    for x in range(MID_W):
-        t = x / float(max(MID_W - 1, 1))
-        col = Image.blend(a.crop((x, 0, x + 1, h)), b.crop((x, 0, x + 1, h)), t)
-        mid.paste(col, (x, 0))
+    # A sanity range, not a precise expectation. Four corners of this
+    # radius come to a few hundred pixels; thousands means the flood got
+    # into the frame and ate the banner, and zero means DARK is below the
+    # background and it never started.
+    total = w * h
+    if cleared == 0:
+        print("warning: no corner pixels cleared -- DARK may be too low")
+    elif cleared > total * 0.15:
+        print("warning: cleared %d of %d pixels (%.0f%%) -- the flood likely "
+              "escaped into the frame" % (cleared, total, 100.0 * cleared / total))
 
     sheet = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
-
-    def place(im_, x0):
-        """Write a slice at x0, bracketed by copies of its own edge columns."""
-        sheet.paste(im_, (x0, 0))
-        first = im_.crop((0, 0, 1, im_.height))
-        last = im_.crop((im_.width - 1, 0, im_.width, im_.height))
-        for i in range(1, PAD + 1):
-            sheet.paste(first, (x0 - i, 0))
-            sheet.paste(last, (x0 + im_.width - 1 + i, 0))
-
-    place(left, PACK_LEFT_X)
-    place(right, PACK_RIGHT_X)
-    place(mid, PACK_MID_X)
+    sheet.paste(banner, (0, 0))
     sheet.save(OUT, "TGA", compression=None)
 
-    # Printed so the Lua texcoords can be checked against the cut rather
-    # than trusted. They are the only coupling between the two files.
-    w, ch = CANVAS
-    def tc(x0, x1):
-        return "%.6f, %.6f, 0, %.6f" % (x0 / w, x1 / w, h / ch)
-    print("wrote %s (%dx%d, %d bytes)" % (OUT, w, ch, os.path.getsize(OUT)))
-    print("  LEFT  w=%d  SetTexCoord(%s)"
-          % (left.width, tc(PACK_LEFT_X, PACK_LEFT_X + left.width)))
-    print("  RIGHT w=%d  SetTexCoord(%s)"
-          % (right.width, tc(PACK_RIGHT_X, PACK_RIGHT_X + right.width)))
-    print("  MID   w=%d  SetTexCoord(%s)" % (MID_W, tc(PACK_MID_X, PACK_MID_X + MID_W)))
-    print("  banner = %dx%d" % (RIGHT_1 - LEFT_0, h))
+    cw, ch = CANVAS
+    print("wrote %s (%dx%d, %d bytes)" % (OUT, cw, ch, os.path.getsize(OUT)))
+    print("  banner %dx%d, %d corner pixels cleared" % (w, h, cleared))
+    print("  SetTexCoord(0, %.6f, 0, %.6f)" % (w / float(cw), h / float(ch)))
 
 
 if __name__ == "__main__":

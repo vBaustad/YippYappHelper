@@ -126,6 +126,103 @@ ns.CRAFT_CREST_COST = 80              -- crests to craft a spark item (equivalen
 ns.VETERAN_EMBELLISH_RESERVE = 160    -- save this many Veteran crests for embellishment crafts
 
 ------------------------------------------------------------
+-- Crest income the season cap does not measure.
+--
+-- `useTotalEarnedForMaxQty` makes the client report a crest as capped
+-- once totalEarned reaches maxQuantity, and for most income that is the
+-- truth. It is not the truth for quest-box crests: the boxes handed out
+-- by weekly activities pay Veteran crests that do not count against the
+-- allowance, so a character sitting at 100/100 can still collect a
+-- couple of hundred more this week.
+--
+-- That gap is not cosmetic. Everything downstream that asks "can I earn
+-- more of this" -- the hold-crests advice, the scarcity flag, the whole
+-- budget -- was answering from `totalEarned` alone, so a capped Veteran
+-- track told the player to hoard against a ceiling they were about to
+-- walk straight through.
+--
+-- What is recorded here is the SHAPE of that income, not a live number.
+-- The addon cannot see which of these a character has turned in without
+-- quest ids, and guessing would be worse than admitting the gap -- so
+-- the budget treats this as "the cap is not the real ceiling" and the
+-- panel says so, rather than quietly inflating the affordable count.
+--
+-- Sourced from community gearing coverage of the 12.1 pre-season, Aug
+-- 2026. Verify when the season rolls: the uncapped boxes are a
+-- pre-season quirk and are the sort of thing a hotfix closes.
+--
+-- Two KINDS of income live here and they are kept apart on purpose.
+-- `boxes` repeat every week, so they are headroom the track gets again
+-- next reset. `once` is a season-opening quest a character can only ever
+-- be paid for one time -- real headroom for someone gearing up, and
+-- nothing at all for a character who cleared them in week one. Summing
+-- the two would tell a capped player in week twelve that Hero crests
+-- still rain from the sky.
+ns.UNCAPPED_CREST_SOURCES = {
+    Veteran = {
+        perBox = 20,
+        boxes = {
+            "Special Assignments in Midnight zones (2 active, rotate every 3.5 days)",
+            "Special Assignment on the Coiled Isle",
+            "Curse Surge weekly (3 of them)",
+            "Trailing Xalatath -- Vereesa, Silvermoon",
+            "Lady Liadrin weekly, Silvermoon",
+            "Abundance (Zul'Aman is the quickest)",
+            "Saltheril's Soiree runestone defense",
+            "Legends of the Haranir (Aln'hara's Bloom is a 2-minute run)",
+            "Stormarion Assault (first Epic box only -- later boxes pay nothing)",
+        },
+    },
+    -- Hero and Myth have no weekly boxes at all -- these are the two
+    -- season-opening quests, and they are the whole reason a fresh
+    -- character can spend past a Hero cap in the first week.
+    -- Source: Larias' Raider's Guide for S2 Midnight (lariasguide.com),
+    -- which credits Squishei for confirming the nemesis boss pays
+    -- uncapped crests in Season 2. Amounts are per character, once.
+    Hero = {
+        once = {
+            { amount = 60, label = "Azta'rec, the Venomfall Deeps nemesis boss (can be done in a group)" },
+            { amount = 20, label = "Cracked Keystone -- the Season 2 tier 11 delve quest" },
+        },
+    },
+    Myth = {
+        once = {
+            { amount = 30, label = "Azta'rec, the Venomfall Deeps nemesis boss (can be done in a group)" },
+            { amount = 20, label = "Cracked Keystone -- the Season 2 tier 11 delve quest" },
+        },
+    },
+}
+
+--- Crests a track can still be given this week outside its season cap.
+---
+--- REPEATING income only -- see the note above. Returns 0 for every
+--- track with no such income, which is all of them but Veteran. The
+--- count is an upper bound over untouched weeklies, so callers must
+--- present it as headroom rather than as crests in hand.
+function ns:GetUncappedCrestIncome(crestTrack)
+    local src = ns.UNCAPPED_CREST_SOURCES[crestTrack]
+    if not src then return 0, 0 end
+    return (src.perBox or 0) * #(src.boxes or {}), #(src.boxes or {})
+end
+
+--- Crests a track can be given once per character, outside the cap.
+---
+--- Deliberately NOT folded into the budget: nothing the client exposes
+--- says whether this character has already handed the quests in, and a
+--- number that only counts down for players who never look at it is
+--- worse than no number. Callers that show it must say "once per
+--- character", never "you can still earn".
+function ns:GetOneShotCrestIncome(crestTrack)
+    local src = ns.UNCAPPED_CREST_SOURCES[crestTrack]
+    if not src or not src.once then return 0, 0 end
+    local total = 0
+    for _, entry in ipairs(src.once) do
+        total = total + (entry.amount or 0)
+    end
+    return total, #src.once
+end
+
+------------------------------------------------------------
 -- Key strategic facts
 ------------------------------------------------------------
 -- When you max a lower track, the item auto-promotes to the next track.
@@ -303,6 +400,45 @@ ns.GEAR_CAVEAT = {
         .. "Trinkets interact with your stats, your other trinket and your "
         .. "set bonuses, so a lower-ranked one can win in your bags. Use this "
         .. "to narrow the field, then sim the pair you actually own.",
+}
+
+------------------------------------------------------------
+-- What the Catalyst does now, in 12.1.
+--
+-- A best-in-slot list can name armour in every class-set slot and not
+-- one tier token, and since 12.1 that is the answer rather than an
+-- omission: class set armour inherits the secondary stats of whatever
+-- you convert, and certain item effects travel with it. So the chase is
+-- the named piece, and the Catalyst is the last step on it rather than
+-- a separate source you go to instead.
+--
+-- Here rather than in ClassGuideData because that file is generated: a
+-- hand-written paragraph in it survives until the next scrape.
+------------------------------------------------------------
+ns.CATALYST_NOTE = {
+    -- The conclusion, on the page. Kept to one line at the widths this
+    -- page is drawn at -- it sits above the doll, and the doll pays for
+    -- anything taller.
+    line = "Class set inherits the secondary stats — and item effects "
+        .. "— of the piece you convert. Chase the items here, not the token.",
+
+    title = "The Catalyst changed in 12.1",
+
+    -- The rest, on hover.
+    detail = {
+        "Class set armour now keeps the secondary stats of the item you "
+            .. "convert, and certain special effects travel with it — "
+            .. "Ula'tek's Venomcursed cantrip among them.",
+        "That is why this list can name armour in every class-set slot "
+            .. "and no tier at all. The named piece IS the tier piece, one "
+            .. "Catalyst charge later, and rows tagged +cat say which item "
+            .. "feeds which.",
+        "The Venomous Abyss still drops class set armour directly. A "
+            .. "direct drop rolls its own secondaries and carries no item "
+            .. "effect, and you choose neither.",
+        "Ahead of the Curve or Keystone Master grants 3 extra Catalyst "
+            .. "charges this season.",
+    },
 }
 
 ------------------------------------------------------------
@@ -575,9 +711,27 @@ function ns.AddGlowHighlight(frame, alpha)
 end
 
 ------------------------------------------------------------
--- Shared underline-style tab (matches Loot Browser)
--- Returns a button with .label (FontString) and .selectedBar (Texture)
--- Active color: { r, g, b } used for underline + text when selected
+-- Shared tab.
+--
+-- These were a row of words with a two-pixel mark under whichever one
+-- was current, and nothing else: no container, no rule, no shared edge.
+-- That does not read as a set of choices -- it reads as one highlighted
+-- label -- because the indicator had nothing to sit ON. An underline
+-- only means "selected" when there is a line for it to be part of.
+--
+-- Three things changed, and they work together:
+--
+--   * every tab carries a faint line along its own bottom edge, always,
+--     so the strip has a rail whether or not its container drew one;
+--   * the active mark is thicker and spans the tab rather than being
+--     inset, so it reads as a segment of that rail rather than as a
+--     dash under a word;
+--   * the active LABEL goes bright rather than accent-coloured. Colour
+--     was doing the selection job and the underline was decoration;
+--     now the underline carries it and brightness backs it up, which is
+--     the pairing people already read as tabs.
+--
+-- Returns a button with .label, .selectedBar and .baseLine.
 ------------------------------------------------------------
 function ns.CreateUnderlineTab(parent, text, activeColor)
     local btn = CreateFrame("Button", nil, parent)
@@ -585,16 +739,27 @@ function ns.CreateUnderlineTab(parent, text, activeColor)
     btn:EnableMouse(true)
 
     local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lbl:SetPoint("CENTER", 0, 0)
+    lbl:SetPoint("CENTER", 0, 1)
     lbl:SetText(text)
     lbl:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
     ns.ApplyTextShadow(lbl)
     btn.label = lbl
 
-    local sel = btn:CreateTexture(nil, "ARTWORK")
-    sel:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 2, 0)
-    sel:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -2, 0)
-    sel:SetHeight(2)
+    -- The rail. Drawn per tab as well as per strip so a page that never
+    -- gave its tabs a container still gets one; where a strip does draw
+    -- a continuous rule, this simply coincides with it.
+    local base = btn:CreateTexture(nil, "ARTWORK")
+    base:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 0)
+    base:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+    base:SetHeight(1)
+    local sc = ns.COLORS.TEXT_SECONDARY
+    base:SetColorTexture(sc[1], sc[2], sc[3], 0.22)
+    btn.baseLine = base
+
+    local sel = btn:CreateTexture(nil, "OVERLAY")
+    sel:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 0, 0)
+    sel:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+    sel:SetHeight(3)
     sel:SetColorTexture(activeColor[1], activeColor[2], activeColor[3], 1)
     sel:Hide()
     btn.selectedBar = sel
@@ -608,9 +773,27 @@ function ns.CreateUnderlineTab(parent, text, activeColor)
     return btn
 end
 
+--- The continuous rule a strip of tabs sits on.
+---
+--- Drawn on the strip rather than assembled from the tabs, because a
+--- rule made of per-tab segments has a hole wherever the tabs have a
+--- gap. Safe to call repeatedly; the first call is the one that counts.
+function ns.TabBaseline(strip, inset)
+    if not strip then return nil end
+    if strip._tabBaseline then return strip._tabBaseline end
+    local line = strip:CreateTexture(nil, "ARTWORK")
+    line:SetHeight(1)
+    line:SetPoint("BOTTOMLEFT", strip, "BOTTOMLEFT", inset or 0, 0)
+    line:SetPoint("BOTTOMRIGHT", strip, "BOTTOMRIGHT", -(inset or 0), 0)
+    local c = ns.COLORS.TEXT_SECONDARY
+    line:SetColorTexture(c[1], c[2], c[3], 0.22)
+    strip._tabBaseline = line
+    return line
+end
+
 function ns.SetTabActive(tab)
     tab.selectedBar:Show()
-    tab.label:SetTextColor(tab.activeColor[1], tab.activeColor[2], tab.activeColor[3])
+    tab.label:SetTextColor(unpack(ns.COLORS.TEXT_PRIMARY))
 end
 
 function ns.SetTabInactive(tab)

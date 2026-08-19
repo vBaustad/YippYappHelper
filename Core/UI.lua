@@ -4,7 +4,11 @@ local _, ns = ...
 -- Constants
 ------------------------------------------------------------
 local EQUIP_PANEL_WIDTH = 440
-local INFO_PANEL_WIDTH = 280
+-- The suggestions column writes sentences, and 280px is not a column
+-- you can write a sentence in -- every reason wrapped to a stub and then
+-- ellipsised. Widened to fit "279 to 295 -- 2 of 5 ranks, to 289" on one
+-- line at the small font, which is the longest shape the panel emits.
+local INFO_PANEL_WIDTH = 340
 local FRAME_HEIGHT = 500
 
 local function GetInfoWidth()
@@ -373,6 +377,31 @@ function ns:SetGearAppMode(enabled, contentWidth, contentHeight)
     end
 end
 
+------------------------------------------------------------
+-- The suggestions panel.
+--
+-- What this used to be: every upgradeable slot in one flat list, sorted
+-- by which advice label it happened to draw, each with a grey sentence
+-- under it that ended in a raw budget fragment -- "priority #2 of 2 --
+-- may get replaced, 60 Vet...". Three separate problems in one line.
+-- The advice was ordered by label rather than by what to do first, the
+-- numbers were an unlabelled ratio glued onto an unrelated clause, and
+-- the column was too narrow to show either of them to the end.
+--
+-- What it is now: crests are track-locked, so the unit of decision is a
+-- crest track, not a slot. Each track gets a budget header -- what you
+-- hold, what a rank costs, how many ranks that buys -- and under it the
+-- slots that wallet should be spent on, in spending order, with a rule
+-- drawn across the list at the point the crests run out. Everything
+-- above that rule is affordable today; everything below it is what the
+-- next batch of crests buys.
+--
+-- Two sections bracket the tracks. Free promotions and wasteful spends
+-- go first because they are decided independently of any budget, and
+-- slots waiting on a drop go last as a single quiet line, because
+-- "there is nothing to do here" does not need a card each.
+------------------------------------------------------------
+
 local suggestRowPool = {}
 local suggestRowPoolIdx = 0
 
@@ -388,27 +417,69 @@ local function AcquireSuggestRow()
             insets   = { left = 2, right = 2, top = 2, bottom = 2 },
         })
 
+        -- A colour chip down the left edge. The advice label used to be
+        -- the only carrier of the recommendation's colour, in text, at
+        -- the far right of the row -- so scanning the list for "what is
+        -- green" meant reading every line. A chip puts the same signal
+        -- in the margin where the eye can run down it.
+        row.chip = row:CreateTexture(nil, "OVERLAY")
+        row.chip:SetPoint("TOPLEFT", 3, -3)
+        row.chip:SetPoint("BOTTOMLEFT", 3, 3)
+        row.chip:SetWidth(3)
+
         row.slotFs = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row.slotFs:SetPoint("TOPLEFT", 10, -6)
+        row.slotFs:SetPoint("TOPLEFT", 12, -6)
+        row.slotFs:SetJustifyH("LEFT")
 
         row.tagFs = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        row.tagFs:SetPoint("TOPRIGHT", -10, -6)
+        row.tagFs:SetPoint("TOPRIGHT", -8, -7)
         row.tagFs:SetJustifyH("RIGHT")
 
         row.reasonFs = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        row.reasonFs:SetPoint("TOPLEFT", 10, -22)
+        row.reasonFs:SetPoint("TOPLEFT", 12, -22)
         row.reasonFs:SetJustifyH("LEFT")
-        row.reasonFs:SetWordWrap(true)
-        row.reasonFs:SetTextColor(0.55, 0.55, 0.55)
 
         suggestRowPool[suggestRowPoolIdx] = row
     end
     row:ClearAllPoints()
+    -- Set every refresh, not at creation: a pooled row keeps whatever
+    -- the last caller left on it, and a row reused from the waiting
+    -- section would otherwise carry that section's dimmed colour.
+    row.reasonFs:SetWordWrap(true)
+    row.reasonFs:SetTextColor(0.72, 0.72, 0.72)
     row:Show()
     return row
 end
 
--- Legacy pool for non-app mode (keeps old format working at vendor)
+------------------------------------------------------------
+-- A single divider between advice to act on and advice to note.
+------------------------------------------------------------
+local rulePool = {}
+local rulePoolIdx = 0
+
+local function AcquireRule()
+    rulePoolIdx = rulePoolIdx + 1
+    local rule = rulePool[rulePoolIdx]
+    if not rule then
+        rule = CreateFrame("Frame", nil, suggestContent)
+        -- The line stops short of the caption instead of running
+        -- underneath it. Drawn edge to edge it struck through its own
+        -- text, which is the sort of thing that reads as a rendering
+        -- fault rather than a divider.
+        rule.fs = rule:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        rule.fs:SetPoint("LEFT", 0, 0)
+        rule.line = rule:CreateTexture(nil, "ARTWORK")
+        rule.line:SetHeight(1)
+        rule.line:SetPoint("LEFT", rule.fs, "RIGHT", 8, 0)
+        rule.line:SetPoint("RIGHT", 0, 0)
+        rulePool[rulePoolIdx] = rule
+    end
+    rule:ClearAllPoints()
+    rule:Show()
+    return rule
+end
+
+-- Legacy pool, still used for section captions and the empty state.
 local suggestFontPool = {}
 local suggestFontPoolIdx = 0
 
@@ -420,153 +491,168 @@ local function AcquireFontString(template)
         suggestFontPool[suggestFontPoolIdx] = fs
     else
         fs:SetFontObject(template or "GameFontNormalSmall")
-        fs:SetTextColor(1, 1, 1)
-        fs:SetWordWrap(false)
     end
+    fs:SetTextColor(1, 1, 1)
+    fs:SetWordWrap(true)
     fs:ClearAllPoints()
     fs:Show()
     return fs
 end
 
+--- "ffrrggbb" -> r, g, b in 0..1. Falls back to grey on a malformed
+--- string rather than erroring inside a layout pass.
+local function HexToRGB(hex)
+    if type(hex) ~= "string" or #hex < 8 then return 0.53, 0.53, 0.53 end
+    local r = tonumber(hex:sub(3, 4), 16)
+    local g = tonumber(hex:sub(5, 6), 16)
+    local b = tonumber(hex:sub(7, 8), 16)
+    if not (r and g and b) then return 0.53, 0.53, 0.53 end
+    return r / 255, g / 255, b / 255
+end
+
+local function CrestColor(track)
+    for _, c in ipairs(ns.CRESTS or {}) do
+        if c.track == track then return c.color end
+    end
+    return "ffbbbbbb"
+end
+
+-- Advice that is decided without reference to any budget, so it sits
+-- above the track sections rather than inside one.
+local function IsBudgetFree(rec)
+    return rec == ns.RECOMMEND.FREE_UPGRADE
+        or rec == ns.RECOMMEND.WASTED_CREST
+        or rec == ns.RECOMMEND.USE_LOWER_TRACK
+end
+
+-- Advice that means "no crest decision to make here".
+local function IsWaiting(rec)
+    return rec == ns.RECOMMEND.WAIT_BETTER
+        or rec == ns.RECOMMEND.SAVE_FOR_DROP
+        or rec == ns.RECOMMEND.CREST_CAPPED
+        or rec == ns.RECOMMEND.CRAFT_INSTEAD
+        or rec == ns.RECOMMEND.BAD_INVESTMENT
+end
+
 function ns:RefreshSuggestions()
-    -- Hide all previous elements
     for i = 1, suggestFontPoolIdx do suggestFontPool[i]:Hide() end
     suggestFontPoolIdx = 0
     for i = 1, suggestRowPoolIdx do suggestRowPool[i]:Hide() end
     suggestRowPoolIdx = 0
+    for i = 1, rulePoolIdx do rulePool[i]:Hide() end
+    rulePoolIdx = 0
     wipe(ns.SuggestEntries)
 
+    -- Plans are memoised per wallet state; drop them so a refresh
+    -- triggered by anything other than a currency event still recomputes.
+    if ns.InvalidateCrestPlans then ns:InvalidateCrestPlans() end
+
     local recommendations = ns:GetAllRecommendations()
-
-    -- Sort: actionable items first, skip empty/maxed
-    local sorted = {}
-    for _, slotInfo in ipairs(ns.SLOT_IDS) do
-        local r = recommendations[slotInfo.slot]
-        if r and r.recommendation ~= ns.RECOMMEND.NO_ITEM and r.recommendation ~= ns.RECOMMEND.MAXED then
-            table.insert(sorted, r)
-        end
-    end
-
-    local labelOrder = {
-        [ns.RECOMMEND.FREE_UPGRADE]   = 0,
-        [ns.RECOMMEND.UPGRADE_NOW]    = 1,
-        [ns.RECOMMEND.BAD_INVESTMENT] = 2,
-        [ns.RECOMMEND.WASTED_CREST]   = 2,
-        [ns.RECOMMEND.HOLD_CRESTS]    = 3,
-        [ns.RECOMMEND.SAFE_TEMP]      = 4,
-        [ns.RECOMMEND.UPGRADE_LATER]  = 5,
-        [ns.RECOMMEND.USE_LOWER_TRACK] = 5,
-        [ns.RECOMMEND.CRAFT_INSTEAD]  = 6,
-        [ns.RECOMMEND.WAIT_BETTER]    = 7,
-    }
-    table.sort(sorted, function(a, b)
-        local oa = labelOrder[a.recommendation] or 99
-        local ob = labelOrder[b.recommendation] or 99
-        if oa ~= ob then return oa < ob end
-        local pa = ns.SLOT_PRIORITY[a.slotID] or 2
-        local pb = ns.SLOT_PRIORITY[b.slotID] or 2
-        return pa > pb
-    end)
-
     local w = GetInfoWidth() - 42
     local yOffset = 0
 
-    if ns._gearAppMode then
-        -- ── App mode: card-style rows ──
-        for _, r in ipairs(sorted) do
-            local rec = r.recommendation
-            local row = AcquireSuggestRow()
-            row:SetWidth(w)
-            row:SetPoint("TOPLEFT", 0, -yOffset)
-
-            -- Subtle background tinted by recommendation color
-            row:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
-            -- Parse hex color for border tint
-            local hexColor = rec.color or "ff888888"
-            local cr = tonumber(hexColor:sub(3, 4), 16) / 255
-            local cg = tonumber(hexColor:sub(5, 6), 16) / 255
-            local cb = tonumber(hexColor:sub(7, 8), 16) / 255
-            row:SetBackdropBorderColor(cr * 0.5, cg * 0.5, cb * 0.5, 0.6)
-
-            -- Slot name with priority indicator
-            local slotPri = ns.SLOT_PRIORITY[r.slotID] or 2
-            local priStr = ""
-            if slotPri >= 5 then priStr = "|cff00ff00!! |r"
-            elseif slotPri >= 4 then priStr = "|cff88ff88! |r"
-            end
-            row.slotFs:SetText(priStr .. "|cffffffff" .. r.slotName .. "|r")
-
-            -- Tag (colored recommendation label, right-aligned)
-            row.tagFs:SetText("|c" .. hexColor .. rec.label .. "|r")
-
-            -- Reason text
-            row.reasonFs:SetWidth(w - 20)
-            if r.reason and r.reason ~= "" then
-                row.reasonFs:SetText(r.reason)
-                row.reasonFs:Show()
-                local reasonH = row.reasonFs:GetStringHeight()
-                row:SetHeight(26 + reasonH + 6)
-                yOffset = yOffset + 26 + reasonH + 6 + 4
-            else
-                row.reasonFs:Hide()
-                row:SetHeight(30)
-                yOffset = yOffset + 34
-            end
-
-            table.insert(ns.SuggestEntries, row)
-        end
-    else
-        -- ── Vendor mode: compact text list (original style) ──
-        local lastLabel = nil
-        for _, r in ipairs(sorted) do
-            local rec = r.recommendation
-
-            if rec.label ~= lastLabel then
-                if lastLabel then yOffset = yOffset + 4 end
-                local sectionHeader = AcquireFontString("GameFontNormal")
-                sectionHeader:SetPoint("TOPLEFT", 0, -yOffset)
-                sectionHeader:SetWidth(w)
-                sectionHeader:SetJustifyH("LEFT")
-                sectionHeader:SetText("|c" .. rec.color .. rec.label .. "|r")
-                table.insert(ns.SuggestEntries, sectionHeader)
-                yOffset = yOffset + sectionHeader:GetStringHeight() + 3
-                lastLabel = rec.label
-            end
-
-            local slotPri = ns.SLOT_PRIORITY[r.slotID] or 2
-            local priStr = ""
-            if slotPri >= 5 then priStr = "|cff00ff00[!!!]|r "
-            elseif slotPri >= 4 then priStr = "|cff88ff88[!!]|r "
-            elseif slotPri >= 3 then priStr = "|cffffff88[!]|r "
-            end
-
-            local header = AcquireFontString()
-            header:SetPoint("TOPLEFT", 4, -yOffset)
-            header:SetWidth(w - 4)
-            header:SetJustifyH("LEFT")
-            header:SetText(priStr .. "|cffffffff" .. r.slotName .. "|r")
-            table.insert(ns.SuggestEntries, header)
-            yOffset = yOffset + header:GetStringHeight() + 1
-
-            if r.reason and r.reason ~= "" then
-                local reason = AcquireFontString()
-                reason:SetPoint("TOPLEFT", 12, -yOffset)
-                reason:SetWidth(w - 12)
-                reason:SetJustifyH("LEFT")
-                reason:SetWordWrap(true)
-                reason:SetTextColor(0.6, 0.6, 0.6)
-                reason:SetText(r.reason)
-                table.insert(ns.SuggestEntries, reason)
-                yOffset = yOffset + reason:GetStringHeight() + 4
-            end
-        end
+    local function Caption(text, r, g, b)
+        local fs = AcquireFontString("GameFontNormal")
+        fs:SetPoint("TOPLEFT", 0, -yOffset)
+        fs:SetWidth(w)
+        fs:SetJustifyH("LEFT")
+        fs:SetTextColor(r or 0.9, g or 0.9, b or 0.9)
+        fs:SetText(text)
+        table.insert(ns.SuggestEntries, fs)
+        yOffset = yOffset + fs:GetStringHeight() + 5
     end
 
-    if #sorted == 0 then
+    --- One slot card. `dim` greys the whole row for entries the current
+    --- crests do not reach, so the funded/unfunded split is visible
+    --- without reading a word of it.
+    local function Card(r, dim)
+        local rec = r.recommendation
+        local row = AcquireSuggestRow()
+        row:SetWidth(w)
+        row:SetPoint("TOPLEFT", 0, -yOffset)
+
+        local cr, cg, cb = HexToRGB(rec.color)
+        if dim then
+            row:SetBackdropColor(0.07, 0.07, 0.07, 0.55)
+            row:SetBackdropBorderColor(0.2, 0.2, 0.2, 0.45)
+            row.chip:SetColorTexture(cr * 0.45, cg * 0.45, cb * 0.45, 0.7)
+            row.slotFs:SetText("|cff9a9a9a" .. r.slotName .. "|r")
+            row.reasonFs:SetTextColor(0.5, 0.5, 0.5)
+        else
+            row:SetBackdropColor(0.11, 0.11, 0.11, 0.9)
+            row:SetBackdropBorderColor(cr * 0.55, cg * 0.55, cb * 0.55, 0.75)
+            row.chip:SetColorTexture(cr, cg, cb, 1)
+            row.slotFs:SetText("|cffffffff" .. r.slotName .. "|r")
+        end
+        row.tagFs:SetText("|c" .. (rec.color or "ff888888") .. rec.label .. "|r")
+
+        -- Wrap width leaves the tag its column, or a long reason runs
+        -- underneath the label and the two overlap.
+        row.reasonFs:SetWidth(w - 22)
+
+        if r.reason and r.reason ~= "" then
+            row.reasonFs:SetText(r.reason)
+            row.reasonFs:Show()
+            local h = row.reasonFs:GetStringHeight()
+            row:SetHeight(26 + h + 8)
+            yOffset = yOffset + 26 + h + 8 + 4
+        else
+            row.reasonFs:Hide()
+            row:SetHeight(28)
+            yOffset = yOffset + 32
+        end
+        table.insert(ns.SuggestEntries, row)
+    end
+
+    ------------------------------------------------------------
+    -- One ranked list, in the same order the shell's Improvements page
+    -- uses.
+    --
+    -- This was grouped by crest track, with a budget header per group.
+    -- Three things were wrong with that. The headers restated the Crests
+    -- panel sitting directly above them, so the same balances appeared
+    -- twice a hundred pixels apart. Grouping by wallet meant the list
+    -- could not also be ordered by what to do first, so this panel and
+    -- the shell's disagreed about which slot led. And the header's
+    -- arithmetic line was a single unwrapped string that ran off the
+    -- right edge -- "200 to max al".
+    --
+    -- The budget facts moved into the crest rows above, which is where a
+    -- balance belongs. What is left here is the part only this list can
+    -- give: the slots, ranked, with the reason each one sits where it
+    -- does.
+    ------------------------------------------------------------
+    local list = ns.GetRankedRecommendations and ns:GetRankedRecommendations() or {}
+
+    local dividerDrawn = false
+    for _, r in ipairs(list) do
+        local ord = ns.RECOMMEND_ORDER[r.recommendation] or 99
+
+        -- Everything from HOLD_CRESTS down is something to know rather
+        -- than something to do. One rule marks that boundary; the old
+        -- layout drew one per track and none of them meant the same
+        -- thing as the next.
+        if ord > (ns.RECOMMEND_ACTIONABLE_MAX or 3) and not dividerDrawn then
+            dividerDrawn = true
+            local rule = AcquireRule()
+            rule:SetWidth(w)
+            rule:SetHeight(18)
+            rule:SetPoint("TOPLEFT", 0, -yOffset)
+            rule.line:SetColorTexture(0.45, 0.45, 0.45, 0.3)
+            rule.fs:SetText("|cff999999keep crests out of these for now|r")
+            table.insert(ns.SuggestEntries, rule)
+            yOffset = yOffset + 22
+        end
+
+        Card(r, ord >= 6)
+    end
+
+    if yOffset == 0 then
         local noItems = AcquireFontString()
         noItems:SetPoint("TOPLEFT", 0, 0)
+        noItems:SetWidth(w)
         noItems:SetTextColor(0.5, 0.5, 0.5)
-        noItems:SetText("No upgradeable items found.")
+        noItems:SetText("Nothing to upgrade — every slot is maxed or off-season.")
         table.insert(ns.SuggestEntries, noItems)
         yOffset = 20
     end

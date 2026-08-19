@@ -164,6 +164,9 @@ ns.lootBrowserState = {
     selectedView      = "dungeon",   -- "dungeon" or "raid"
     isFavoritesMode   = false,
     isAllSlots        = false,
+    -- Retired raids are folded away until asked for. Session state, not
+    -- saved: "collapsed" is the right thing to open on every time.
+    showPreviousTiers = false,
 }
 
 ------------------------------------------------------------------------
@@ -290,12 +293,58 @@ local WORLD_BOSS_INSTANCE_ID = 1312
 ------------------------------------------------------------------------
 -- Instance + Boss Discovery (cached per session)
 ------------------------------------------------------------------------
-local function BuildInstanceCache()
-    if instanceCache then return instanceCache end
+------------------------------------------------------------------------
+-- Yielding, because this sweep is too big for one frame.
+--
+-- The client kills any script that runs too long without returning, and
+-- this is thousands of Encounter Journal calls: every tier of every
+-- expansion while the instance cache is cold, then every boss of every
+-- instance at every difficulty. It used to run as one synchronous pass
+-- and finally grew past the limit -- "script ran too long", reported
+-- against whichever EJ call happened to be executing when the watchdog
+-- fired, which is why the error pointed at a one-line compatibility
+-- shim that has nothing wrong with it.
+--
+-- So the work yields. `ScanYield` gives the frame back once the slice
+-- has had its budget, and the runner below resumes next frame.
+------------------------------------------------------------------------
+-- One frame's worth at 60fps. This is a load somebody is watching a
+-- spinner for, not background work, so the useful trade is fewer frames
+-- rather than a smoother framerate during them: at 8ms it gave back half
+-- of every frame and took twice as long to show anything.
+local SCAN_BUDGET_MS = 16
+local sliceStartedAt = 0
 
-    SuppressEJ()
+--- Hands the frame back if this slice has used its budget.
+---
+--- Safe to call from anywhere: the cache builder is also reached
+--- synchronously from the journal-link index, and yielding outside a
+--- coroutine is an error rather than a no-op.
+---
+--- Asked via coroutine.running() rather than coroutine.isyieldable(),
+--- which does not exist here: isyieldable arrived in Lua 5.2 and the
+--- client runs 5.1, so calling it is "attempt to call a nil value" --
+--- and Tools/loadcheck.py runs on 5.5, where it exists, so the harness
+--- was perfectly happy with code the game could not execute.
+---
+--- The two-value form covers both: 5.1 returns nil on the main thread,
+--- 5.2+ returns the thread plus an is-main flag.
+local function ScanYield()
+    local co, isMain = coroutine.running()
+    if not co or isMain then return end
+    if debugprofilestop() - sliceStartedAt >= SCAN_BUDGET_MS then
+        coroutine.yield()
+    end
+end
 
-    local ok, result = pcall(function()
+--- The work, separated from the error handling around it.
+---
+--- Split out because pcall cannot wrap it any more: Lua 5.1 cannot yield
+--- across a C call and pcall is one, so the first ScanYield inside a
+--- pcall'd body dies with "attempt to yield across metamethod/C-call
+--- boundary". Anything this calls may still pcall freely -- the rule is
+--- only that nothing yields INSIDE one.
+local function BuildInstanceCacheWork()
         local instances = { dungeons = {}, raids = {}, worldBosses = {} }
 
         local currentTier = EJ_GetCurrentTierCompat()
@@ -305,9 +354,11 @@ local function BuildInstanceCache()
         local seasonalNames = GetSeasonalDungeonNames()
         local foundDungeons = {}
         for tier = numTiers, 1, -1 do
+            ScanYield()
             EJ_SelectTierCompat(tier)
             local index = 1
             while true do
+                ScanYield()
                 local instanceID, name = EJ_GetInstanceByIndexCompat(index, false)
                 if not instanceID then break end
                 if name and seasonalNames[name] and not foundDungeons[instanceID] then
@@ -385,8 +436,25 @@ local function BuildInstanceCache()
             raidIdx = raidIdx + 1
         end
 
-        return instances
-    end)
+    return instances
+end
+
+local function BuildInstanceCache()
+    if instanceCache then return instanceCache end
+
+    SuppressEJ()
+
+    -- Guarded only when we cannot yield. On a coroutine, resume already
+    -- hands errors back rather than raising them -- which is the whole
+    -- job pcall was doing here -- and the runner unsuppresses the
+    -- journal on the way out either way.
+    local ok, result
+    local co, isMain = coroutine.running()
+    if co and not isMain then
+        ok, result = true, BuildInstanceCacheWork()
+    else
+        ok, result = pcall(BuildInstanceCacheWork)
+    end
 
     UnsuppressEJ()
 
@@ -404,6 +472,97 @@ function ns:GetInstanceCache()
         BuildInstanceCache()
     end
     return instanceCache
+end
+
+--- Does a journal instance name refer to what our data file calls `want`?
+---
+--- Equality with a leading-article fallback, not equality alone. The
+--- names in ns.PROGRESSION were written from patch notes, and the
+--- journal's own string is the one that has to match: "The Tidebound
+--- Grotto" against "Tidebound Grotto" is the difference between the
+--- Lair sitting under the raid and it vanishing into the fold, with
+--- nothing on screen to say which of the two strings was wrong.
+--- WeeklyChecklist hedges the same name the same way.
+local function NameMatches(instName, want)
+    if not (instName and want) then return false end
+    if instName == want then return true end
+    local function bare(s) return (s:gsub("^[Tt]he%s+", "")) end
+    return bare(instName) == bare(want)
+end
+
+--- Split the raid list into this season's instances and the retired ones.
+---
+--- The Encounter Journal hands a tier's raids back in release order, so
+--- the raid anyone is actually running arrived LAST: the page opened on
+--- two or three finished instances and you scrolled past them to reach
+--- the current one.
+---
+--- Two things are current in 12.1 and ns.PROGRESSION names both: the
+--- raid, and the Lair under it. The Lair is one boss and fills the same
+--- Great Vault row, so it reads as an appendix to the raid rather than
+--- as a peer -- hence a fixed order here rather than the journal's.
+---
+--- Everything the journal lists after the season's raid is current too:
+--- a raid the journal knows and our data file does not is newer than
+--- ours, not older, so it belongs at the top. Falls back to "the last
+--- one is the current one" when no name matches at all, which is what
+--- the journal's own ordering already implies -- without that, a data
+--- file gone stale would fold every raid on the page away.
+---
+--- Retired raids come back newest first: under a collapsed heading the
+--- most recent tier is the one someone is most likely still farming.
+function ns:SplitRaidsByTier(raids)
+    local current, previous = {}, {}
+    if not raids or #raids == 0 then return current, previous end
+
+    local prog = ns.PROGRESSION or {}
+
+    -- Built by hand rather than as a literal: a nil in the middle of a
+    -- table constructor ends ipairs at the hole, so a season with no
+    -- raid named would silently drop the Lair too.
+    local ORDER = {}
+    if prog.RAID_NAME then table.insert(ORDER, prog.RAID_NAME) end
+    if prog.LAIRS and prog.LAIRS.name then table.insert(ORDER, prog.LAIRS.name) end
+
+    local cut = #raids
+    if prog.RAID_NAME then
+        for i, inst in ipairs(raids) do
+            if NameMatches(inst.name, prog.RAID_NAME) then
+                cut = i
+                break
+            end
+        end
+    end
+
+    -- Keyed on the instance table, not the name: two entries sharing a
+    -- name would otherwise both answer to one match and land twice.
+    local taken = {}
+
+    -- The named ones first, in the order above, wherever the journal
+    -- happened to put them.
+    for _, name in ipairs(ORDER) do
+        for _, inst in ipairs(raids) do
+            if inst.name and NameMatches(inst.name, name) and not taken[inst] then
+                taken[inst] = true
+                table.insert(current, inst)
+            end
+        end
+    end
+
+    -- Then anything else at or after the cut.
+    for i = cut, #raids do
+        if not taken[raids[i]] then
+            taken[raids[i]] = true
+            table.insert(current, raids[i])
+        end
+    end
+
+    for i = #raids, 1, -1 do
+        if not taken[raids[i]] then
+            table.insert(previous, raids[i])
+        end
+    end
+    return current, previous
 end
 
 ------------------------------------------------------------------------
@@ -453,6 +612,10 @@ end
 local function ScanSourceType(results, instances, sourceType, difficulties, classID, specID, slotFilter)
     for _, inst in ipairs(instances) do
         for _, boss in ipairs(inst.bosses) do
+            -- Per boss rather than per instance: one instance is a dozen
+            -- encounter scans across four difficulties, which is already
+            -- more than a frame's worth on its own.
+            ScanYield()
             local entry = {
                 sourceName  = inst.name,
                 sourceType  = sourceType,
@@ -494,7 +657,111 @@ local function ScanSourceType(results, instances, sourceType, difficulties, clas
     end
 end
 
-function ns:ScanLootBrowserSlot(specIndex, slotFilter)
+------------------------------------------------------------------------
+-- The scan runner
+--
+-- One pass at a time, resumed each frame until it finishes. Everything
+-- that made the old synchronous version correct is kept and simply
+-- spread out: the journal stays suppressed for the whole pass, the
+-- cache is written before unsuppressing, and an empty result is never
+-- cached.
+------------------------------------------------------------------------
+local activeScan = nil
+local StartScan          -- defined below, used by ScanLootBrowserSlot
+
+local scanRunner = CreateFrame("Frame")
+scanRunner:Hide()
+-- Published for Tools/loadcheck.py, which has no frames and therefore no
+-- OnUpdate: the only way to prove this yields rather than running one
+-- long block is to resume it by hand and count the resumptions.
+ns.LootScanRunner = scanRunner
+
+--- Abandons the pass in flight. Only ever used to get out of the way of
+--- something the player asked for.
+local function CancelScan()
+    if not activeScan then return end
+    activeScan = nil
+    scanRunner:Hide()
+    UnsuppressEJ()
+    ns.isLootScanning = false
+end
+
+local function FinishScan(ok, results)
+    local scan = activeScan
+    activeScan = nil
+    scanRunner:Hide()
+
+    -- Cache BEFORE unsuppressing. UnsuppressEJ restores difficulty and
+    -- filters, which fires EJ_DIFFICULTY_UPDATE / EJ_LOOT_DATA_RECIEVED;
+    -- our ejFrame handler wipes the cache on those events unless
+    -- isLootScanning is still true, so the flag stays set across it.
+    --
+    -- Never cache an empty result. The prewarm runs seconds after login,
+    -- before the journal has necessarily populated its loot map, and a
+    -- cached `{}` would leave the panel blank until something forced the
+    -- cache to clear.
+    if ok and results and #results > 0 then
+        lootBrowserCache[scan.key] = results
+    end
+
+    UnsuppressEJ()
+    ns.isLootScanning = false
+
+    if not ok then
+        print("|cff00ff00YippYapp|r |cffff6060Loot Browser:|r Scan error: " .. tostring(results))
+        return
+    end
+
+    -- Tell whoever is looking. The panel asked for this and got an empty
+    -- table at the time, so without this it would sit on a loading line
+    -- until the next thing that happened to redraw it.
+    if ns.LootBrowserFrame and ns.LootBrowserFrame:IsShown()
+        and ns.LootBrowser_RefreshDisplay then
+        ns:LootBrowser_RefreshDisplay()
+    end
+end
+
+scanRunner:SetScript("OnUpdate", function(self)
+    local scan = activeScan
+    if not scan then self:Hide(); return end
+
+    sliceStartedAt = debugprofilestop()
+    local ok, res = coroutine.resume(scan.co)
+    if not ok then
+        FinishScan(false, res)
+    elseif coroutine.status(scan.co) == "dead" then
+        FinishScan(true, res)
+    end
+end)
+
+--- Begins a pass. The coroutine body is the old synchronous sweep.
+StartScan = function(cacheKey, classID, specID, slotFilter, background)
+    SuppressEJ()
+    ns.isLootScanning = true
+
+    activeScan = {
+        key = cacheKey,
+        background = background and true or false,
+        co = coroutine.create(function()
+            if not instanceCache and not BuildInstanceCache() then
+                error("could not load instance data", 0)
+            end
+            local r = {}
+            ScanSourceType(r, instanceCache.dungeons,    "dungeon",   ns.LOOT_DIFFICULTIES.DUNGEON,    classID, specID, slotFilter)
+            ScanSourceType(r, instanceCache.raids,       "raid",      ns.LOOT_DIFFICULTIES.RAID,       classID, specID, slotFilter)
+            ScanSourceType(r, instanceCache.worldBosses, "worldboss", ns.LOOT_DIFFICULTIES.WORLD_BOSS, classID, specID, slotFilter)
+            return r
+        end),
+    }
+    scanRunner:Show()
+end
+
+--- True while a pass is in flight, so the panel can say so.
+function ns:IsLootScanRunning() return activeScan ~= nil end
+
+--- `background` marks a pass nobody is waiting on -- the login prewarm.
+--- It yields the journal the moment a real request turns up.
+function ns:ScanLootBrowserSlot(specIndex, slotFilter, background)
     local classID = ns.lootBrowserState.selectedClassID or select(3, UnitClass("player"))
     local specID = ns.lootBrowserState.selectedSpecID
         or GetSpecializationInfoForClassID(classID, specIndex)
@@ -504,50 +771,37 @@ function ns:ScanLootBrowserSlot(specIndex, slotFilter)
         return lootBrowserCache[cacheKey]
     end
 
-    if not instanceCache then
-        local built = BuildInstanceCache()
-        if not built then
-            print("|cff00ff00YippYapp|r |cffff6060Loot Browser:|r Could not load instance data. Try /reload.")
+    -- The instance cache is built inside the pass, not here. Walking
+    -- every tier of every expansion is the single heaviest stretch of
+    -- this whole sweep, so doing it synchronously "first" was doing the
+    -- worst part in exactly the way that trips the watchdog.
+
+    if activeScan then
+        -- The same filter is already on its way: let it finish.
+        if activeScan.key == cacheKey then return {} end
+
+        -- A different one. This used to return empty and drop the
+        -- request on the floor, which is what made opening the browser
+        -- during the login prewarm show the wrong thing and then sit
+        -- there: the pass that finished was not the pass anybody asked
+        -- for, and nothing ever started the one that was.
+        --
+        -- A background pass is only warming the cache, so it loses to
+        -- somebody actually waiting. Two foreground requests means the
+        -- player changed slot while it was working, and the newer answer
+        -- is the one they want.
+        if activeScan.background or not background then
+            CancelScan()
+        else
             return {}
         end
     end
 
-    SuppressEJ()
-    ns.isLootScanning = true
-
-    local ok, results = pcall(function()
-        local r = {}
-        ScanSourceType(r, instanceCache.dungeons,    "dungeon",   ns.LOOT_DIFFICULTIES.DUNGEON,    classID, specID, slotFilter)
-        ScanSourceType(r, instanceCache.raids,       "raid",      ns.LOOT_DIFFICULTIES.RAID,       classID, specID, slotFilter)
-        ScanSourceType(r, instanceCache.worldBosses, "worldboss", ns.LOOT_DIFFICULTIES.WORLD_BOSS, classID, specID, slotFilter)
-        return r
-    end)
-
-    -- Populate the cache BEFORE unsuppressing. UnsuppressEJ restores
-    -- difficulty/slot/loot filters, which fires EJ_DIFFICULTY_UPDATE /
-    -- EJ_LOOT_DATA_RECIEVED; our ejFrame handler wipes the cache on those
-    -- events unless isLootScanning is still true. Keep the flag set across
-    -- the unsuppress so the restore events are ignored.
-    --
-    -- Never cache an empty result. The prewarm pass fires 5s after login,
-    -- before EJ has necessarily populated its loot map — scanning then
-    -- returns `{}`. If we cached that, the next open would read the stale
-    -- empty entry (the EJ-event invalidation only fires while the browser
-    -- is visible), leaving the user with a blank window until they
-    -- reselected class/spec to force a cache clear.
-    if ok and results and #results > 0 then
-        lootBrowserCache[cacheKey] = results
-    end
-
-    UnsuppressEJ()
-    ns.isLootScanning = false
-
-    if not ok then
-        print("|cff00ff00YippYapp|r |cffff6060Loot Browser:|r Scan error: " .. tostring(results))
-        return {}
-    end
-
-    return results
+    StartScan(cacheKey, classID, specID, slotFilter, background)
+    -- Nothing yet. The panel shows its loading line, and the scan calls
+    -- back into the display when it lands -- the same shape the EJ data
+    -- events already use.
+    return {}
 end
 
 ------------------------------------------------------------------------
@@ -1560,12 +1814,12 @@ prewarmFrame:SetScript("OnEvent", function(self)
         -- NoFilter returns every slot in one scan → powers All Slots/Favorites
         -- and is the longest single scan; running it primes the EJ cache for
         -- the per-slot scans that follow.
-        ns:ScanLootBrowserSlot(state.selectedSpecIndex, EISFT.NoFilter)
+        ns:ScanLootBrowserSlot(state.selectedSpecIndex, EISFT.NoFilter, true)
     end)
     -- Second pass at 12s to cover slot-specific cache for the default "Head".
     C_Timer.After(12, function()
         local state = ns.lootBrowserState
         if not state.selectedSpecIndex then return end
-        ns:ScanLootBrowserSlot(state.selectedSpecIndex, EISFT.Head)
+        ns:ScanLootBrowserSlot(state.selectedSpecIndex, EISFT.Head, true)
     end)
 end)

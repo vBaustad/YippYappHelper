@@ -47,7 +47,19 @@ local function ensureRoot()
     root = CreateFrame("Frame", "YippYappInterruptsRoot", UIParent, "BackdropTemplate")
     root:SetSize(1, 1)
     root:SetMovable(true)
-    root:EnableMouse(true)
+    -- Mouse follows the lock, and applyLockedState below keeps it there.
+    --
+    -- This used to be an unconditional EnableMouse(true), which made the
+    -- tracker eat every mouse click landing on it for the entire session.
+    -- Locking did not help: locked only refuses the drag, the click is
+    -- still consumed. A consumed click never reaches the binding system,
+    -- so a mouse-button keybind pressed with the cursor over the tracker
+    -- silently did nothing -- no error, no message, and the tracker sits
+    -- at the middle of the screen by default.
+    --
+    -- Nothing here needs the mouse otherwise: the tracker has no
+    -- tooltips and no clickable parts, only the drag.
+    root:EnableMouse(false)
     root:RegisterForDrag("LeftButton")
     root:SetScript("OnDragStart", function(self)
         if S() and S():Get("locked") then return end
@@ -102,9 +114,14 @@ local function ensureRoot()
 end
 
 local function applyLockedState()
-    if not root or not root.dragOverlay then return end
+    if not root then return end
     local locked = S() and S():Get("locked")
-    root.dragOverlay:SetShown(not locked)
+    -- The mouse is the drag, and the drag is the only thing an unlocked
+    -- tracker offers. See ensureRoot for what leaving it on costs.
+    root:EnableMouse(not locked)
+    if root.dragOverlay then
+        root.dragOverlay:SetShown(not locked)
+    end
 end
 
 local function applyBackdrop()

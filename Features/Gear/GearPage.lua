@@ -233,7 +233,7 @@ local function Build(host)
     -- not. The height it was using goes to the cards and the list.
     ------------------------------------------------------------
 
-    ui.improveTitle = W:SectionTitle(host, "improvements")
+    ui.improveTitle = W:SectionTitle(host, "Improvements")
 
     ui.improveScroll = W:ScrollList(host)
     ui.improveRows = {}
@@ -348,16 +348,12 @@ local function Refresh(ctx)
     ------------------------------------------------------------
     -- Improvements
     ------------------------------------------------------------
-    local recs = ns.GetAllRecommendations and ns:GetAllRecommendations() or {}
-    local list = {}
-    for _, s in ipairs(ns.SLOT_IDS or {}) do
-        local r = recs[s.slot]
-        if r and r.recommendation
-            and r.recommendation ~= ns.RECOMMEND.NO_ITEM
-            and r.recommendation ~= ns.RECOMMEND.MAXED then
-            list[#list + 1] = r
-        end
-    end
+    -- Ranked, not in equipment order. This walked ns.SLOT_IDS, which put
+    -- the one slot actually worth spending on today wherever Feet sits
+    -- in the paper doll -- below three rows of advice that say to wait.
+    -- ns:GetRankedRecommendations is shared with the vendor panel so the
+    -- two cannot disagree about what comes first.
+    local list = ns.GetRankedRecommendations and ns:GetRankedRecommendations() or {}
 
     local y = 0
     for i, r in ipairs(list) do

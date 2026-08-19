@@ -244,10 +244,12 @@ local frame = CreateFrame("Frame", "YippYappReadyCheck", UIParent, "BackdropTemp
 frame:SetSize(WINDOW_WIDTH, 240)
 frame:SetScale(0.85)
 frame:EnableMouse(true)
--- Position, strata and dragging moved to the shared situation window in
--- Core/Hud.lua, which this registers itself with at the bottom of the
--- file. The 0.85 scale stays here: it is how this window is drawn, not
--- where it sits, and the host reserves room for the scaled size.
+-- Above everything, because a ready check is a question with a timer on
+-- it and has to be readable over whatever the raid already has open.
+frame:SetFrameStrata("FULLSCREEN_DIALOG")
+frame:SetToplevel(true)
+-- Position and dragging come from Core/Hud.lua, which this registers
+-- itself with at the bottom of the file.
 frame:SetBackdrop({
     bgFile   = "Interface\\Buttons\\WHITE8x8",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -405,6 +407,11 @@ end
 -- and 60 Show/Hide flips per refresh.
 ------------------------------------------------------------
 local fullRows = {}  -- persistent list; length grows monotonically
+-- Published for Tools/loadcheck.py, which asserts what the columns say
+-- when the client refuses us the aura list. Reading the rendered rows is
+-- the only way to tell "unknown" from "missing" -- they are the same
+-- code path with a different value, and the difference is the point.
+frame._fullRows = fullRows
 
 -- Layout positions only depend on constants (PAD, STATUS_W, NAME_W, COL_W,
 -- ICON_SIZE, #CHECKS_META) so they can be computed once at load time.
@@ -499,6 +506,11 @@ local function MakeFullRow()
                 end
             elseif self._present == false then
                 GameTooltip:AddLine("|cffff4040missing|r")
+            elseif self._blocked then
+                GameTooltip:AddLine("|cff888888unknown|r")
+                GameTooltip:AddLine("The client will not let an addon read auras "
+                    .. "here, so this is not a missing buff -- it is a buff "
+                    .. "we cannot see.", 0.6, 0.6, 0.6, true)
             else
                 GameTooltip:AddLine("|cff888888n/a|r (out of range or not applicable)")
             end
@@ -544,6 +556,10 @@ end
 local function ApplyIconState(iconFrame, opts)
     local present = opts.present
     iconFrame._present = present
+    -- Why it is unknown, when we know why. Without this every blocked
+    -- column hovers as "out of range", which sends people looking for a
+    -- range problem that is not there.
+    iconFrame._blocked = opts.blocked and true or false
     iconFrame._aura    = opts.aura
     if iconFrame._textShown then
         iconFrame.textFs:Hide()
@@ -664,7 +680,7 @@ end
 -- Layout helpers
 ------------------------------------------------------------
 ------------------------------------------------------------
--- Test roster (for /yyhrc preview)
+-- Test roster (for the /yh test ready preview)
 -- 24 fake raiders across classes with varied ready / buff / durability
 -- states so every visual state in the window is exercised.
 ------------------------------------------------------------
@@ -736,7 +752,22 @@ local function ScanUnitAuras_Raw(unit)
     if not unit or not UnitExists(unit) then return out end
     local i = 1
     while true do
-        local a = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
+        -- The CALL itself can now raise, which is new. 11.x made aura
+        -- FIELDS secret, so comparing or indexing with one threw and the
+        -- fix was to wrap those; 12.x moved the wall in front of the
+        -- door: "Auras cannot be accessed when secret while tainted"
+        -- comes out of GetAuraDataByIndex before we touch a field.
+        --
+        -- Nothing we can do restores access -- an addon is tainted by
+        -- definition -- so the only question is whether we fail loudly
+        -- or say we do not know. `blocked` makes the difference visible
+        -- downstream: an empty square claims a raider has no flask, and
+        -- claiming that wrongly is worse than admitting we cannot see.
+        local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, "HELPFUL")
+        if not ok then
+            out.blocked = true
+            break
+        end
         if not a then break end
         local sid = a.spellId
         local nm  = a.name
@@ -811,7 +842,8 @@ local function GatherFromUnit(unit)
 
     local a = ScanUnitAuras(unit)
     local foodState
-    if a.wellfed then foodState = { state = "wellfed", aura = a.wellfed }
+    if a.blocked then foodState = { state = "unknown" }
+    elseif a.wellfed then foodState = { state = "wellfed", aura = a.wellfed }
     elseif a.eating then foodState = { state = "eating" }
     else foodState = { state = "missing" } end
 
@@ -832,6 +864,9 @@ local function GatherFromUnit(unit)
             move   = a.move,
         },
         dur = GetDurabilityFor(unit),
+        -- True when the client refused us the aura list for this unit.
+        -- Every buff column reads as "unknown" rather than "missing".
+        blocked = a.blocked,
         test = false,
     }
 end
@@ -1016,6 +1051,8 @@ local function BuildFullView()
                     })
                 elseif fs.state == "eating" then
                     ApplyIconState(btn, { present = true, iconID = c.iconID, pulse = true })
+                elseif fs.state == "unknown" then
+                    ApplyIconState(btn, { present = nil, iconID = c.iconID, blocked = true })
                 else
                     ApplyIconState(btn, { present = false, iconID = c.iconID })
                 end
@@ -1030,7 +1067,15 @@ local function BuildFullView()
                 end
             else
                 local a = p.aura[c.key]
-                local present = a ~= nil
+                -- Left nil, not false, when the scan was refused: nil is
+                -- the renderer's "unknown" and draws a faded icon, while
+                -- false draws an empty square that reads as an accusation.
+                --
+                -- Written as an if rather than `p.blocked and nil or ...`
+                -- because that idiom cannot yield nil -- the nil branch
+                -- falls straight through to the or.
+                local present
+                if not p.blocked then present = a ~= nil end
                 -- For flask, prefer the actual aura's icon (each phial has its
                 -- own icon texture). For fixed raid buffs (Int/AP/Stam/etc.)
                 -- the spell-based iconID is stable and preferred for uniformity.
@@ -1038,7 +1083,10 @@ local function BuildFullView()
                 if present and c.key == "flask" and a.icon then
                     iconID = a.icon
                 end
-                ApplyIconState(btn, { present = present, iconID = iconID, aura = a })
+                ApplyIconState(btn, {
+                    present = present, iconID = iconID, aura = a,
+                    blocked = p.blocked,
+                })
             end
         end
     end
@@ -1201,7 +1249,7 @@ local function EnableAuraTracking(on)
 end
 
 -- Defined at the top of the file; wired here so that closing the window
--- (manual × click, /yyhrc hide, fade-out animation, parent Hide) always
+-- (manual × click, /yh test off, fade-out animation, parent Hide) always
 -- stops UNIT_AURA bookkeeping — not only the ready-check finish paths.
 onReadyCheckFrameHide = function()
     EnableAuraTracking(false)
@@ -1455,17 +1503,26 @@ local function addIDsTo(set, list, listRef)
     end
 end
 
--- The shared situation window. Top priority of the three: a ready check
--- is a question being asked of you with a timer on it, so it takes the
--- window from the dungeon notes or the after-key summary and hands it
--- straight back when the check finishes.
+-- Its own window, dragged wherever you like while it is open. Top and
+-- centred by default: it is the widest of these windows and the one that
+-- has to be read at a glance by someone deciding whether to click a
+-- button, so it goes where the eye already is rather than off in a
+-- corner. Cleared of the top edge so it does not sit under a raid frame
+-- or a boss timer.
 if ns.Hud then
     ns.Hud:Register("readyCheck", frame, {
-        label    = "Ready Check",
-        priority = 30,
-        strata   = "FULLSCREEN_DIALOG",
-        toplevel = true,
-        preview  = function() Preview(true) end,   -- 24-player test roster
+        label   = "Ready Check",
+        aliases = { "ready", "readycheck", "rc" },
+        default = { point = "TOP", relativePoint = "TOP", x = 0, y = -180 },
+        -- "live" previews the real group; anything else is the 24-player
+        -- test roster. The argument is honoured so that /yh test ready
+        -- covers everything the old /yyhrc did -- otherwise the registry
+        -- offers most of a command and people keep the old one for the
+        -- last bit of it.
+        preview = function(arg)
+            Preview(strtrim(arg or "") ~= "live")
+        end,
+        hide    = function() DismissInstant() end,
     })
 end
 
@@ -1479,13 +1536,6 @@ ns.ReadyCheck = {
     AddBronzeSpellIDs = function(list) addIDsTo(bronzeSet, list, BRONZE_SPELL_IDS) end,
 }
 
-SLASH_YYHREADYCHECK1 = "/yyhrc"
-SlashCmdList.YYHREADYCHECK = function(msg)
-    if msg == "hide" then
-        frame:Hide()
-    elseif msg == "live" then
-        Preview(false)  -- real current group
-    else
-        Preview(true)   -- 24 test characters (default)
-    end
-end
+-- No slash command of its own. /yh test ready, /yh test ready live and
+-- /yh test off cover everything /yyhrc did, through the panel registry
+-- that every other pop-up window already goes through.

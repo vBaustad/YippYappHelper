@@ -39,6 +39,7 @@ shipping item numbers.
 """
 
 import argparse
+import difflib
 import os
 import re
 import sys
@@ -281,6 +282,145 @@ def parse_bis(markup):
     return out
 
 
+# Two names are a typo apart at 0.917 and the closest UNRELATED pair in
+# the corpus is 0.852, so the cut goes in the gap. Chosen from the data
+# rather than picked: "Nymrissa Wavecaller" and "Nymrissa Wavebinder"
+# score 0.789 and must NOT merge -- they are different words, not a
+# misspelling, and only the Encounter Journal knows which one is real.
+SOURCE_MERGE_RATIO = 0.88
+
+# Names the ratio cannot fix, because they are wrong by a whole word
+# rather than by a letter.
+#
+# "Nymrissa Wavecaller" and "Nymrissa Wavebinder" score 0.789 -- close
+# to the unrelated pairs, and nowhere near the 0.917 a typo scores. No
+# threshold separates them safely, so the merge has to be asserted, and
+# asserting it needs a source outside the guides.
+#
+# Every entry here was read off the client's own Encounter Journal.
+# Wavecaller is the boss the journal ships; Wavebinder is the guides'
+# mistake, and the item that drops from her -- Wavecaller's Seastone --
+# had been saying so all along.
+#
+# Keys are _source_key form: lowercase, apostrophes gone, no leading
+# "The". Values are the spelling to emit.
+SOURCE_ALIASES = {
+    "nymrissa wavebinder": "Nymrissa Wavecaller",
+}
+
+# Segments that say how you get a thing rather than where it drops. They
+# never name a place, so they are never canonicalised against one.
+ACQUISITION = {
+    "catalyst", "crafting", "crafted", "tier set", "vault", "misc",
+    "mythic+", "raid", "world boss", "pvp", "delves",
+    "blacksmithing", "jewelcrafting", "leatherworking", "tailoring",
+    "alchemy", "enchanting", "inscription", "engineering",
+}
+
+
+def _source_key(name):
+    """What two spellings of the same place have in common."""
+    n = name.lower().replace("’", "'").replace("'", "")
+    n = re.sub(r"^the\s+", "", n)
+    return " ".join(n.split())
+
+
+def split_source(raw):
+    """A source string as its separate segments.
+
+    Guides join these with "&", "/" and "|", and the pipe is the one that
+    matters: "|" opens an escape sequence in a WoW FontString. So
+    "Tier Set|The Coiled Altar" reaches the client as |T -- the texture
+    escape -- and swallows the rest of the line. Ten rows carried one.
+
+    "(Raid)" goes at the same time. It is on 32 rows and never news: the
+    boss name in front of it already carried the point, and it cost the
+    width that name needed.
+    """
+    raw = re.sub(r"\s*\(Raid\)", "", raw or "")
+    # "Catalyst the The Coiled Altar Shoulders" and "Catalyst - Ula'tek"
+    # are the same statement in two shapes, and neither shape is a name.
+    # Reduce both to the separator the rest of the column uses.
+    raw = re.sub(r"^(Catalyst|Tier Set)\s+the\s+(.*?)\s+"
+                 r"(Head|Shoulders?|Chest|Hands|Gloves|Waist|Legs|Feet|Back|Wrist)$",
+                 r"\1 / \2", raw, flags=re.I)
+    raw = re.sub(r"^(Catalyst|Tier Set)\s*-\s*", r"\1 / ", raw, flags=re.I)
+    parts = [p.strip() for p in re.split(r"\s*[&/|]\s*", raw)]
+    return [p for p in parts if p]
+
+
+def canonical_sources(all_specs):
+    """Settle on one spelling per place, and split names glued together.
+
+    The guides are written by hand, and the same raid appears as "The
+    Coiled Altar" 110 times and "The Coiled Alter" 6 -- plus three
+    spellings of King's Rest and two of Entombed Sentinels. Left alone
+    that is three separate problems: the page displays a misspelling, one
+    place sorts as two, and an Encounter Journal lookup misses silently.
+
+    Majority wins, which is what makes this self-maintaining. Nothing
+    here hardcodes which spelling is correct, so a guide that fixes its
+    own typo simply moves the count and this follows it.
+    """
+    counts = {}
+    for _key, data in all_specs:
+        for row in data.get("bis", []):
+            for seg in split_source(row.get("source", "")):
+                counts[seg] = counts.get(seg, 0) + 1
+
+    # Most frequent first, so a cluster is always named by its winner.
+    ordered = sorted(counts, key=lambda n: (-counts[n], n))
+    canon = {}
+    for name in ordered:
+        # Asserted corrections first: they outrank both the majority and
+        # the ratio, because they were checked against the game and
+        # those two were not.
+        alias = SOURCE_ALIASES.get(_source_key(name))
+        if alias:
+            canon[name] = alias
+            continue
+        if _source_key(name) in ACQUISITION:
+            canon[name] = name
+            continue
+        for winner in canon.values():
+            if _source_key(winner) in ACQUISITION:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None, _source_key(winner), _source_key(name)).ratio()
+            if ratio >= SOURCE_MERGE_RATIO:
+                canon[name] = winner
+                break
+        else:
+            canon[name] = name
+
+    # Two names run together with no separator -- "The Coiled Altar
+    # Sszorak", "Crafting Blacksmithing". Split only where the whole
+    # segment is exactly one known name followed by another, so a real
+    # multi-word name can never be torn in half.
+    known = sorted(set(canon.values()), key=len, reverse=True)
+
+    def unglue(seg):
+        for a in known:
+            if seg.startswith(a + " ") and len(seg) > len(a) + 1:
+                rest = seg[len(a) + 1:]
+                if rest in canon:
+                    return [a, canon[rest]]
+        return [seg]
+
+    rewritten = 0
+    for _key, data in all_specs:
+        for row in data.get("bis", []):
+            segs = []
+            for seg in split_source(row.get("source", "")):
+                for piece in unglue(canon.get(seg, seg)):
+                    if piece not in segs:
+                        segs.append(piece)
+            new = " / ".join(segs)
+            if new != (row.get("source") or ""):
+                rewritten += 1
+            row["source"] = new
+    return rewritten
+
 def parse_season(markup):
     m = re.search(r"Midnight Season \d+", markup)
     return m.group(0) if m else ""
@@ -411,6 +551,10 @@ def main():
         print("%-24s %2d stat lists  %2d bis slots%s%s"
               % (key, len(stats), len(bis), stale,
                  "  <-- EMPTY: " + ", ".join(empty) if empty else ""))
+
+    fixed = canonical_sources(results)
+    if fixed:
+        print("normalised %d source strings (one spelling per place)" % fixed)
 
     print("\n%d/%d specs parsed" % (len(results), len(targets)))
     if emptied:

@@ -43,6 +43,15 @@ ns.CRESTS = {
     { id = 3446, candidates = { 3446, 3441 }, name = "Myth Mistcrest",       color = "ffff0000", track = "Myth"       },
 }
 
+--- The catalyst charge currency.
+---
+--- Recorded rather than derived, like the crest rows above and with the
+--- same caveat: nothing in the client marks which currency this is, so
+--- it can only be written down. Cross-checked against LariasWeeklyChecklist's
+--- constants file, which is maintained against a live client each season.
+--- Verify at wowhead.com/currency=3465 when a season rolls.
+ns.CATALYST_CURRENCY_ID = 3465
+
 -- Season 1 Dawncrests. Kept only so the addon can warn about crests
 -- left unspent when Season 1 locks at the 12.1 launch.
 ns.LEGACY_CRESTS = {
@@ -147,11 +156,37 @@ function ns:GetCrestWeeklyInfo(track)
         if crest.track == track then
             local info = C_CurrencyInfo.GetCurrencyInfo(crest.id)
             if info then
+                local earned = info.quantityEarnedThisWeek or 0
+                local cap    = info.maxWeeklyQuantity or 0
+
+                -- Crests are capped CUMULATIVELY, not weekly.
+                --
+                -- Dumping every currency the client caps per week comes
+                -- back with two, and no crest is either of them --
+                -- maxWeeklyQuantity is zero on all five. The allowance
+                -- is a season total that grows by CREST_WEEKLY_INCREMENT
+                -- each week and is measured against totalEarned, which
+                -- is what useTotalEarnedForMaxQty means.
+                --
+                -- Reading only the weekly fields therefore reported a
+                -- cap of zero for every crest, so "have you capped this
+                -- week" could never answer yes -- on a character that
+                -- had.
+                if cap <= 0 and (info.maxQuantity or 0) > 0
+                    and info.useTotalEarnedForMaxQty then
+                    earned = info.totalEarned or 0
+                    cap    = info.maxQuantity
+                end
+
                 return {
                     quantity = info.quantity,
-                    earnedThisWeek = info.quantityEarnedThisWeek or 0,
-                    weeklyMax = info.maxWeeklyQuantity or 0,
-                    weeklyRemaining = math.max((info.maxWeeklyQuantity or 0) - (info.quantityEarnedThisWeek or 0), 0),
+                    earnedThisWeek = earned,
+                    weeklyMax = cap,
+                    weeklyRemaining = math.max(cap - earned, 0),
+                    -- So callers can say "300 this season" rather than
+                    -- "300 this week", which would be a different and
+                    -- wrong claim.
+                    cumulative = (info.maxWeeklyQuantity or 0) <= 0,
                 }
             end
         end
@@ -198,9 +233,29 @@ function ns:RefreshCrests()
                 end
             end
 
+            -- What the balance BUYS, next to the balance itself.
+            --
+            -- A crest count on its own is not a number anyone acts on --
+            -- the question is always how many upgrades it is, and the
+            -- suggestions below refer to exactly that. It used to be
+            -- carried by a per-track header down in the list, which both
+            -- restated these rows and pushed the advice off the page.
+            local buysStr = ""
+            local plan = ns.GetCrestPlan and ns:GetCrestPlan(data.track)
+            if plan and plan.slotCount > 0 then
+                buysStr = string.format("  |cffdddddd%d up|r", plan.affordableNow)
+                if plan.reserve > 0 then
+                    -- Named, because a reserve is the addon declining to
+                    -- plan crests the player can see in this very row.
+                    buysStr = buysStr .. string.format(
+                        "  |cffffcc44%d kept|r", plan.reserve)
+                end
+            end
+
             frame.text:SetText(string.format(
-                "|c%s%s|r  %d%s%s%s",
-                data.color, data.track, data.quantity, discountStr, capStr, weekStr
+                "|c%s%s|r  %d%s%s%s%s",
+                data.color, data.track, data.quantity, discountStr,
+                buysStr, capStr, weekStr
             ))
             if not hideDefault then frame:Show() end
         else

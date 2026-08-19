@@ -1519,6 +1519,9 @@ function ns:LootBrowser_RefreshDisplay()
     ReleaseAll()
     f._loadingText:Hide()
     f._noItemsText:Hide()
+    -- Not pooled, so ReleaseAll does not reach it. Every render that
+    -- still wants it puts it back.
+    if f._prevTiersToggle then f._prevTiersToggle:Hide() end
 
     local specIndex = ns.lootBrowserState.selectedSpecIndex
     if not specIndex then return end
@@ -1580,6 +1583,18 @@ function ns:LootBrowser_RefreshDisplay()
         for _, inst in ipairs(shaped) do
             shapedLookup[inst.instanceName] = inst
         end
+    end
+
+    -- Hold the loading line while a pass is still running.
+    --
+    -- The scan is spread across frames now, so the first ask comes back
+    -- empty and finishes a moment later -- see the runner in
+    -- LootBrowserData.lua, which calls this again when it lands. Hiding
+    -- the line here regardless would flash "no items" at somebody whose
+    -- items are on the way.
+    if ns.IsLootScanRunning and ns:IsLootScanRunning() then
+        f._loadingText:Show()
+        return
     end
 
     f._loadingText:Hide()
@@ -1845,6 +1860,63 @@ function ns:LootBrowser_RefreshDisplay()
         yOff = yOff + SECTION_INNER_PAD + SECTION_GAP
     end
 
+    --- The "Previous tiers" disclosure, drawn at the current cursor.
+    ---
+    --- One persistent frame rather than a pooled one: the page never has
+    --- more than a single disclosure on it, and the pools are released
+    --- wholesale at the top of every render, which would take this with
+    --- them. It is hidden there instead, and shown again only by the
+    --- branch that wants it.
+    local PREV_TOGGLE_H = 28
+    local function RenderPreviousTiersToggle(count, expanded)
+        local b = f._prevTiersToggle
+        if not b then
+            b = CreateFrame("Button", nil, f._content)
+            b:SetHeight(PREV_TOGGLE_H)
+
+            b.icon = b:CreateTexture(nil, "OVERLAY")
+            b.icon:SetSize(16, 16)
+            b.icon:SetPoint("LEFT", b, "LEFT", 10, 0)
+
+            b.label = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            b.label:SetPoint("LEFT", b.icon, "RIGHT", 6, 0)
+            ns.ApplyTextShadow(b.label)
+
+            local hl = b:CreateTexture(nil, "HIGHLIGHT")
+            hl:SetAllPoints()
+            hl:SetColorTexture(1, 1, 1, 0.05)
+            hl:SetBlendMode("ADD")
+
+            b:SetScript("OnClick", function()
+                ns.lootBrowserState.showPreviousTiers =
+                    not ns.lootBrowserState.showPreviousTiers
+                ns:LootBrowser_RefreshDisplay()
+            end)
+
+            f._prevTiersToggle = b
+        end
+
+        -- Re-pinned every render, for the reason the pooled rows are: the
+        -- section cards behind them take the content frame's CURRENT
+        -- level, and anything left holding an older one ends up under the
+        -- card it is supposed to sit on.
+        b:SetFrameLevel((f._content:GetFrameLevel() or 1) + 1)
+        b:SetWidth(contentW)
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", f._content, "TOPLEFT", 0, -yOff)
+
+        -- Blizzard's own collapsible-header glyphs: they have shipped
+        -- since vanilla, so unlike an atlas they need no fallback.
+        b.icon:SetTexture(expanded
+            and "Interface\\Buttons\\UI-MinusButton-Up"
+            or  "Interface\\Buttons\\UI-PlusButton-Up")
+        b.label:SetText(("Previous tiers (%d)"):format(count))
+        b.label:SetTextColor(ns.Widgets:Color("muted"))
+        b:Show()
+
+        yOff = yOff + PREV_TOGGLE_H + SECTION_GAP
+    end
+
     ------------------------------------------------------------
     -- Collect the items one boss drops, keeping the highest difficulty
     -- version of each item. Shared by both views now that dungeons are
@@ -1974,7 +2046,7 @@ function ns:LootBrowser_RefreshDisplay()
 
     elseif view == "raid" then
         -- Raid view: boss-by-boss rows grouped under raid headers.
-        for _, raidInst in ipairs(cache.raids) do
+        local function RenderRaidSection(raidInst)
             local data = shapedLookup[raidInst.name]
             local count = data and #(data.items or {}) or 0
             local sec, rowsTop = OpenSection(raidInst.name,
@@ -1982,6 +2054,24 @@ function ns:LootBrowser_RefreshDisplay()
                     count, count ~= 1 and "s" or "") or nil)
             RenderBossRows(raidInst, "raid", data)
             CloseSection(sec, rowsTop)
+        end
+
+        -- Retired raids stay reachable, but folded away by default: the
+        -- journal lists them ahead of the current one, so the page used
+        -- to open on loot nobody is farming.
+        local current, previous = ns:SplitRaidsByTier(cache.raids)
+        for _, raidInst in ipairs(current) do
+            RenderRaidSection(raidInst)
+        end
+
+        if #previous > 0 then
+            local expanded = ns.lootBrowserState.showPreviousTiers
+            RenderPreviousTiersToggle(#previous, expanded)
+            if expanded then
+                for _, raidInst in ipairs(previous) do
+                    RenderRaidSection(raidInst)
+                end
+            end
         end
     end
 

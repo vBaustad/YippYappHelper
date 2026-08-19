@@ -178,10 +178,11 @@ function S:Open()
 end
 function S:Toggle() S:Open() end
 
-SLASH_YYHINTERRUPTS1 = "/yyhinterrupts"
-SlashCmdList.YYHINTERRUPTS = function() S:Toggle() end
-
+-- One name, not three. /yyhsettings was a straight duplicate of this,
+-- and /yyhinterrupts was named after a single feature while opening the
+-- whole options panel. /yh settings is the command to reach for now;
+-- this one survives because it is short and people have it in muscle
+-- memory.
 SLASH_YYHSETTINGS1 = "/yyhopts"
-SLASH_YYHSETTINGS2 = "/yyhsettings"
 SlashCmdList.YYHSETTINGS = function() S:Toggle() end
 ns.OpenSettings = function() S:Open() end

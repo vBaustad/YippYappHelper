@@ -17,12 +17,29 @@ local dataObject = LDB:NewDataObject("YippYappHelper", {
 
     OnClick = function(self, button)
         if button == "LeftButton" then
-            if ns.ToggleApp then
+            -- Through OpenMain, which is what "open YippYapp" means and
+            -- which prefers the shell. This used to call ToggleApp
+            -- directly, so the addon's most-clicked button was the one
+            -- door that still opened the pre-shell window.
+            if ns.OpenMain then
+                ns:OpenMain()
+            elseif ns.ToggleApp then
                 ns:ToggleApp()
             elseif ns.ToggleDashboard then
                 ns:ToggleDashboard()
             end
         elseif button == "RightButton" then
+            -- The shell's Gear page, not the standalone gear window.
+            --
+            -- This shortcut predates both later UIs and still opened the
+            -- original frame -- so the same icon handed you two different
+            -- addons depending on which button you pressed. The old
+            -- window is still built and still opens at an upgrade vendor
+            -- and on /yh classic; it is just no longer something you can
+            -- arrive at without asking for it.
+            if ns.OpenTo and ns:OpenTo("gear") then
+                return
+            end
             if ns.MainFrame then
                 if ns.MainFrame:IsShown() then
                     ns.MainFrame:Hide()

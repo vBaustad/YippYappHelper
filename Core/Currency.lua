@@ -134,6 +134,26 @@ end
 --- `quantity`), while season currencies cap what you may earn in total
 --- (`useTotalEarnedForMaxQty`, measured against `totalEarned`). Reading
 --- the wrong one shows a full wallet as empty the moment you spend.
+--- Find one of the player's currencies by name.
+---
+--- By name rather than by id on purpose. The ids for this season's
+--- currencies are not published anywhere I can check against the client,
+--- and a wrong one does not error -- it silently reads zero and turns
+--- every suggestion built on it into a lie. A name lookup is
+--- locale-bound, which is a real limitation, but it fails by finding
+--- nothing rather than by finding the wrong thing.
+---
+--- Returns the entry ({ currencyID, name, quantity, ... }) or nil.
+function ns:FindCurrencyByName(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    for _, group in ipairs(self:GetCurrencyGroups() or {}) do
+        for _, entry in ipairs(group.items or {}) do
+            if entry.name == name then return entry end
+        end
+    end
+    return nil
+end
+
 function ns:GetCurrencyCapProgress(entry)
     if not entry or (entry.maxQuantity or 0) <= 0 then return nil end
     local have = entry.useTotalEarned and entry.totalEarned or entry.quantity

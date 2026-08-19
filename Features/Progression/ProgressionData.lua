@@ -312,11 +312,17 @@ ns.PROGRESSION.VENOMSTONES = {
 ------------------------------------------------------------
 -- Great Vault / Bonus Rolls
 ------------------------------------------------------------
+-- The first line used to read "from week 1 of S2", which contradicted
+-- ns.SEASON_VOIDCORE_START in Core/Data.lua -- the date the planner
+-- actually gates its advice on. Blizzard moved bonus rolls off the
+-- opening week before launch; the second vault is the first one that
+-- offers them.
 ns.PROGRESSION.VAULT_NOTES = {
-    "Nebulous Voidcores are a vault reward option from week 1 of S2",
+    "Nebulous Voidcores first appear in the SECOND vault of S2 (25 Aug)",
     "You need 3 filled slots in a week to claim the Bonus Roll option",
     "Orin Straylight (at the Catalyst in Silvermoon) adds 1/week from week 8",
     "Bonus Roll item level follows the boss you roll, not the slots you filled",
+    "A roll pays as the vault would: Heroic boss = Myth 1/6, Mythic boss = Myth 6/6",
     "Taking an item from the vault does NOT remove it from the Bonus Roll pool",
 }
 

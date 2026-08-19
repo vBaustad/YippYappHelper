@@ -415,7 +415,11 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         if CharacterFrame and not characterFrameHooked then
             CharacterFrame:HookScript("OnShow", function()
                 if ns.upgradeVendorOpen then
-                    HideUIPanel(CharacterFrame)
+                    -- securecall for the same reason as Core/EditMode.lua:
+                    -- HideUIPanel runs inside the secure
+                    -- FramePositionDelegate, and calling it from a hook we
+                    -- installed taints panel management for the session.
+                    securecall("HideUIPanel", CharacterFrame)
                 end
             end)
             characterFrameHooked = true
@@ -473,6 +477,139 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         ns:RefreshGearViews()
     end
 end)
+
+--- Opens the addon's main window: the one thing "open YippYapp" means.
+---
+--- The chain matters. The front door is the shell; the old app frame and
+--- the dashboard are fallbacks, and they still have to be, because a
+--- .toc change needs a full client restart -- somebody who only reloaded
+--- after an update will not have Core/Shell.lua loaded at all, and
+--- "nothing happens" is the worst possible answer to a key press.
+--- Whether the main window is on screen right now, whichever of the
+--- three possible windows is the one in use.
+local function mainIsOpen()
+    if ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen() then return true end
+    if ns.AppFrame and ns.AppFrame:IsShown() then return true end
+    return false
+end
+
+--- One line in chat about what combat is stopping, throttled.
+---
+--- Throttled because the things that call it are things you press: a
+--- keybinding, a macro on the bars, the close button. One line per press
+--- turns a small annoyance into a wall of chat, and the second press is
+--- almost always the same person trying the same thing again.
+local combatNagAt = 0
+function ns.CombatNotice(what)
+    local now = GetTime()
+    if now - combatNagAt < 2 then return end
+    combatNagAt = now
+    print("|cff00ff00YippYapp Helper|r: " .. what)
+end
+
+--- Refuses to open the window in combat, and says so.
+---
+--- Not caution for its own sake. The Mythic+ and Teleports pages mount
+--- SecureActionButtonTemplate tiles inside the window, and a frame
+--- holding a protected frame is protected itself, so once either page
+--- has been opened the window's own Show is a protected call for the
+--- rest of the session. Opening mid-fight is refused by the client and
+--- charged to us:
+---
+---   [ADDON_ACTION_BLOCKED] AddOn 'YippYappHelper' tried to call the
+---   protected function 'YippYappShell:Show()'
+---
+--- Blocked calls are silent unless scriptErrors is on or an error
+--- grabber is installed, so without this the key press simply did
+--- nothing and the addon looked broken rather than busy.
+---
+--- Closing is protected for the same reason, and is handled where it
+--- happens: Core/ShellFrame.lua defers the hide to the end of combat.
+local function blockedByCombat()
+    if not InCombatLockdown() then return false end
+    ns.CombatNotice("can't open in combat — try again after the fight.")
+    return true
+end
+
+function ns:OpenMain()
+    if not mainIsOpen() and blockedByCombat() then return end
+    if ns.Shell and ns.Shell.Toggle then
+        ns.Shell:Toggle()
+    elseif ns.ToggleApp then
+        ns:ToggleApp()
+    elseif ns.ToggleDashboard then
+        ns:ToggleDashboard()
+    end
+end
+
+--- Opens the main window on a particular page.
+---
+--- The same front door as OpenMain, and the same fallback chain, for the
+--- callers that know where they want to land.
+---
+--- Everything that wanted a specific page used to reach past OpenMain and
+--- drive ns.AppFrame directly. That is how a scattering of buttons -- the
+--- minimap icon, the Group Finder tab, the after-key summary's "Open
+--- Mythic+ window", half the slash commands -- carried on opening the
+--- pre-shell window long after the shell became the addon's UI. Somebody
+--- clicking one of those got a different-looking addon than the one they
+--- had just been using, which reads as a bug whichever window they
+--- preferred.
+---
+--- Every page id the old frame knew is registered with the shell too
+--- (home, gear, bis, trinkets, consumables, progression, loot,
+--- mythicplus, raid, teleports, and delves on top), so nothing loses its
+--- destination in the move.
+function ns:OpenTo(id)
+    if not mainIsOpen() and blockedByCombat() then return false end
+    if ns.Shell and ns.Shell.Open then
+        ns.Shell:Open(id)
+        return true
+    end
+    if ns.AppFrame and ns.ShowAppPage then
+        if not ns.AppFrame:IsShown() and ns.ToggleApp then ns:ToggleApp() end
+        ns:ShowAppPage(id)
+        return true
+    end
+    return false
+end
+
+
+--- Opens the game's Key Bindings panel, where our binding lives.
+---
+--- Guarded rather than assumed: the modern client files keybindings as a
+--- Settings category, older ones had a panel of their own, and a button
+--- that silently does nothing is worse than one that tells you where to
+--- go. So each step is tried and the last resort is saying it out loud.
+function ns.OpenKeybindings()
+    if Settings and Settings.OpenToCategory and Settings.KEYBINDINGS_CATEGORY_ID then
+        Settings.OpenToCategory(Settings.KEYBINDINGS_CATEGORY_ID)
+        return true
+    end
+    if SettingsPanel and ShowUIPanel then
+        ShowUIPanel(SettingsPanel)
+        print("|cff00ff00YippYapp|r the binding is under Key Bindings - YippYapp Helper.")
+        return true
+    end
+    print("|cff00ff00YippYapp|r bind it under Esc - Options - Key Bindings - YippYapp Helper.")
+    return false
+end
+
+--- The keybinding's target, which has to be a global: Bindings.xml runs
+--- its body in the global environment and cannot see our namespace.
+---
+--- Named for the addon rather than something short and grabbable --
+--- every addon shares one global namespace, and a `YippYapp_Toggle` is
+--- the kind of name two addons pick and one of them loses.
+function YippYappHelper_Toggle()
+    ns:OpenMain()
+end
+
+-- What the Key Bindings panel calls these. The header is the section it
+-- files them under; without it the binding lands in a nameless block at
+-- the bottom of the list.
+BINDING_HEADER_YIPPYAPPHELPER = "YippYapp Helper"
+BINDING_NAME_YIPPYAPPHELPER_TOGGLE = "Open YippYapp"
 
 SLASH_YIPPYAPPHELPER1 = "/yh"
 SLASH_YIPPYAPPHELPER2 = "/yippyapp"
@@ -562,23 +699,24 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("|cff00ff00=== YippYapp Helper ===|r")
         print("  /yh — open the app")
         print("  /yh shell <page> — open a specific page")
-        print("  /yh classic — the old window")
-        print("  /yh raid — scan raid/party for tier pieces")
+        print("     |cff888888pages: home, gear, bis, trinkets, consumables,|r")
+        print("     |cff888888progression, loot, mythicplus, raid, teleports, delves|r")
+        print("  /yh classic — the retired pre-shell window")
         print("  /yh guide — boss guide for the current raid")
         print("  /yh train [boss] — practise a boss's mechanics")
-        print("  /yh mplus — open Mythic+ helper")
-        print("  /yh loot — open loot browser")
         print("  /yh profile — show/set player profile")
         print("  /yh profile <name> — set profile (normal, heroic, mythic)")
         print("  /yh discount <track> — toggle crest discount for a track (adventurer, veteran, champion, hero, myth)")
         print("  /yh discounts — show current discount status")
         print("  /yh brez — Battle Res Timer options")
+        print("  /yh settings — open the options panel")
+        print("  /yh skin [id] — list or choose a skin")
+        print("  /yh advisor — what Mr. Yeeper makes of your character")
         print("  /yh whatsnew — what changed this patch")
         print("  /yh fun — fun stat counters (/yh fun reset to clear)")
         print("  /yh introreset — replay Mr. Yeeper's introduction")
         print("  /yh edit — move YippYapp frames via Edit Mode")
-        print("  /yh icon [size] [x] [y] — tune the minimap icon fit")
-        print("  /yh debug — dump slot data to chat")
+        print("  /yh test [panel] — show a panel with sample content (/yh test for the list)")
         return
     end
 
@@ -616,10 +754,33 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh classic — the pre-shell window, still the frame that opens at
-    -- an upgrade vendor.
+    -- /yh classic — the retired pre-shell window.
+    --
+    -- Retired, not removed. It is no longer reachable by accident: every
+    -- button, icon and page-specific command now goes through OpenTo or
+    -- OpenMain, which prefer the shell. What is left is this command,
+    -- the fallback rungs inside those two functions for a session where
+    -- the shell has not loaded, and the gear frame that still opens at
+    -- an upgrade vendor because that flow was built around it.
+    --
+    -- Worth keeping for now: it is the comparison for anything the shell
+    -- has not finished absorbing, and it costs nothing to leave built.
     if cmd == "classic" then
         if ns.ToggleApp then ns:ToggleApp() end
+        return
+    end
+
+    -- /yh settings — the options panel.
+    --
+    -- New, and overdue. The only ways in used to be three global slash
+    -- names -- /yyhopts, /yyhsettings and /yyhinterrupts -- all calling
+    -- the same function, the last of them named after a single feature
+    -- while opening the whole panel. Two are gone; settings live under
+    -- the addon's own command now, like everything else.
+    if cmd == "settings" or cmd == "options" or cmd == "opts" then
+        if ns.OpenSettings then ns.OpenSettings()
+        elseif ns.OpenBlizzardSettings then ns.OpenBlizzardSettings()
+        else print("|cffff5555YippYapp:|r settings are not loaded.") end
         return
     end
 
@@ -654,6 +815,61 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
+    -- /yh test [panel] — put one of the situation window's panels on
+    -- screen with sample content.
+    --
+    -- None of these three can be summoned in normal play: you cannot
+    -- start a ready check to see where it sits, and the after-key
+    -- summary needs a finished keystone. Edit Mode can show them, but
+    -- Edit Mode also dims the world and locks out the rest of the UI --
+    -- which is exactly wrong for "does this look right while I am
+    -- playing". The panel list comes from the window itself, so a fourth
+    -- panel is testable the day it registers.
+    if cmd == "test" then
+        if not ns.Hud then
+            print("|cffff5555YippYapp:|r the situation window is not loaded.")
+            return
+        end
+        -- Split once: the first word names the panel, the rest belongs
+        -- to the panel. "/yh test utility next" is the utility notes
+        -- being told "next", not a panel called "utility next".
+        local want, rest = strsplit(" ", strtrim(arg or ""), 2)
+        want = strtrim(want or "")
+        if want == "off" or want == "hide" then
+            ns.Hud:ReleaseAll()
+            return
+        end
+        local id = ns.Hud:Find(want)
+        if id then
+            ns.Hud:PreviewMode(id, rest)
+            -- The panel prints its own line when it has something to say
+            -- about the argument -- which dungeon it landed on, say -- so
+            -- only announce the bare case.
+            if not rest or strtrim(rest) == "" then
+                print("|cff00ff00YippYapp|r showing " .. id
+                    .. " — |cff888888/yh test off|r to dismiss")
+            end
+            return
+        end
+        if want ~= "" then
+            print("|cffff5555YippYapp:|r no panel called \"" .. want .. "\".")
+        end
+        print("|cff00ff00=== YippYapp panels ===|r")
+        local order, modes = ns.Hud:Modes()
+        for _, key in ipairs(order) do
+            local m = modes[key]
+            -- Led by the alias rather than the id: the id is how the
+            -- code spells it, the alias is how a person would.
+            local aliases = m.aliases or {}
+            print(("  /yh test %-10s |cff888888%s|r"):format(aliases[1] or key, m.label or key))
+            local names = key
+            for i = 2, #aliases do names = names .. ", " .. aliases[i] end
+            print(("     |cff666666or: %s|r"):format(names))
+        end
+        print("  /yh test off      |cff888888dismiss whatever is up|r")
+        return
+    end
+
     -- /yh editdebug — why a frame has no Edit Mode outline
     if cmd == "editdebug" then
         if ns.EditModeDebug then ns.EditModeDebug()
@@ -667,29 +883,13 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh icon [size] [offsetX] [offsetY] — dial in the minimap ring fit
+    -- /yh icon [size] [offsetX] [offsetY] — dial in the minimap ring fit.
+    -- Unlisted in /yh help: dialling in an icon's pixel fit is a thing
+    -- only somebody working on the addon does.
     if cmd == "icon" then
         if ns.TuneMinimapIcon then
             local s, x, y = strsplit(" ", strtrim(arg or ""))
             ns:TuneMinimapIcon(tonumber(s), tonumber(x), tonumber(y))
-        end
-        return
-    end
-
-    -- /yh raid
-    if cmd == "raid" then
-        if ns.AppFrame then
-            ns:ToggleApp()
-            if ns.AppFrame:IsShown() then
-                ns:ShowAppPage("raid")
-            end
-        elseif ns.RaidFrame then
-            if ns.RaidFrame:IsShown() then
-                ns.RaidFrame:Hide()
-            else
-                ns.RaidFrame:Show()
-                if ns.RefreshRaidOverview then ns:RefreshRaidOverview() end
-            end
         end
         return
     end
@@ -700,11 +900,8 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     -- find the tab": the moment somebody wants this is thirty seconds
     -- before a pull, and three clicks is two too many.
     if cmd == "guide" then
-        if ns.AppFrame then
-            if not ns.AppFrame:IsShown() then ns:ToggleApp() end
-            ns:ShowAppPage("raid")
-            if ns.Shell then ns.Shell:SetSubTab("raid", "guide") end
-        end
+        ns:OpenTo("raid")
+        if ns.Shell and ns.Shell.SetSubTab then ns.Shell:SetSubTab("raid", "guide") end
         return
     end
 
@@ -768,10 +965,17 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
                     print("  " .. p.id .. " — " .. p.name)
                 end
             else
-                -- Refresh if window is open
-                if ns.MainFrame and ns.MainFrame:IsShown() then
-                    ns:RefreshAllSlots()
-                    ns:RefreshCrests()
+                -- Refresh whatever is actually on screen.
+                --
+                -- This only ever refreshed ns.MainFrame, so changing
+                -- profile while the shell was open left the gear page
+                -- showing the previous profile's advice until something
+                -- else happened to redraw it.
+                if ns.RefreshAllSlots then ns:RefreshAllSlots() end
+                if ns.RefreshCrests then ns:RefreshCrests() end
+                if ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen()
+                    and ns.Shell.RefreshPage and ns.Shell._lastPage then
+                    ns.Shell:RefreshPage(ns.Shell._lastPage)
                 end
             end
         else
@@ -843,46 +1047,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh loot
-    if cmd == "loot" then
-        if ns.AppFrame then
-            ns:ToggleApp()
-            if ns.AppFrame:IsShown() then
-                ns:ShowAppPage("loot")
-            end
-        else
-            if not ns.LootBrowserFrame then
-                ns:CreateLootBrowserFrame()
-            end
-            if ns.LootBrowserFrame:IsShown() then
-                ns.LootBrowserFrame:Hide()
-            else
-                ns:LootBrowser_DetectSpec()
-                ns.LootBrowserFrame:Show()
-                ns:LootBrowser_ShowPage()
-            end
-        end
-        return
-    end
-
-    -- /yh mplus
-    if cmd == "mplus" or cmd == "m+" or cmd == "mythicplus" then
-        if ns.AppFrame then
-            ns:ToggleApp()
-            if ns.AppFrame:IsShown() then
-                ns:ShowAppPage("mythicplus")
-            end
-        elseif ns.MythicPlusFrame then
-            if ns.MythicPlusFrame:IsShown() then
-                ns.MythicPlusFrame:Hide()
-            else
-                ns.MythicPlusFrame:Show()
-                ns:RefreshMythicPlus()
-            end
-        end
-        return
-    end
-
     -- /yh brez [subcommand] — Battle Res Timer
     if cmd == "brez" or cmd == "battleres" then
         if ns.BattleResTimer and ns.BattleResTimer.HandleSlash then
@@ -893,7 +1057,9 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh debug
+    -- /yh debug — crest and slot state, dumped to chat.
+    -- Unlisted in /yh help, same as ejdump and editdebug: it prints the
+    -- gear engine's working, which is a developer's question.
     if cmd == "debug" then
         print("|cff00ff00=== YippYapp Debug ===|r")
         local profile = ns:GetCurrentProfile()
@@ -927,18 +1093,5 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     end
 
     -- Default: the shell.
-    --
-    -- It was /yh shell while the pages moved across, with bare /yh
-    -- opening the old app frame. All nine pages are on the shell now, so
-    -- the front door is the shell and the old frame is the fallback --
-    -- which it still needs to be, because a .toc change needs a full
-    -- client restart and someone who only reloaded will not have
-    -- Core/Shell.lua loaded at all.
-    if ns.Shell and ns.Shell.Toggle then
-        ns.Shell:Toggle()
-    elseif ns.ToggleApp then
-        ns:ToggleApp()
-    elseif ns.ToggleDashboard then
-        ns:ToggleDashboard()
-    end
+    ns:OpenMain()
 end

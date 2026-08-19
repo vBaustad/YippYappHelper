@@ -59,6 +59,42 @@ local function AddModuleCheckbox(category, module, name, tooltip)
         end)
 end
 
+--- A slider backed by an arbitrary getter/setter.
+---
+--- New here because the only sliders this addon had lived in the Edit
+--- Mode dialogs, and those are gone for the windows that move
+--- themselves. Guarded like the rest: a client without the API drops the
+--- control rather than erroring the whole options page.
+local function AddSlider(category, key, name, tooltip, minV, maxV, step, get, set, fmt)
+    if not Settings.CreateSlider then return end
+    local setting = Settings.RegisterProxySetting(
+        category, "YYH_" .. key, VarType("number"), name, minV,
+        function() return get() end,
+        function(v) set(v) end)
+    local options = Settings.CreateSliderOptions(minV, maxV, step)
+    if options and options.SetLabelFormatter and MinimalSliderWithSteppersMixin then
+        options:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right,
+            fmt or function(v) return tostring(math.floor(v)) end)
+    end
+    Settings.CreateSlider(category, setting, options, tooltip)
+    return setting
+end
+
+--- A two-value choice, rendered as a dropdown.
+local function AddChoice(category, key, name, tooltip, values, get, set)
+    if not Settings.CreateDropdown then return end
+    local setting = Settings.RegisterProxySetting(
+        category, "YYH_" .. key, VarType("string"), name, values[1].value,
+        function() return get() end,
+        function(v) set(v) end)
+    Settings.CreateDropdown(category, setting, function()
+        local container = Settings.CreateControlTextContainer()
+        for _, v in ipairs(values) do container:Add(v.value, v.text, v.tooltip) end
+        return container:GetData()
+    end, tooltip)
+    return setting
+end
+
 local function AddHeader(layout, text)
     if not CreateSettingsListSectionHeaderInitializer then return end
     layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(text))
@@ -116,8 +152,41 @@ local function BuildAll(category, layout)
         "Surfaces a per-spec utility checklist (defensives, dispels, CC) "
         .. "when you enter a Mythic+ dungeon.")
 
+    -- These two used to live in the advisor's Edit Mode dialog. That
+    -- dialog is gone -- the window is dragged where you want it while it
+    -- is open instead -- so its appearance options come here, where
+    -- every other non-positional setting already is.
+    AddChoice(category, "utilityDisplay", "Utility advisor display",
+        "Full notes explains what each dungeon does to you. Abilities "
+        .. "only keeps the icon row and drops the text.",
+        {
+            { value = "full",    text = "Full notes" },
+            { value = "compact", text = "Abilities only" },
+        },
+        function()
+            local UA = ns.UtilityAdvisor
+            return (UA and UA:IsCompact()) and "compact" or "full"
+        end,
+        function(v)
+            local UA = ns.UtilityAdvisor
+            if UA and UA.SetCompact then UA:SetCompact(v == "compact") end
+        end)
+
+    AddSlider(category, "utilityIconSize", "Utility advisor icon size",
+        "How large the ability icons are drawn in the utility advisor.",
+        24, 64, 4,
+        function()
+            local UA = ns.UtilityAdvisor
+            return (UA and UA.GetIconSize and UA:GetIconSize()) or 48
+        end,
+        function(v)
+            local UA = ns.UtilityAdvisor
+            if UA and UA.SetIconSize then UA:SetIconSize(v) end
+        end,
+        function(v) return ("%dpx"):format(math.floor(v)) end)
+
     AddCheckbox(category, "trinketTooltips", "Trinket sim rankings",
-        "Adds simulated DPS rankings from bloodmallet to trinket tooltips.",
+        "Adds simulated rankings to trinket tooltips -- DPS from bloodmallet, healer HPS from QE Live.",
         function()
             YippYappHelperDB = YippYappHelperDB or {}
             return YippYappHelperDB.trinketTooltips ~= false
@@ -166,6 +235,21 @@ local function BuildAll(category, layout)
         "Size, opacity, layout, compact mode and where each frame sits all "
         .. "live in Edit Mode, where you can see the change as you make it.",
         function() if ns.EditMode then ns.EditMode:Open() end end)
+
+    -- A signpost, not a second binding UI.
+    --
+    -- The binding itself is a real one, declared in Bindings.xml, so it
+    -- lives in the game's own Key Bindings panel with everything else --
+    -- which is where a keybind belongs and the only place that can
+    -- resolve a conflict with another addon. Rebuilding that panel here
+    -- would give two places to set one key and no way to see a clash.
+    -- What was missing is that nobody thinks to look there for an addon,
+    -- so this points at it.
+    AddHeader(layout, "Keybinding")
+    AddButton(layout, "Open YippYapp", "Set keybinding",
+        "Binds a key to open this window. The binding is under Key Bindings "
+        .. "with the rest of them -- YippYapp Helper.",
+        function() ns.OpenKeybindings() end)
 end
 -- Registration
 ------------------------------------------------------------

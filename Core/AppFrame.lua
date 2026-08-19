@@ -282,7 +282,7 @@ MakePage("bis")
 ------------------------------------------------------------
 local PAGE_INFO = {
     gear        = { title = "|cff00ff00Gear Upgrades|r" },
-    raid        = { title = "|cff00aaffRaid Tools|r" },
+    raid        = { title = "|cff00aaffRaid|r" },
     progression = { title = "|cffffff00Progression|r" },
     loot        = { title = "|cff00ccffLoot Browser|r" },
     consumables = { title = "|cffff00ffConsumables|r" },
@@ -1263,7 +1263,7 @@ local NAV_DEFS = {
     { id = "loot",        label = "Loot Browser",    hex = "ff00ccff" },
 
     { id = "mythicplus",  label = "Mythic+",         hex = "ff00d4ff" },
-    { id = "raid",        label = "Raid Tools",      hex = "ff00aaff" },
+    { id = "raid",        label = "Raid",           hex = "ff00aaff" },
     { id = "teleports",   label = "Teleports",       hex = "ff88ccff" },
 
 }

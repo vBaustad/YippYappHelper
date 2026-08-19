@@ -81,16 +81,26 @@ end
 ------------------------------------------------------------
 -- The list
 ------------------------------------------------------------
---- A currency's quantity, or nil if the client has nothing to say.
-local function currency(id)
-    if not (id and id > 0 and C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo) then
-        return nil
-    end
-    local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, id)
-    if not ok or type(info) ~= "table" then return nil end
-    return tonumber(info.quantity)
-end
-
+--- One test for membership: does skipping it this week cost you
+--- something you cannot get back?
+---
+--- Everything here expires at the reset. The crest allowance does not
+--- carry over, the bounty map is consumed or lost, the world boss
+--- relocks, the quest resets. Miss one and the week is simply gone.
+---
+--- That rule is what threw out the rows this section had accumulated.
+--- Catalyst charges accrue and keep accruing -- an unspent one is
+--- waiting for you, not lost -- so "spend a catalyst charge" is a thing
+--- you may want to do, which is not the same as a thing this week is
+--- asking of you. Same for every currency the client happens to meter.
+--- A checklist that lists what you COULD do has no end and stops being
+--- read; one that lists what expires tonight is seven lines and gets
+--- read every time.
+---
+--- Things that accumulate are not absent from the addon -- catalyst
+--- charges and currency balances are on the rail and the gear page,
+--- where a balance belongs. They are absent from the list of chores.
+---
 --- Items are ordered by how much they are worth doing, not by category.
 ---
 --- `auto` returns true (done), false (outstanding) or nil ("cannot
@@ -129,18 +139,26 @@ local ITEMS = {
         -- second is the normal case for anyone who crafts.
     },
     {
-        id = "catalyst",
-        label = "Spend a catalyst charge",
-        detail = "Charges accumulate, but an unspent charge is a tier piece you do not have.",
-        category = "crests",
-        auto = function()
-            -- Deliberately the opposite reading to the others: charges
-            -- accrue rather than deplete, so "done" is having none left
-            -- to spend, not having some.
-            local n = currency(ns.CATALYST_CURRENCY_ID)
-            if n == nil then return nil end
-            return n == 0
-        end,
+        id = "bountymap",
+        label = "Spend your Trove Hunter's Bounty",
+        detail = "In a tier 8+ delve. A guaranteed Hero-track piece, once a week.",
+        category = "delves",
+        -- Manual. The map is an item and its use is a delve completion;
+        -- neither leaves anything a currency or lockout query can see.
+        -- Worth a row regardless: it is one guaranteed Hero piece a
+        -- week, it expires with the reset, and it is the easiest thing
+        -- on this list to forget because nothing in the game nags you.
+    },
+    {
+        id = "vaultweekly",
+        label = "Fill the Vault of Atal'Utek bar",
+        -- Named as the game names it. Renaming a thing the player has
+        -- to go and find in the world is a kindness that costs them
+        -- the search.
+        detail = "Strikes, incursions, ancient foes and patrols all count. Rewards the bounty map.",
+        category = "delves",
+        -- Listed above the map it grants, because doing this is how you
+        -- get one.
     },
     {
         id = "prey",
@@ -185,7 +203,7 @@ local ITEMS = {
     },
     {
         id = "weeklyquest",
-        label = "Hand in the weekly quest",
+        label = "Hand in this week's quest",
         detail = "The recurring quest in the season's zone.",
         category = "delves",
     },
@@ -227,62 +245,28 @@ function Wk:Toggle(item)
     end
 end
 
---- Every currency the client caps weekly, as checklist items.
----
---- Discovered rather than named. Three attempts at naming these were
---- wrong in three different ways -- "Restored Coffer Key" is not the
---- capped one, the shards are; nothing matching prey hunts is a currency
---- at all; and a season I have never seen will have its own. The client
---- already knows which currencies it caps and how far along this
---- character is, so the list asks it instead of carrying a table that is
---- wrong the day a patch ships.
----
---- Ordered by id so the rows do not reshuffle between refreshes.
-local function currencyItems()
-    local out = {}
-    if not (ns.GetCurrencyGroups and C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo) then
-        return out
-    end
-    local hidden = (YippYappHelperDB and YippYappHelperDB.weeklyHidden) or {}
-    for _, group in ipairs(ns:GetCurrencyGroups() or {}) do
-        for _, entry in ipairs(group.items or {}) do
-            local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, entry.currencyID)
-            local cap = ok and type(info) == "table"
-                and (tonumber(info.maxWeeklyQuantity) or 0) or 0
-            -- Discovery finds everything the client caps, which is not
-            -- the same as everything worth doing -- Shard of Dundun is
-            -- capped and nobody cares. There is no property that sorts
-            -- those two apart, so the player says. Hidden rows are
-            -- account-wide: a currency that does not matter on one
-            -- character does not matter on the next.
-            if cap > 0 and not hidden[tostring(entry.currencyID)] then
-                local earned = tonumber(info.quantityEarnedThisWeek) or 0
-                out[#out + 1] = {
-                    id = "cur:" .. tostring(entry.currencyID),
-                    _sort = entry.currencyID or 0,
-                    label = ("Cap %s"):format(entry.name or "?"),
-                    detail = ("%d of %d earned this week."):format(earned, cap),
-                    category = "crests",
-                    auto = function() return earned >= cap end,
-                }
-            end
-        end
-    end
-    table.sort(out, function(a, b) return a._sort < b._sort end)
-    return out
-end
-
 --- The whole list with its state resolved, for rendering.
 ---
---- Fixed items first, then whatever the client caps. The fixed ones are
---- the judgement calls; the discovered ones are facts, and facts can
---- appear and disappear between seasons without disturbing the order of
---- anything above them.
+--- ITEMS and nothing else. There used to be a second half: every
+--- currency the client caps weekly, discovered rather than named, on
+--- the reasoning that the client already knows which currencies it caps
+--- and a written-down list goes wrong the day a patch ships.
+---
+--- That reasoning was right about currencies and wrong about chores.
+--- Discovery finds what the game meters, which is not what a player
+--- owes -- so the list filled with rows like "Cap Shard of Dundun",
+--- capped by the client and cared about by nobody, and every one of
+--- them counted against the "N of N left" tally above the section. A
+--- checklist you scroll past is worse than a shorter one that is wrong
+--- about the edges, because the short one still gets read.
+---
+--- Currency caps have not gone anywhere -- they live in the rail, on
+--- every page, which is where a meter belongs. What is left here is
+--- eight deliberate entries, each of which someone decided was worth a
+--- line.
 function Wk:GetList()
     local out = {}
-    local all = {}
-    for _, item in ipairs(ITEMS) do all[#all + 1] = item end
-    for _, item in ipairs(currencyItems()) do all[#all + 1] = item end
+    local all = ITEMS
 
     for i, item in ipairs(all) do
         local done, manual = self:IsDone(item)
@@ -295,22 +279,17 @@ function Wk:GetList()
     return out
 end
 
---- Stop showing a discovered currency row. Only discovered ones: the
---- fixed items are the ones deliberately chosen, and hiding those would
---- be a settings screen rather than a nuisance filter.
-function Wk:Hide(id)
-    local key = tostring(id or ""):match("^cur:(%d+)$")
-    if not key then return false end
-    YippYappHelperDB = YippYappHelperDB or {}
-    YippYappHelperDB.weeklyHidden = YippYappHelperDB.weeklyHidden or {}
-    YippYappHelperDB.weeklyHidden[key] = true
-    return true
-end
-
---- Bring them all back, for when a season changes and the judgement
---- that hid one no longer applies.
-function Wk:UnhideAll()
-    if YippYappHelperDB then YippYappHelperDB.weeklyHidden = nil end
+--- Nothing here can be hidden any more, and the answer says so.
+---
+--- Hiding existed to let the player delete the noise that discovery
+--- produced. With discovery gone there is no noise to delete: every row
+--- is a deliberate entry, and a filter that could quietly remove one is
+--- a settings screen rather than a nuisance filter. Kept as a function
+--- that refuses rather than deleted outright, because a saved variable
+--- from an older install still names rows that no longer exist and the
+--- call site should get `false` rather than an error.
+function Wk:Hide()
+    return false
 end
 
 --- How many are outstanding, for the section heading.

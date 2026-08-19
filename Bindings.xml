@@ -1,0 +1,29 @@
+<!--
+    Key bindings.
+
+    Not listed in the .toc: the client loads Bindings.xml from an addon's
+    folder by itself, and adding it to the .toc as well loads it twice.
+
+    No double hyphen anywhere in this comment. XML forbids the pair
+    inside a comment body, and every other file in this addon uses it as
+    an em-dash, so the habit walks straight in here and the client
+    answers with "not well-formed (invalid token)" and drops the whole
+    file. That means the binding silently stops existing. Use a colon or
+    a semicolon instead.
+
+    The body runs in the global environment, which is why it calls a
+    global rather than anything in our namespace: see
+    YippYappHelper_Toggle in Core/Core.lua. Keeping the body to one call
+    also means a binding cannot go stale against changes in here; the
+    logic lives in Lua where it can be read and tested.
+
+    BINDING_HEADER_YIPPYAPPHELPER and BINDING_NAME_YIPPYAPPHELPER_TOGGLE
+    are set in Core/Core.lua and decide how this reads in the Key
+    Bindings panel. Without the header the binding lands in an unnamed
+    block at the bottom of the list.
+-->
+<Bindings>
+    <Binding name="YIPPYAPPHELPER_TOGGLE" header="YIPPYAPPHELPER" runOnUp="false">
+        YippYappHelper_Toggle()
+    </Binding>
+</Bindings>

@@ -2,7 +2,7 @@
 ## Title: YippYapp Helper
 ## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
 ## Author: vbaustad
-## Version: 3.0.6
+## Version: 3.1.0
 ## SavedVariables: YippYappHelperDB
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
@@ -25,6 +25,12 @@ Libs\LibEditMode\embed.xml
 Core\YippYappHelper.lua
 Core\Data.lua
 Core\Core.lua
+
+# The shared situation window. Loads ahead of every feature because the
+# three panels that live in it -- ready check, dungeon utility notes and
+# the after-key summary -- register themselves against it as they build,
+# and the ready-check window builds its frame at file scope.
+Core\Hud.lua
 
 # Shared right-click menu for items. Loaded with Core so every
 # page can raise the same one; the actions it offers come from
@@ -54,6 +60,12 @@ Features\Gear\Recommend.lua
 # guides (see Tools/scrape_class_guides.py). Pure data — nothing reads it
 # yet, but it loads here so a UI can.
 Features\Gear\ClassGuideData.lua
+
+# Reads the priority half of that data: which build you are in, and which
+# stat it wants first. Both the Best in Slot page and the shell's
+# character column ask it, so it loads ahead of either. Core\ShellFrame.lua
+# is above this and calls in at refresh time rather than at load time.
+Features\Gear\StatPriority.lua
 
 Core\UI.lua
 
@@ -92,8 +104,11 @@ Features\Loot\LootBrowserUI.lua
 Features\Consumables\ConsumablesData.lua
 Features\Consumables\ConsumablesUI.lua
 
-# TrinketData is generated from bloodmallet.com (see Tools/).
+# TrinketData is generated from bloodmallet.com (see Tools/). Healers
+# come from QE Live instead -- bloodmallet sims damage only -- and merge
+# into the same table, so the healer file has to load after it.
 Features\Trinkets\TrinketData.lua
+Features\Trinkets\TrinketDataHealer.lua
 Features\Trinkets\TrinketIndex.lua
 Features\Trinkets\TrinketUI.lua
 
@@ -107,6 +122,7 @@ Features\Gear\BisUI.lua
 Features\MythicPlus\MythicPlusData.lua
 Features\MythicPlus\MythicPlusUI.lua
 Features\MythicPlus\CompletionPopup.lua
+Features\MythicPlus\UtilityData.lua
 Features\MythicPlus\UtilityAdvisor.lua
 
 Features\Teleports\TeleportUI.lua
@@ -126,6 +142,8 @@ Features\Fun\Snark.lua
 Features\Fun\Advisor.lua
 Features\Fun\WhatsNew.lua
 
+Features\Delves\DelvesData.lua
+Features\Delves\DelvesUI.lua
 Features\Planner\WeeklyChecklist.lua
 Features\Planner\PlannerData.lua
 Core\AppFrame.lua

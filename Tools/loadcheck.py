@@ -24,6 +24,7 @@ instead of at the thing actually being tested.
 import os
 import re
 import sys
+import xml.parsers.expat
 from lupa import LuaRuntime
 
 # Windows consoles default to cp1252, which cannot print the bytes a
@@ -285,6 +286,13 @@ function Region.GetTextColor(self)
     return c[1], c[2], c[3], c[4]
 end
 function Region.GetText(self) return self._text or "" end
+
+-- Checkboxes remember. Without these, GetChecked fell through to the
+-- CamelCase no-op, which returns the frame -- so every checkbox in the
+-- addon read as permanently ticked and no check could tell a box that
+-- was on from one that was off.
+function Region.SetChecked(self, on) self._checked = on and true or false; return self end
+function Region.GetChecked(self) return self._checked and true or false end
 function Region.SetText(self, t)
     self._text = t; layoutChanged(); return self
 end
@@ -394,14 +402,33 @@ function Region.IsObjectType(self, t) return t == self._type end
 function Region.GetObjectType(self) return self._type or "Frame" end
 function Region.GetRegions(self) return end
 function Region.GetChildren(self) return end
-function Region.GetScript(self) return nil end
+-- Honest, where it used to answer nil to everything.
+--
+-- A stub that always says "no handler" is the permissive kind this file
+-- exists to avoid: BisUI's hookMenu reads the previous OnClick back and
+-- chains onto it, so under the old stub the chaining branch could not
+-- run and nothing that asks whether a frame is wired could be checked
+-- at all.
+function Region.GetScript(self, e)
+    return self._scripts and self._scripts[e] or nil
+end
 function Region.SetScript(self, e, fn) self._scripts = self._scripts or {}; self._scripts[e] = fn; return self end
 function Region.GetLeft(self) return 0 end
 function Region.GetNormalTexture(self) return NewRegion("Texture") end
 function Region.GetParent(self) return self._parent end
 function Region.GetAttribute(self) return nil end
 function Region.GetNumPoints(self) return 0 end
-function Region.GetPoint(self) return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
+-- Reports what was actually set, which it did not used to: it returned
+-- a fixed TOPLEFT 0,0 whatever the frame had been anchored to. Anything
+-- asking a frame where it sits -- saving a dragged window's position,
+-- for one -- got the same answer before and after moving it, so the
+-- round trip could not be tested at all. The constant survives as the
+-- answer for a frame with no points, which is what the client does too.
+function Region.GetPoint(self, index)
+    local pt = self._pts and self._pts[index or 1]
+    if not pt then return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
+    return pt.p, pt.rel, pt.relP or pt.p, pt.x or 0, pt.y or 0
+end
 -- Real numbers, because the raid trainer converts the cursor into arena
 -- coordinates and does arithmetic on the result. The CamelCase no-op
 -- would hand it the frame itself, and "attempt to perform arithmetic on
@@ -442,6 +469,29 @@ function Region.RegisterEvent(self, event)
     return self
 end
 
+--- The unit-filtered form, which is a different registration entirely.
+---
+--- It used to fall through to the CamelCase no-op, so anything
+--- registered this way -- the interrupt tracker's whole cast feed, for
+--- one -- was invisible here: FireEvent had nothing listening and a
+--- check could not tell that apart from a module that ignored the event.
+---
+--- The filter is honoured rather than waved through, because "does this
+--- frame hear about party1" is exactly the question worth asking.
+function Region.RegisterUnitEvent(self, event, ...)
+    self._events = self._events or {}
+    self._events[event] = true
+    local units = {}
+    for i = 1, select("#", ...) do units[select(i, ...)] = true end
+    self._unitFilter = self._unitFilter or {}
+    self._unitFilter[event] = next(units) and units or nil
+    if not tracked[self] then
+        tracked[self] = true
+        eventFrames[#eventFrames + 1] = self
+    end
+    return self
+end
+
 function Region.UnregisterEvent(self, event)
     if self._events then self._events[event] = nil end
     return self
@@ -470,7 +520,15 @@ function FireEvent(event, ...)
     local n, errs = 0, {}
     for _, fr in ipairs(eventFrames) do
         if fr._events and fr._events[event] then
-            local h = fr._scripts and fr._scripts.OnEvent
+            -- For UNIT_ events the first payload argument is the unit, so
+            -- a frame that filtered on party1 must not hear about party3.
+            local filter = fr._unitFilter and fr._unitFilter[event]
+            local pass = true
+            if filter then
+                local unit = ...
+                pass = unit ~= nil and filter[unit] or false
+            end
+            local h = pass and fr._scripts and fr._scripts.OnEvent
             if h then
                 n = n + 1
                 local ok, err = pcall(h, fr, event, ...)
@@ -600,7 +658,14 @@ function C_Timer_After() end
 function SetPortraitTexture() end
 function SetPortraitToTexture() end
 function PlaySound() end
-function securecall(fn, ...) if fn then return fn(...) end end
+-- The real securecall takes either a function or the NAME of a global
+-- one, and the addon uses the name form for ShowUIPanel/HideUIPanel.
+-- A stub that only handled functions turned that into a "attempt to call
+-- a string" the moment anything here reached those paths.
+function securecall(fn, ...)
+    if type(fn) == "string" then fn = _G[fn] end
+    if fn then return fn(...) end
+end
 function issecurevariable() return true end
 function GetAddOnMetadata() return nil end
 function BackdropTemplateMixin() end
@@ -717,9 +782,16 @@ C_Reputation = { GetFactionDataByID = function(id)
                  end }
 C_QuestLog = { IsQuestFlaggedCompleted = function() return false end }
 C_Calendar = {}
+COMPLETION_INFO = nil
+
 C_DateAndTime = { GetCurrentCalendarTime = function()
                       return { year = 2026, month = 8, monthDay = 16,
                                hour = 12, minute = 0 } end,
+                  -- Three days to the reset, so "this week" starts four
+                  -- days ago. The run journal prunes against this, and
+                  -- with the call absent it cannot prune at all -- so
+                  -- leaving it out would quietly skip that branch.
+                  GetSecondsUntilWeeklyReset = function() return 3 * 24 * 60 * 60 end,
                   GetServerTimeLocal = function() return 0 end }
 
 NineSliceUtil = { ApplyLayoutByName = function() end }
@@ -778,8 +850,17 @@ C_Texture = { GetAtlasInfo = function(a)
                     ["activities-icon-checkmark"] = true }
     return known[a] and { width = 64, height = 16 } or nil
 end }
+-- Balance druid's two hero talents, under the names the class guide
+-- data uses, with Keeper of the Grove the one taken.
+--
+-- Both subtrees used to answer "Keeper of the Grove", which is not a
+-- shape any client produces: a spec's trees have distinct names. It
+-- also made every question that turns on WHICH tree you are in
+-- unanswerable, since one name cannot pick between two guide entries.
+local SUBTREES = { [1] = "Keeper of the Grove", [2] = "Elune's Chosen" }
 C_Traits = { GetSubTreeInfo = function(_, id)
-    return { ID = id, name = "Keeper of the Grove", iconElementID = 5651754,
+    return { ID = id, name = SUBTREES[id] or "Keeper of the Grove",
+             iconElementID = 5651754,
              isActive = (id == 1), traitTreeID = 1 }
 end, GetConfigInfo = function() return { ID = 1 } end }
 C_ClassTalents = { GetActiveConfigID = function() return 1 end,
@@ -807,10 +888,30 @@ local MPLUS_MAPS = {
 local MPLUS_AFFIXES = {
     [9]   = { "Tyrannical",
               "Bosses have 30% more health and inflict up to 15% increased damage." },
+    [10]  = { "Fortified",
+              "Non-boss enemies have 20% more health and inflict increased damage." },
     [152] = { "Challenger's Peril",
               "Each player death subtracts 15 seconds from the dungeon timer." },
     [148] = { "Xal'atath's Guile",
               "Xal'atath assaults the party with a barrage of shadow energy." },
+    [160] = { "Lindormi's Guidance",
+              "Lindormi aids the party." },
+    -- Two different Bargains, so a second week can differ by identity
+    -- rather than only by order.
+    [162] = { "Xal'atath's Bargain: Pulsar", "A bargain is struck." },
+    [163] = { "Xal'atath's Bargain: Voidbound", "A different bargain is struck." },
+}
+
+-- This week's affixes, settable so a test can advance the week. The
+-- ORDER is the data under test: the index an affix sits at is the
+-- keystone level it switches on at, and Fortified/Tyrannical swapping
+-- places is a change the card has to notice.
+AFFIX_WEEK = {
+    { id = 160, seasonID = 2 },   -- standing
+    { id = 162, seasonID = 2 },   -- the week's Bargain
+    { id = 10,  seasonID = 2 },   -- swaps with Tyrannical
+    { id = 9,   seasonID = 2 },
+    { id = 148, seasonID = 2 },   -- standing
 }
 
 C_ChallengeMode = { GetMapUIInfo = function(id)
@@ -819,6 +920,23 @@ C_ChallengeMode = { GetMapUIInfo = function(id)
                         return (MPLUS_MAPS[id] or "Dungeon"), id or 1, 1800, 134400
                     end,
                     GetMapTable = function() return MPLUS_ORDER end,
+                    -- The run that just finished, settable so a test can
+                    -- stage one. Nil means "no run", which is what the
+                    -- real call returns outside a completion.
+                    GetCompletionInfo = function()
+                        local c = COMPLETION_INFO
+                        if not c then return nil end
+                        -- Return ORDER matters and is the thing most
+                        -- easily got wrong; verified against
+                        -- RaiderIO/core.lua, which is maintained against
+                        -- a live client.
+                        return c.mapID, c.level, c.ms, c.onTime, c.chests,
+                               c.practice, c.oldScore, c.newScore
+                    end,
+                    GetDeathCount = function()
+                        local c = COMPLETION_INFO
+                        return (c and c.deaths) or 0
+                    end,
                     GetAffixInfo = function(id)
                         local a = MPLUS_AFFIXES[id]
                         if not a then return nil end
@@ -862,10 +980,7 @@ C_MythicPlus = { -- A key in hand, so Group Keystones renders a row and
                  end,
                  GetSeasonBestAffixScoreInfoForMap = function() return nil end,
                  RequestMapInfo = function() end,
-                 GetCurrentAffixes = function()
-                     return { { id = 9, seasonID = 1 }, { id = 152, seasonID = 1 },
-                              { id = 148, seasonID = 1 } }
-                 end }
+                 GetCurrentAffixes = function() return AFFIX_WEEK end }
 -- A real half-finished vault week, one activity type at a time.
 --
 -- This returned {} for everything, which meant the dashboard's nine
@@ -928,11 +1043,17 @@ C_WeeklyRewards = { GetActivities = function(t)
 local CURRENCY_LIST = {
     { isHeader = true, name = "Midnight" },
     { name = "Field Accolade", currencyID = 3510, quantity = 483 },
-    -- One weekly-capped currency, part-earned, so the checklist's
-    -- automatic branch resolves to a real "not done yet" rather than
-    -- falling through to a manual tick and looking the same either way.
+    -- Two weekly-capped currencies, one the character is engaged with
+    -- and one it is not. Neither may become a checklist row: what the
+    -- client meters is not what the player owes, and the section that
+    -- confuses the two fills with chores nobody asked for. Kept in the
+    -- fixture because the crest and currency pages DO read these, and
+    -- because a filter has to be shown refusing the tempting case as
+    -- well as the obvious one.
     { name = "Restored Coffer Key", currencyID = 3512, quantity = 0,
       weekly = { earned = 2, cap = 6 } },
+    { name = "Shard of Dundun", currencyID = 3598, quantity = 0,
+      weekly = { earned = 0, cap = 10 } },
     { name = "Voidlight Marl", currencyID = 3511, quantity = 41033 },
     -- The five crests, capped CUMULATIVELY: no weekly cap at all, a
     -- season total in maxQuantity, and totalEarned measured against it.
@@ -1407,6 +1528,154 @@ def main():
     report("BiS cards (Catalyst note, then stat priority)",
            parse(pool_rects(bis_pool, bis_n)), None)
 
+    # The stat priority has to be ON the page, not below it.
+    #
+    # Rendered for RESTORATION druid, not the Balance the stub player is.
+    # That distinction is the whole check. The BiS list is drawn beside
+    # the doll and the cards go under whichever column runs longer, so
+    # the failure needs a long list -- and list length is guide data,
+    # which differs per spec. Balance ships exactly 16 entries for 16
+    # slots and overflows by nothing, so every geometry check this
+    # harness has ever run on this page was run against the one spec
+    # that cannot exhibit the bug. Restoration ships 24 for 16 and is
+    # the worst in the file; Mistweaver is next at 22.
+    #
+    # Height, not width: this is the one page whose overflow runs
+    # downward, and the region is the host it was rendered into.
+    spec_swap = L.eval("""
+        function(ns, key)
+            local real = ns.PlayerSpecKey
+            ns.PlayerSpecKey = function() return key, key end
+            if ns.BisUI and ns.BisUI.Refresh then pcall(ns.BisUI.Refresh, ns.BisUI) end
+            return real
+        end
+    """)
+    spec_restore = L.eval("""
+        function(ns, real)
+            ns.PlayerSpecKey = real
+            if ns.BisUI and ns.BisUI.Refresh then pcall(ns.BisUI.Refresh, ns.BisUI) end
+        end
+    """)
+
+    real_spec = spec_swap(ns, "DRUID_RESTORATION")
+    worst_n = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cardIdx) or 0 end")(ns)
+    worst_pool = L.eval("function(ns) return (ns.BisUI and ns.BisUI._cards) or {} end")(ns)
+    worst_rows = L.eval("function(ns) return (ns.BisUI and ns.BisUI._rowIdx) or 0 end")(ns)
+    report("BiS stat priority stays on the page (Restoration druid, worst list)",
+           parse(pool_rects(worst_pool, worst_n)), None, 520)
+    # The row count is the assertion behind the assertion: 16 wearable
+    # slots and nothing pinned means 16 rows. If "Also listed" ever
+    # starts carrying the guide's surplus again this goes to 24 and the
+    # geometry above follows it off the page.
+    if worst_rows == 16:
+        print("  ok   BiS list is the slot count, not the guide's surplus (16 rows)")
+    else:
+        print("  FAIL BiS list drew %d rows for 16 slots with nothing pinned" % worst_rows)
+        failures.append(("BiS also-listed", "%d rows for 16 slots" % worst_rows))
+
+    # The list's two columns have to share the row, not overlap in it.
+    #
+    # The name was sized against a flat 46px reserve for the source while
+    # the source had no width at all -- it was anchored to the right edge
+    # and grew leftward under the name. And neither had word wrap turned
+    # off, so a long name wrapped to a second line inside a ROW_H row and
+    # printed it through the row below. Both halves of that are what the
+    # screenshot of a Restoration list showed.
+    row_fit = L.eval("""
+        function(ns)
+            local rows, n = ns.BisUI._rows or {}, ns.BisUI._rowIdx or 0
+            local bad, checked = {}, 0
+            for i = 1, n do
+                local r = rows[i]
+                if r and r:IsShown() and r.name and r.source then
+                    checked = checked + 1
+                    local w = r:GetWidth() or 0
+                    local used = 26 + (r.name:GetWidth() or 0) + (r.source:GetWidth() or 0)
+                    if used > w + 1 then
+                        bad[#bad + 1] = ("row %d: %dpx of text in a %dpx row"):format(i, used, w)
+                    end
+                    if r.name._wrap ~= false then
+                        bad[#bad + 1] = ("row %d: name still wraps"):format(i)
+                    end
+                    local txt = r.source:GetText() or ""
+                    if txt:find("(Raid)", 1, true) then
+                        bad[#bad + 1] = ("row %d: source still says (Raid)"):format(i)
+                    end
+                    -- Colour codes are |c/|r and legitimate. A bare pipe
+                    -- anywhere else is guide data reaching the renderer
+                    -- as an escape sequence.
+                    local stripped = txt:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+                    if stripped:find("|", 1, true) then
+                        bad[#bad + 1] = ("row %d: raw pipe in source %q"):format(i, stripped)
+                    end
+                end
+            end
+            if checked == 0 then return "no rows drawn" end
+            if #bad > 0 then return table.concat(bad, "; ") end
+            return "ok:" .. checked
+        end
+    """)(ns)
+    if isinstance(row_fit, str) and row_fit.startswith("ok:"):
+        print("  ok   BiS rows: name and source share the row (%s rows, no wrap, "
+              "no (Raid), no raw pipes)" % row_fit[3:])
+    else:
+        print("  FAIL BiS rows: %s" % row_fit)
+        failures.append(("BiS row fit", str(row_fit)))
+
+
+    # The tooltip fires over the item NAME, not over the whole row.
+    #
+    # A row is the width of the column; a name is not. Hung off the row,
+    # the tooltip fired over the empty half of every line -- and it made
+    # a second hoverable thing in the same row impossible, which is what
+    # a clickable source column would need.
+    hover_fit = L.eval("""
+        function(ns)
+            local rows, n = ns.BisUI._rows or {}, ns.BisUI._rowIdx or 0
+            local bad, checked, slack = {}, 0, 0
+            for i = 1, n do
+                local r = rows[i]
+                if r and r:IsShown() and r.name then
+                    local h = r.name._yyHover
+                    if not h or not h:IsShown() then
+                        bad[#bad + 1] = ("row %d: no hover target on the name"):format(i)
+                    elseif not h:IsMouseEnabled() then
+                        bad[#bad + 1] = ("row %d: hover target takes no mouse"):format(i)
+                    elseif (h:GetFrameLevel() or 0) <= (r:GetFrameLevel() or 0) then
+                        bad[#bad + 1] = ("row %d: hover target is not above the row"):format(i)
+                    else
+                        checked = checked + 1
+                        -- The point of the change: narrower than the row.
+                        local rw, hw = r:GetWidth() or 0, h:GetWidth() or 0
+                        if hw > rw - 20 then
+                            bad[#bad + 1] = ("row %d: hover is %dpx of a %dpx row"):format(i, hw, rw)
+                        end
+                        slack = slack + (rw - hw)
+                    end
+                    if r:GetScript("OnEnter") then
+                        bad[#bad + 1] = ("row %d: the row itself still opens a tooltip"):format(i)
+                    end
+                end
+            end
+            -- Faults first. Reporting "no rows drawn" ahead of them hid
+            -- the actual reason: a run with no hover targets at all
+            -- never increments `checked`, so the count is zero BECAUSE
+            -- of the fault, not instead of it.
+            if #bad > 0 then return table.concat(bad, "; ") end
+            if checked == 0 then return "no rows drawn" end
+            return ("ok:%d:%d"):format(checked, math.floor(slack / checked))
+        end
+    """)(ns)
+    if isinstance(hover_fit, str) and hover_fit.startswith("ok:"):
+        n_rows, avg = hover_fit[3:].split(":")
+        print("  ok   BiS hover follows the item name (%s rows, %spx of each row "
+              "no longer triggers it)" % (n_rows, avg))
+    else:
+        print("  FAIL BiS hover target: %s" % hover_fit)
+        failures.append(("BiS hover target", str(hover_fit)))
+
+    spec_restore(ns, real_spec)
+
     # The Catalyst note is drawn in the doll's middle column, in the gap
     # between the two runs of slot icons -- and that gap is measured off
     # iconSize, which scales with the region. So it closes the moment the
@@ -1667,6 +1936,88 @@ def main():
     else:
         print("  FAIL loot council: %s" % order)
         failures.append(("loot council order", str(order)))
+
+    # Healers come from QE Live, whose numbers are HPS scores rather than
+    # bloodmallet's percent-over-empty. Two things can go wrong quietly
+    # and neither shows up as an error: a healer block that never merged
+    # into the table at all (the page just says "no sims for you"), and
+    # an item-level ranking that ran QE's scores through the percentage
+    # arithmetic, which yields plausible-looking numbers that are wrong
+    # by a factor of a hundred. Both are decidable here.
+    healers = L.eval("""
+        function(ns)
+            local T = ns.Trinkets
+            if not (T and T.GetForSpec) then return "Trinkets index absent" end
+            local want = { "DRUID_RESTORATION", "EVOKER_PRESERVATION",
+                           "MONK_MISTWEAVER", "PALADIN_HOLY",
+                           "PRIEST_DISCIPLINE", "PRIEST_HOLY",
+                           "SHAMAN_RESTORATION" }
+            local n = 0
+            for _, key in ipairs(want) do
+                for _, style in ipairs({ "ST", "AOE" }) do
+                    local block = T:GetBlock(key, style)
+                    if not block then return key .. "/" .. style .. " missing" end
+                    if block.provider ~= "qe" then
+                        return key .. "/" .. style .. " is not QE data"
+                    end
+                    local want_profile = (style == "ST") and "Raid" or "Dungeon"
+                    if block.profile ~= want_profile then
+                        return key .. "/" .. style .. " profile is "
+                            .. tostring(block.profile)
+                    end
+                    if T:StyleLabel(key, style) ~= want_profile then
+                        return key .. "/" .. style .. " tab would say "
+                            .. tostring(T:StyleLabel(key, style))
+                    end
+                    -- Ranked at one item level, which is where the unit
+                    -- matters. Percent-behind has to stay a percentage:
+                    -- QE's raw scores differ by thousands, so anything
+                    -- past -100 means the score went out as the answer.
+                    local at = T:GetAtItemLevel(key, style, 334)
+                    if not at or #at < 2 then
+                        return key .. "/" .. style .. " has no 334 ranking"
+                    end
+                    local prev
+                    for _, r in ipairs(at) do
+                        if r.rel > 0.0001 or r.rel < -100 then
+                            return string.format("%s/%s ranks %s at %.2f%%",
+                                key, style, tostring(r.name), r.rel)
+                        end
+                        if prev and r.rel > prev + 0.0001 then
+                            return key .. "/" .. style .. " 334 list is out of order"
+                        end
+                        prev = r.rel
+                    end
+                    n = n + 1
+                end
+            end
+            -- A DPS spec must still read as a target count, or the tab
+            -- labels have been rewritten for everyone.
+            if T:StyleLabel("MAGE_FIRE", "AOE") ~= "AoE" then
+                return "a DPS spec's tab stopped saying AoE"
+            end
+            -- And the two sources have to meet: a trinket both a healer
+            -- and a damage spec rank is what makes the tooltip credit
+            -- both, and if the ids never overlap the merge is cosmetic.
+            local mixed
+            for _, bucket in ipairs(T:GetAllTrinkets("ST", true) or {}) do
+                local qe, bm = false, false
+                for _, e in ipairs(bucket.specs or {}) do
+                    if e.provider == "qe" then qe = true else bm = true end
+                end
+                if qe and bm then mixed = bucket.name break end
+            end
+            if not mixed then return "no trinket is ranked by both sources" end
+            return string.format("ok:%d:%s", n, mixed)
+        end
+    """)(ns)
+    if healers and str(healers).startswith("ok:"):
+        n, mixed = str(healers)[3:].split(":", 1)
+        print("  ok   healer trinkets: %s QE blocks, percentages stay "
+              "percentages, both sources meet on %s" % (n, mixed))
+    else:
+        print("  FAIL healer trinkets: %s" % healers)
+        failures.append(("healer trinkets", str(healers)))
 
     # An equipped character, so the advisor has something to advise on.
     #
@@ -2177,6 +2528,307 @@ def main():
     """)(ns)
 
 
+    # Which affixes are worth a row.
+    #
+    # Two of five are furniture: the same affix in the same slot every
+    # Tuesday. The other three all say something -- the Bargain changes
+    # identity, and Fortified/Tyrannical are both up every week but swap
+    # which keystone level they gate. Presence alone cannot tell the pair
+    # from the furniture, which is why the slot is tracked too.
+    affix = L.eval("""
+        function(ns)
+            if not ns.GetAffixSplit then return "GetAffixSplit absent" end
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.affixObs = nil
+            ns.AFFIX_FURNITURE[2] = nil
+
+            -- One week of data cannot tell furniture from news, and with
+            -- no seed for this season it must show everything.
+            local moving, standing, learned = ns:GetAffixSplit()
+            if learned then return "claimed to know the split after one week" end
+            if #moving ~= 5 or #standing ~= 0 then
+                return "week one showed " .. #moving .. "/" .. #standing
+                    .. "; it must show everything until it has learned"
+            end
+
+            -- Week two: a different Bargain, and Fortified/Tyrannical
+            -- trade slots. The season's own two hold their places.
+            AFFIX_WEEK = {
+                { id = 160, seasonID = 2 },
+                { id = 163, seasonID = 2 },   -- different Bargain
+                { id = 9,   seasonID = 2 },   -- swapped with Fortified
+                { id = 10,  seasonID = 2 },
+                { id = 148, seasonID = 2 },
+            }
+            moving, standing, learned = ns:GetAffixSplit()
+            if not learned then return "still had not learned after two weeks" end
+
+            local shown, hidden = {}, {}
+            for _, a in ipairs(moving) do shown[a.id] = true end
+            for _, a in ipairs(standing) do hidden[a.id] = true end
+
+            if not shown[163] then return "the week's Bargain was hidden" end
+
+            -- Fortified and Tyrannical are present in BOTH weeks, so a
+            -- presence-only rule files them as furniture. They are shown
+            -- because their slot moved, and the slot is the keystone
+            -- level -- which is the whole reason the index is tracked.
+            if not (shown[9] and shown[10]) then
+                return "Fortified/Tyrannical hidden -- the slot swap was missed, "
+                    .. "so only presence is being watched"
+            end
+
+            -- And the furniture must actually be hidden, or none of this
+            -- bought the keystones any room.
+            if not (hidden[160] and hidden[148]) then
+                return "an affix that never moves was still shown"
+            end
+            if #moving ~= 3 then
+                return "showed " .. #moving .. " affixes, expected 3"
+            end
+
+            ------------------------------------------------------------
+            -- The keystone level each slot applies over.
+            ------------------------------------------------------------
+            local lv = ns.AFFIX_LEVELS and ns.AFFIX_LEVELS[0]
+            if type(lv) ~= "table" or #lv ~= 5 then
+                return "the season 0 level table is missing or not 5 slots"
+            end
+            -- Slots 3 and 4 must NOT share a threshold. Below +10 only
+            -- one of Fortified/Tyrannical is up and the pair alternates;
+            -- from +10 both are. Collapsing them to one number was the
+            -- first version of this table and it makes the weekly swap
+            -- meaningless, which is the whole reason the pair is shown.
+            if lv[3][1] == lv[4][1] then
+                return "slots 3 and 4 share a threshold; the +7/+10 split is gone"
+            end
+            local function lt(i)
+                return ns:GetAffixLevelText({ index = i, seasonID = 0 })
+            end
+            if lt(2) ~= "+5-11" then
+                return "slot 2 reads " .. tostring(lt(2)) .. ", not +5-11"
+            end
+            if lt(3) ~= "+7+" or lt(4) ~= "+10+" then
+                return "the Fortified/Tyrannical slots read " .. tostring(lt(3))
+                    .. " and " .. tostring(lt(4)) .. ", not +7+ and +10+"
+            end
+            -- The badges say when each affix STARTS. A "+10+" beside a
+            -- single name reads as that affix having replaced the other,
+            -- when in fact both are up from there -- so the +10 row
+            -- names both.
+            local pair = {
+                { index = 3, name = "Fortified", seasonID = 0 },
+                { index = 4, name = "Tyrannical", seasonID = 0 },
+            }
+            if ns:GetAffixLabel(pair[2], pair) ~= "Fortified + Tyrannical" then
+                return "the +10 row reads '"
+                    .. tostring(ns:GetAffixLabel(pair[2], pair))
+                    .. "', not both affixes"
+            end
+            -- Borrowed only when the partner is actually up. A week that
+            -- did not field it must not have its name invented.
+            if ns:GetAffixLabel(pair[2], { pair[2] }) ~= "Tyrannical" then
+                return "a name was borrowed from a slot that is not up"
+            end
+            -- And every other row is left alone.
+            if ns:GetAffixLabel(pair[1], pair) ~= "Fortified" then
+                return "an ordinary affix row had a name grafted onto it"
+            end
+            if ns.AFFIX_COMBINE[99] ~= nil then
+                return "an unrecorded season carries a combine rule it cannot have"
+            end
+
+            -- An unrecorded season must answer nothing rather than zero:
+            -- a badge reading "+0" is worse than no badge.
+            if ns:GetAffixLevelText({ index = 1, seasonID = 99 }) ~= nil then
+                return "an unrecorded season produced a level label anyway"
+            end
+
+            -- A season roll must not poison the record. New ids against
+            -- an old week count would never reach it, so every affix
+            -- would read as news for ever.
+            AFFIX_WEEK = {
+                { id = 160, seasonID = 3 },
+                { id = 162, seasonID = 3 },
+                { id = 10,  seasonID = 3 },
+            }
+            local m3, s3, l3 = ns:GetAffixSplit()
+            if l3 then return "a fresh season claimed knowledge it cannot have" end
+            if #m3 ~= 3 then return "a fresh season did not show all its affixes" end
+
+            ------------------------------------------------------------
+            -- The seed, so a fresh install is not blind for a week.
+            ------------------------------------------------------------
+            -- The shipped one is for the live season. Pin it: it is
+            -- hand-recorded from a client dump, and a typo is invisible
+            -- until someone notices the wrong row missing.
+            local live = ns.AFFIX_FURNITURE and ns.AFFIX_FURNITURE[0]
+            if type(live) ~= "table" or #live ~= 2 then
+                return "the shipped seed for season 0 is missing or not 2 affixes"
+            end
+
+            YippYappHelperDB.affixObs = nil
+            ns.AFFIX_FURNITURE[2] = { 160, 148 }
+            AFFIX_WEEK = {
+                { id = 160, seasonID = 2 },
+                { id = 162, seasonID = 2 },
+                { id = 10,  seasonID = 2 },
+                { id = 9,   seasonID = 2 },
+                { id = 148, seasonID = 2 },
+            }
+            local c, st, l = ns:GetAffixSplit()
+            if not l then
+                ns.AFFIX_FURNITURE[2] = nil
+                return "the seed did not answer on week one, so a fresh install "
+                    .. "still shows every affix"
+            end
+            if #c ~= 3 or #st ~= 2 then
+                ns.AFFIX_FURNITURE[2] = nil
+                return "seeded week one showed " .. #c .. " and hid " .. #st
+                    .. "; expected 3 and 2"
+            end
+
+            -- Observation must OVERRIDE the seed the moment it can
+            -- answer, or a seed left behind by a season roll would hide
+            -- the wrong affix for ever. 163 is deliberately IN the seed
+            -- and demonstrably not furniture: it appears in one week only.
+            ns.AFFIX_FURNITURE[2] = { 160, 148, 163 }
+            AFFIX_WEEK = {
+                { id = 160, seasonID = 2 },
+                { id = 163, seasonID = 2 },
+                { id = 9,   seasonID = 2 },
+                { id = 10,  seasonID = 2 },
+                { id = 148, seasonID = 2 },
+            }
+            c, st, l = ns:GetAffixSplit()
+            ns.AFFIX_FURNITURE[2] = nil
+            if not l then return "two weeks in and it still had not learned" end
+            local ch = {}
+            for _, a in ipairs(c) do ch[a.id] = true end
+            if not ch[163] then
+                return "the seed still hid an affix that observation shows "
+                    .. "changing -- a stale seed can never be corrected"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if affix == "ok":
+        print("  ok   affixes: Bargain and the Fortified/Tyrannical pair shown "
+              "with distinct +7/+10 ranges, furniture hidden, seed overridden")
+    else:
+        print("  FAIL affixes: %s" % affix)
+        failures.append(("affixes", str(affix)))
+    # The run journal.
+    #
+    # GetRunHistory answers only whether a run finished. Everything the
+    # week list now shows -- chests, margin, score, deaths -- exists for
+    # one moment in GetCompletionInfo and has to be written down as it
+    # happens. Untested, a journal that silently records nothing looks
+    # exactly like a week of runs that predate it.
+    journal = L.eval("""
+        function(ns)
+            if not ns.RecordCompletedRun then return "RecordCompletedRun absent" end
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.runJournal = nil
+            COMPLETION_INFO = nil
+
+            -- Outside a completion there is nothing to record, and
+            -- asking must not invent a row.
+            ns:RecordCompletedRun()
+            if #ns:GetRunJournal() ~= 0 then
+                return "a run was recorded with no completion info"
+            end
+
+            -- Aim at a run the history actually contains, so the merge
+            -- below has something to match.
+            local runs = ns:GetWeeklyRuns()
+            if #runs == 0 then return "no weekly runs in the fixture" end
+            local target = runs[1]
+
+            COMPLETION_INFO = {
+                mapID = target.mapID, level = target.level,
+                ms = 1500 * 1000, onTime = true, chests = 2, practice = false,
+                oldScore = 2000, newScore = 2018, deaths = 3,
+            }
+            ns:RecordCompletedRun()
+            local j = ns:GetRunJournal()
+            if #j ~= 1 then return "recorded " .. #j .. " entries for one run" end
+            local e = j[1]
+            if not e.onTime or e.chests ~= 2 then
+                return "the run's own verdict was not recorded"
+            end
+            if e.gain ~= 18 then
+                return "score gain recorded as " .. tostring(e.gain) .. ", not 18"
+            end
+            if e.deaths ~= 3 then
+                return "deaths recorded as " .. tostring(e.deaths) .. ", not 3"
+            end
+            -- The par time is captured AT record time; without it the
+            -- week list cannot say how far under or over the run was.
+            if e.limit ~= 1800 then
+                return "the dungeon timer was not captured (" .. tostring(e.limit) .. ")"
+            end
+
+            -- A practice run is not a real one.
+            COMPLETION_INFO.practice = true
+            ns:RecordCompletedRun()
+            if #ns:GetRunJournal() ~= 1 then
+                return "a practice run was written into the journal"
+            end
+            COMPLETION_INFO.practice = false
+
+            -- The merge: detail must reach the matching run and no other.
+            runs = ns:GetWeeklyRuns()
+            local hit, others = nil, 0
+            for _, r in ipairs(runs) do
+                if r.detail then
+                    if r.mapID == target.mapID and r.level == target.level then
+                        hit = r
+                    else
+                        others = others + 1
+                    end
+                end
+            end
+            if not hit then return "the recorded run got no detail on the week list" end
+            if others > 0 then
+                return others .. " unrelated runs were given detail that is not theirs"
+            end
+            if hit.detail.chests ~= 2 then return "the wrong entry was attached" end
+
+            -- Two runs of the same key must not both show the first
+            -- one's time. Entries are consumed as they match.
+            YippYappHelperDB.runJournal = nil
+            COMPLETION_INFO.chests = 3
+            ns:RecordCompletedRun()
+            COMPLETION_INFO.chests = 1
+            ns:RecordCompletedRun()
+            if #ns:GetRunJournal() ~= 2 then
+                return "two runs of one key collapsed into a single entry"
+            end
+
+            -- Pruning: last week's runs must not survive into a list
+            -- headed "This Week".
+            local stale = ns:GetRunJournal()
+            stale[#stale + 1] = { mapID = target.mapID, level = 99, at = 1 }
+            ns:PruneRunJournal()
+            for _, x in ipairs(ns:GetRunJournal()) do
+                if x.level == 99 then
+                    return "a run from before the reset survived the prune"
+                end
+            end
+
+            COMPLETION_INFO = nil
+            YippYappHelperDB.runJournal = nil
+            return "ok"
+        end
+    """)(ns)
+    if journal == "ok":
+        print("  ok   run journal: completion detail recorded, practice runs "
+              "skipped, merged to the right run, pruned at the reset")
+    else:
+        print("  FAIL run journal: %s" % journal)
+        failures.append(("run journal", str(journal)))
+
     # Sub-tab sync: the shell restores a remembered sub-tab on mount.
     # If it does not tell the page, the strip and the content disagree
     # until you click away and back. Simulate arriving with "council"
@@ -2237,6 +2889,148 @@ def main():
               % str(showall)[3:])
     else:
         print("  --   show all: %s" % showall)
+
+    # The healer path through the page itself, played as a Holy Priest.
+    # The data check above proves the blocks are there; this proves the
+    # page reads them as QE's -- the tabs stop claiming to be target
+    # counts, and the attribution stops sending a healer to a site that
+    # has never published their spec. Both are strings assembled at draw
+    # time from the block, so nothing but a draw can prove them.
+    healerpage = L.eval("""
+        function(ns)
+            local UI = ns.TrinketUI
+            if not (UI and UI.BuildContent and UI.BuildFilters) then
+                return "Trinkets page absent"
+            end
+            local realClass, realSpec = UnitClass, GetSpecializationInfo
+            UnitClass = function() return "Priest", "PRIEST" end
+            GetSpecializationInfo = function()
+                return 257, "Holy", "", 135920, "HEALER"
+            end
+            local host = CreateFrame("Frame")
+            host:SetSize(700, 480)
+            local bar = CreateFrame("Frame", nil, host)
+            bar:SetSize(700, 24)
+            -- The filter strip is built on its own and allowed to fail
+            -- part way: it ends with a SearchBoxTemplate edit box, whose
+            -- Instructions font string this stub does not provide. The
+            -- style tabs are built before that, so the labels this check
+            -- is about exist either way, and pretending otherwise would
+            -- mean testing nothing rather than testing the tabs.
+            pcall(UI.BuildFilters, UI, bar, {})
+            local ok, err = pcall(function()
+                UI:BuildContent(host, { subTab = "spec" })
+                UI:Refresh()
+            end)
+            -- Read off the frames the player would be looking at, not
+            -- recomputed: recomputing would just re-run the function
+            -- under test and agree with itself.
+            local labels = {}
+            for id, btn in pairs(UI._styleButtons or {}) do
+                labels[#labels + 1] = id .. "=" ..
+                    tostring(btn.label and btn.label:GetText())
+            end
+            table.sort(labels)
+            UnitClass, GetSpecializationInfo = realClass, realSpec
+            if not ok then return "draw failed: " .. tostring(err) end
+            local said = table.concat(labels, " ")
+            if said ~= "AOE=Dungeon ST=Raid" then
+                return "style tabs read '" .. said .. "'"
+            end
+
+            local key = "PRIEST_HOLY"
+            if ns.Trinkets:StyleLabel(key, "ST") ~= "Raid"
+                or ns.Trinkets:StyleLabel(key, "AOE") ~= "Dungeon" then
+                return "healer tabs would still say single target / AoE"
+            end
+            local info = ns.Trinkets:ProviderInfo(ns.Trinkets:Provider(key, "ST"))
+            if info.site ~= "questionablyepic.com" then
+                return "healer list credited to " .. tostring(info.site)
+            end
+            local list, _, stamp = ns.Trinkets:GetForSpec(key, "ST")
+            if not list or not stamp or stamp == "" then
+                return "no dated healer list to attribute"
+            end
+            return "ok:" .. stamp
+        end
+    """)(ns)
+    # The council list mixes both sources on one trinket, and the two
+    # percentages divide by different things -- total DPS against the
+    # best trinket's healing. Sorted into one column by that number, a
+    # Holy Priest's 4th best (-16.4%) lands below an Arcane Mage's 16th
+    # (-2.0%), which ranks by which project simmed you rather than by
+    # who wants the item. They must come back grouped, in order, with
+    # the player's own group first.
+    grouping = L.eval("""
+        function(ns)
+            local T = ns.Trinkets
+            if not (T and T.GroupedSpecsFor) then return "grouping absent" end
+            local realClass, realSpec = UnitClass, GetSpecializationInfo
+            local function play(class, file, id, spec, role)
+                UnitClass = function() return class, file end
+                GetSpecializationInfo = function()
+                    return id, spec, "", 1, role
+                end
+            end
+            -- Hex Lord's Dooming Idol: ranked by both sides, which is
+            -- the case the grouping exists for.
+            local item = 270169
+            local function check()
+                local groups = T:GroupedSpecsFor(item, "ST")
+                if not groups then return nil, "no groups for the item" end
+                local units = {}
+                for _, g in ipairs(groups) do
+                    if units[g.unit] then return nil, "unit " .. g.unit .. " split across groups" end
+                    units[g.unit] = true
+                    local prev
+                    for _, e in ipairs(g.entries) do
+                        local u = T:ProviderInfo(e.provider).unit
+                        if u ~= g.unit then
+                            return nil, tostring(e.key) .. " is " .. u .. " inside a " .. g.unit .. " group"
+                        end
+                        if prev and e.rel > prev + 0.0001 then
+                            return nil, g.unit .. " group is out of order at " .. tostring(e.key)
+                        end
+                        prev = e.rel
+                    end
+                end
+                return groups
+            end
+
+            play("Priest", "PRIEST", 257, "Holy", "HEALER")
+            local healer, err = check()
+            play("Mage", "MAGE", 63, "Fire", "DAMAGER")
+            local damage, err2 = check()
+            UnitClass, GetSpecializationInfo = realClass, realSpec
+
+            if not healer then return "as a healer: " .. tostring(err) end
+            if not damage then return "as a mage: " .. tostring(err2) end
+            if #healer ~= 2 then
+                return "expected two groups, got " .. #healer
+            end
+            if healer[1].unit ~= "score" then
+                return "a healer sees the " .. healer[1].unit .. " group first"
+            end
+            if damage[1].unit ~= "percent" then
+                return "a mage sees the " .. damage[1].unit .. " group first"
+            end
+            return string.format("ok:%d+%d", #healer[1].entries,
+                #healer[2].entries)
+        end
+    """)(ns)
+    if grouping and str(grouping).startswith("ok:"):
+        print("  ok   council grouping: %s specs split by what the percentage "
+              "measures, player's own group first" % str(grouping)[3:])
+    else:
+        print("  FAIL council grouping: %s" % grouping)
+        failures.append(("council grouping", str(grouping)))
+
+    if healerpage and str(healerpage).startswith("ok:"):
+        print("  ok   healer page: draws as Holy Priest, tabs read raid/dungeon, "
+              "credited to QE Live (%s)" % str(healerpage)[3:])
+    else:
+        print("  FAIL healer page: %s" % healerpage)
+        failures.append(("healer page", str(healerpage)))
 
     cons_n = L.eval("function(ns) return ns.__consSecIdx or 0 end")(ns)
     if cons_n and cons_n > 0:
@@ -2468,6 +3262,154 @@ def main():
     else:
         print("  FAIL rail: %s" % rail)
         failures.append(("rail", str(rail)))
+
+    # Stat priority: the parse, and the one row it lights.
+    #
+    # The parser is the part worth pinning down. What the guide holds is
+    # not a list of stats but prose that happens to be short, and every
+    # one of these lines broke a version of it: a slash inside a
+    # qualifier, a rank written with "and", a primary stat that must not
+    # take rank 1, and ">=" which orders where "=" ties.
+    #
+    # BuildCharacter runs above but RefreshCharacter never did, so the
+    # accent would otherwise ship unexecuted -- and it is the whole
+    # feature.
+    stats = L.eval("""
+        function(ns)
+            local Shell = ns.Shell
+            if not ns.ParseStatPriority then return "no ParseStatPriority" end
+
+            local function ranks(lines)
+                local r = ns:ParseStatPriority(lines)
+                if not r then return "nil" end
+                local out = {}
+                for _, k in ipairs({ "crit", "haste", "mastery", "vers" }) do
+                    out[#out + 1] = k .. "=" .. tostring(r[k])
+                end
+                return table.concat(out, " ")
+            end
+            local cases = {
+                -- The primary opens every list and owns no rank, or
+                -- Blood reads Haste as second best.
+                { "Strength|Haste|Mastery / Critical Strike / Versatility",
+                  "crit=2 haste=1 mastery=2 vers=2" },
+                -- The slash is INSIDE the bracket. Splitting before
+                -- stripping turns one stat into two non-stats.
+                { "Agility|Haste (until 800/18%-20%)|Critical Strike|Mastery|Versatility",
+                  "crit=2 haste=1 mastery=3 vers=4" },
+                -- "and" ties, and so does "=".
+                { "Agility|Mastery|Critical Strike and Haste|Versatility",
+                  "crit=2 haste=2 mastery=1 vers=3" },
+                -- ">=" orders. Treating it as a tie would rank Crit
+                -- level with Mastery, which is the opposite of what it
+                -- says.
+                { "Intellect|Haste|Mastery>=Critical Strike|Versatility",
+                  "crit=3 haste=1 mastery=2 vers=4" },
+                -- A line naming no secondary consumes no rank.
+                { "Item Level / Agility / Armor / Stamina|Versatility = Critical Strike = Mastery|Haste",
+                  "crit=1 haste=2 mastery=1 vers=1" },
+                -- Named twice: the priority is the first mention, the
+                -- footnote is not a second rank.
+                { "Agility|Haste (until 800)|Critical Strike|Haste (above 800).",
+                  "crit=2 haste=1 mastery=nil vers=nil" },
+            }
+            for _, case in ipairs(cases) do
+                local lines = {}
+                for piece in (case[1] .. "|"):gmatch("([^|]*)|") do
+                    lines[#lines + 1] = piece
+                end
+                local got = ranks(lines)
+                if got ~= case[2] then
+                    return "parse " .. case[1] .. "\\n    wanted " .. case[2]
+                        .. "\\n    got    " .. got
+                end
+            end
+
+            -- Blood's two builds lead with different stats and the
+            -- guide names no tree the stub client is in, so the honest
+            -- answer is no rank at all rather than the first entry.
+            local blood = ns:StatPriorityRanks("DEATHKNIGHT_BLOOD")
+            if blood and blood.haste == 1 then
+                return "Blood picked San'layn's Haste over Deathbringer's Crit"
+            end
+            if blood and blood.crit == 1 then
+                return "Blood picked Deathbringer's Crit over San'layn's Haste"
+            end
+
+            -- Protection paladin's two entries disagree below the top
+            -- and agree at it. Agreement is not a guess, so Haste still
+            -- lights.
+            local prot = ns:StatPriorityRanks("PALADIN_PROTECTION")
+            if not (prot and prot.haste == 1) then
+                return "Protection lost the Haste both its builds lead with"
+            end
+            if prot.crit or prot.mastery then
+                return "Protection kept a rank its two builds disagree on"
+            end
+
+            -- The stubbed client is a Balance druid in Keeper of the
+            -- Grove, one of that spec's two builds. Both lead with
+            -- Mastery, so the lit row alone cannot show the right entry
+            -- was picked -- they part lower down, where Keeper ties
+            -- Crit with Haste at 2 and Elune's Chosen puts it at 3.
+            local bal, balEntry, balBuild = ns:StatPriorityRanks("DRUID_BALANCE")
+            if not (bal and bal.crit == 2) then
+                return "Balance resolved to " .. tostring(balBuild)
+                    .. " with crit=" .. tostring(bal and bal.crit)
+                    .. ", wanted Keeper of the Grove at crit=2"
+            end
+            if not balEntry then
+                return "Balance fell back to consensus with a known build"
+            end
+
+            local ok, err = pcall(Shell.RefreshCharacter, Shell)
+            if not ok then return "RefreshCharacter failed: " .. tostring(err) end
+
+            local ar, ag, ab = ns.Widgets:Color("accent")
+            local lit = {}
+            for key, row in pairs(Shell._statRows or {}) do
+                local r, g, b = row.label:GetTextColor()
+                if r == ar and g == ag and b == ab then lit[#lit + 1] = key end
+            end
+            if #lit ~= 1 or lit[1] ~= "mastery" then
+                return "accented " .. (#lit == 0 and "nothing"
+                    or table.concat(lit, "+")) .. ", wanted mastery alone"
+            end
+
+            local link = Shell._statLink
+            if not (link and link:GetScript("OnClick")) then
+                return "the Stats heading is not a way into Best in Slot"
+            end
+            if not link._entry then
+                return "the heading has no priority to show on hover"
+            end
+            local okHover, hoverErr = pcall(link:GetScript("OnEnter"), link)
+            if not okHover then return "hover failed: " .. tostring(hoverErr) end
+
+            -- And it must go dark again when the guide cannot say. A
+            -- lit row left over from the last character is worse than
+            -- an unlit one.
+            local realRanks = ns.StatPriorityRanks
+            ns.StatPriorityRanks = function() return nil end
+            pcall(Shell.RefreshCharacter, Shell)
+            ns.StatPriorityRanks = realRanks
+            for key, row in pairs(Shell._statRows or {}) do
+                local r, g, b = row.label:GetTextColor()
+                if r == ar and g == ag and b == ab then
+                    return key .. " stayed accented with no priority to justify it"
+                end
+            end
+            return "ok"
+        end
+    """)(ns)
+    if stats == "ok":
+        print("  ok   stat priority: 6 parses; Blood's disagreement marks "
+              "nothing and Protection's agreement still marks Haste; "
+              "Balance resolves to the tree it took, lights Mastery alone, "
+              "and goes dark again when the guide cannot say")
+    else:
+        print("  FAIL stat priority: %s" % stats)
+        failures.append(("stat priority", str(stats)))
 
     # The dashboard's Great Vault grid. Nothing built this offline
     # either, so the stripe encoding had never run.
@@ -2704,6 +3646,7 @@ def main():
     # level starts.
     plan = L.eval("""
         function(ns)
+            local GUILLEMET = string.char(0xC2, 0xBB)
             local P = ns.Planner
             if not (P and P.BuildPlan) then return "no planner" end
             local ok, built = pcall(P.BuildPlan, P)
@@ -2713,26 +3656,87 @@ def main():
 
             local upgrade
             for _, it in ipairs(items) do
-                if tostring(it.title or ""):match("reward %d+ to %d+") then upgrade = it end
+                if tostring(it.detail or ""):match("reward goes from %d+ to %d+") then
+                    upgrade = it
+                end
             end
             if not upgrade then
                 return "nothing in the plan offers to improve a reward"
             end
+
+            -- Every row is an instruction, and an instruction leads
+            -- with the doing.
+            --
+            -- The titles used to be "2 more M+ runs " .. GUILLEMET ..
+            -- " unlocks vault slot 1": the payoff in the bold line and
+            -- the actual advice stranded in brackets underneath. A
+            -- panel called Worth Doing Tonight should lead with the
+            -- action, so the split is now title = what to do, detail =
+            -- what it buys, and both halves have to be there.
+            for _, it in ipairs(items) do
+                local t = tostring(it.title or "")
+                if t:find(GUILLEMET, 1, true) then
+                    return "a plan title still packs two facts into one line: '" .. t .. "'"
+                end
+                if (it.detail or "") == "" then
+                    return "a plan row says what to do and not what it buys: '" .. t .. "'"
+                end
+            end
+
+            -- Nothing may offer a trip that changes nothing.
+            --
+            -- At the top of a reward ladder the next rung sits inside
+            -- the same bracket, and this rendered on a live character
+            -- as an offer to raise a reward from 318 to 318: go and run
+            -- something in order to stand still. It is the plan at its
+            -- least trustworthy, because it is the one row anyone can
+            -- check against the vault in front of them.
+            for _, it in ipairs(items) do
+                local from, to = tostring(it.detail or ""):match(
+                    "reward goes from (%d+) to (%d+)")
+                if from and tonumber(to) <= tonumber(from) then
+                    return "the plan offers an upgrade from " .. from .. " to " .. to
+                end
+            end
+
             -- A currency threshold the client cannot be asked about, so
             -- the number is written down and the currency is found by
             -- NAME -- a guessed id reads zero rather than erroring, and
             -- would turn this into a confidently wrong suggestion.
+            --
+            -- Built, but held back: 483 of 750 is a savings balance
+            -- that fills itself while you do the rows above it, so on a
+            -- week with real work in it the panel must not spend a card
+            -- on it. `deferred` is where it goes, and looking there
+            -- rather than only checking it is absent is what tells
+            -- "correctly demoted" apart from "never built".
             local accolade
-            for _, it in ipairs(items) do
+            for _, it in ipairs(built.deferred or {}) do
                 if tostring(it.title or ""):match("Field Accolade") then accolade = it end
             end
             if not accolade then
                 return "nothing in the plan mentions Field Accolades"
             end
-            -- 483 banked against 750 in the fixture: 267 short.
-            if not accolade.title:match("267") then
-                return "accolades read '" .. accolade.title .. "'; expected 267 short"
+            if not accolade.title:match("483 of 750") then
+                return "accolades read '" .. accolade.title .. "'; expected 483 of 750"
             end
+            if not tostring(accolade.detail or ""):match("267") then
+                return "accolades do not say 267 more buys the piece"
+            end
+            for _, it in ipairs(items) do
+                if tostring(it.title or ""):match("Field Accolade") then
+                    return "a savings balance took a card on a week with " .. #items
+                        .. " real things to do"
+                end
+            end
+            -- ...and the demotion must not be a delete. A thin week is
+            -- exactly when a counter earns its row, so the floor has to
+            -- let it back in.
+            if #items < 3 then
+                return "the plan is " .. #items .. " rows and did not pad from " ..
+                    #(built.deferred or {}) .. " held back"
+            end
+
             if not (ns.FindCurrencyByName and ns:FindCurrencyByName("Field Accolade")) then
                 return "the currency lookup found nothing to build that on"
             end
@@ -2758,13 +3762,15 @@ def main():
             if not upgrade.title:match("%+12") then
                 return "upgrade reads '" .. upgrade.title .. "'; expected the next key level"
             end
-            if not upgrade.title:match("302") then
-                return "upgrade reads '" .. upgrade.title .. "'; expected the item level it buys"
+            if not upgrade.detail:match("302") then
+                return "upgrade detail reads '" .. upgrade.detail ..
+                    "'; expected the item level it buys"
             end
             -- Delves must stay silent: the client returns no data for
             -- them, and a made-up rung would be worse than nothing.
             for _, it in ipairs(items) do
-                if it.category == "world" and tostring(it.title):match("reward %d+ to %d+") then
+                if it.category == "world"
+                    and tostring(it.detail):match("reward goes from") then
                     return "a delve upgrade was invented; the client has no data for it"
                 end
             end
@@ -3010,138 +4016,91 @@ def main():
             end
 
             ------------------------------------------------------------
+            ------------------------------------------------------------
             -- The banner.
             --
-            -- The card's surface is a cut of the game's own Journeys
-            -- companion row, in three slices: two caps at their native
-            -- width and a stretched middle. Stretching the whole thing
-            -- instead would pull the ornaments -- and the portrait baked
-            -- into the left cap -- out of shape with the card.
+            -- One texture at the size it was cut, never stretched. The
+            -- companion's name and portrait are painted into the art,
+            -- so any resampling shows on both -- which is why the size
+            -- is asserted here rather than left to the layout.
             ------------------------------------------------------------
             local card = ui.compCard
-            for _, part in ipairs({ "bgLeft", "bgMid", "bgRight" }) do
-                if not card[part] then
-                    return "the companion card has no " .. part .. " slice"
-                end
-            end
+            if not card.art then return "the companion card has no banner art" end
             if not card.bannerOK then
-                return "the banner texture did not load, so the card fell back"
+                return "the banner texture did not load"
+            end
+            if (card.banner._w or 0) ~= 341 or (card.banner._h or 0) ~= 103 then
+                return "the banner is " .. tostring(card.banner._w) .. "x"
+                    .. tostring(card.banner._h) .. ", not the 341x103 it was cut at"
             end
 
-            -- The caps must hold their own width. If either picks up an
-            -- anchor to the far edge it stretches with the card and the
-            -- ornament smears.
-            for _, pair in ipairs({ { "bgLeft", card.bgLeft, 103 },
-                                    { "bgRight", card.bgRight, 34 } }) do
-                local name, tex, want = pair[1], pair[2], pair[3]
-                if (tex._w or 0) ~= want then
-                    return name .. " is " .. tostring(tex._w) .. " wide, not " .. want
+            -- The name is part of the art. Drawing our own would put a
+            -- second one over the top of it.
+            if card.name then
+                return "the card draws its own name over the one baked into the art"
+            end
+
+            -- Everything written onto the banner must BELONG to it. A
+            -- child frame draws above every region its parent owns, so
+            -- an overlay owned by the card sits behind the art and the
+            -- sign renders blank -- which is exactly what shipped once,
+            -- and what no anchor check could have caught.
+            for _, pair in ipairs({ { "title", card.title },
+                                    { "rank", card.rank },
+                                    { "track", card.track },
+                                    { "fill", card.fill } }) do
+                local label, region = pair[1], pair[2]
+                if not region then return "the banner has no " .. label end
+                if region._parent ~= card.banner then
+                    return label .. " is parented to the card, so the banner "
+                        .. "draws on top of it"
                 end
             end
 
-            -- And the middle must be pinned to BOTH caps, or it does not
-            -- follow the card and leaves a gap at one end.
-            local left, right = false, false
-            for _, pt in ipairs(card.bgMid._pts or {}) do
-                if pt.rel == card.bgLeft then left = true end
-                if pt.rel == card.bgRight then right = true end
-            end
-            if not (left and right) then
-                return "the banner's middle is not anchored to both caps"
-            end
-
-            -- Every slice reads from one texture, so a mismatched
-            -- texcoord is the failure mode rather than a missing file --
-            -- and identical coords on two slices means one of them is
-            -- drawing the wrong part of the sheet.
-            local seen = {}
-            for _, part in ipairs({ "bgLeft", "bgMid", "bgRight" }) do
-                local c = card[part]._texCoord
-                if c then
-                    local key = table.concat(c, ",")
-                    if seen[key] then
-                        return part .. " draws the same slice as " .. seen[key]
+            -- And they must clear the baked portrait, which occupies the
+            -- left 103px of the art.
+            for _, pair in ipairs({ { "title", card.title },
+                                    { "rank", card.rank },
+                                    { "track", card.track } }) do
+                local label, region = pair[1], pair[2]
+                local x = nil
+                for _, pt in ipairs(region._pts or {}) do
+                    if pt.rel == card.banner and tostring(pt.p or ""):find("LEFT") then
+                        x = pt.x
                     end
-                    seen[key] = part
+                end
+                if not x then
+                    return label .. " has no left anchor on the banner"
+                end
+                if x < 103 then
+                    return label .. " starts at " .. x
+                        .. ", over the portrait baked into the art"
                 end
             end
 
-            -- And the empty state: no companion must not mean rank 0.
+            -- And the empty state: no companion must not mean rank 0,
+            -- and must not leave Valeera's face and name standing in for
+            -- a companion the player does not have.
             local realGet = ns.Delves.GetCompanion
             ns.Delves.GetCompanion = function() return nil end
             local ok3 = pcall(page.Refresh, { content = host, width = 700, height = 620 })
             ns.Delves.GetCompanion = realGet
             if not ok3 then return "refresh failed with no companion" end
-            local txt = tostring(card.standing:GetText() or "")
-                .. tostring(card.name:GetText() or "")
-            if txt:match("rank 0") or txt:match("of 0") then
+            if card.art:IsShown() then
+                return "the banner still shows Valeera with no companion known"
+            end
+            local txt = tostring(card.rank:GetText() or "")
+                .. tostring(card.title:GetText() or "")
+            if txt:match("Rank 0") or txt:match("of 0") then
                 return "an unknown companion rendered as '" .. txt .. "'"
-            end
-
-            -- The portrait is baked into the left cap, so the name has
-            -- to start clear of it or it is written across her face.
-            local nameX = nil
-            for _, pt in ipairs(card.name._pts or {}) do
-                if pt.rel == card.banner and tostring(pt.p or "") == "LEFT" then
-                    nameX = pt.x
-                end
-            end
-            if not nameX then
-                return "the name is not anchored to the banner's left edge"
-            end
-            if nameX < 103 then
-                return "the name starts at " .. nameX
-                    .. ", inside the 103px cap the portrait is baked into"
-            end
-
-            -- And it must BELONG to the banner, not merely be anchored
-            -- to it. A child frame draws over every region its parent
-            -- owns, so a name owned by the card sits behind the slices
-            -- and the button renders blank -- which is exactly what
-            -- shipped, and what no anchor check could have caught.
-            if card.name._parent ~= card.banner then
-                return "the name is parented to the card, so the banner "
-                    .. "draws on top of it"
-            end
-
-            -- Rank and progress belong on the panel BESIDE the banner,
-            -- not on top of it. Anchoring them to the banner's RIGHT
-            -- edge is what puts them there; anchored to its LEFT they
-            -- would sit over the art.
-            for _, pair in ipairs({ { "standing", card.standing },
-                                    { "track", card.track } }) do
-                local label, region = pair[1], pair[2]
-                local beside = false
-                local cur, guard = region, 0
-                while cur and guard < 4 do
-                    guard = guard + 1
-                    local up = nil
-                    for _, pt in ipairs(cur._pts or {}) do
-                        if pt.rel == card.banner then
-                            -- relP, not p: the first is the point on the
-                            -- BANNER being anchored to, the second is the
-                            -- region's own corner. Testing p asks which
-                            -- corner of the label is pinned, which says
-                            -- nothing about which side of the art it lands on.
-                            if tostring(pt.relP or ""):find("RIGHT") then beside = true end
-                        elseif pt.rel and pt.rel ~= card then
-                            up = pt.rel
-                        end
-                    end
-                    cur = up
-                end
-                if not beside then
-                    return label .. " is not placed beside the banner, so it "
-                        .. "draws over the art"
-                end
             end
 
             return "ok"
         end
     """)(ns)
     if delves == "ok":
-        print("  ok   delves: companion banner slices at native cap widths with "
-              "a stretched middle; empty state honest")
+        print("  ok   delves: companion banner is one texture at its cut size, "
+              "overlay owned by it, empty state honest")
     else:
         print("  FAIL delves: %s" % delves)
         failures.append(("delves", str(delves)))
@@ -3278,36 +4237,56 @@ def main():
             if not manual then return "no manual item; nothing is tickable" end
             if not auto then return "no automatic item; everything asks the player" end
 
-            -- Coffer keys are detected from the client's own weekly
-            -- counter, not asked about and not measured against a number
-            -- copied from a guide. The fixture has 2 of 6 earned, so
-            -- this must come back automatic AND outstanding: automatic
-            -- but "done" would pass just as happily on a lookup that
-            -- silently found nothing.
-            local keys
+            -- Every row is a deliberate entry, and nothing is
+            -- discovered.
+            --
+            -- The checklist used to append every currency the client
+            -- caps weekly, on the reasoning that the client knows its
+            -- own caps and a written-down list rots. True about
+            -- currencies, false about chores: what the game meters is
+            -- not what a player owes, so the section filled with rows
+            -- like "Cap Shard of Dundun" -- metered by the client,
+            -- wanted by nobody -- and each one counted against the
+            -- "N of N left" tally above it.
+            --
+            -- The fixture keeps both a currency the character is
+            -- engaged with (Restored Coffer Key, 2 of 6 earned) and one
+            -- it is not (Shard of Dundun, untouched), because the rule
+            -- being pinned is that NEITHER earns a row. A test that
+            -- only excluded the untouched one would pass on a filter
+            -- that still lets half the noise through.
             for _, r in ipairs(rows) do
-                if r.id == "cur:3512" then keys = r end
+                if tostring(r.id or ""):match("^cur:") then
+                    return "a currency was discovered into the checklist: '"
+                        .. tostring(r.label) .. "'"
+                end
             end
-            if not keys then
-                return "a weekly-capped currency did not become a checklist row"
+            for _, name in ipairs({ "Dundun", "Coffer Key" }) do
+                for _, r in ipairs(rows) do
+                    if tostring(r.label):find(name, 1, true) then
+                        return "'" .. name .. "' is metered by the client, not owed by the player"
+                    end
+                end
             end
-            -- Discovery finds what the client caps, which is not the
-            -- same as what is worth doing. A row the player hides must
-            -- stay hidden, and hiding must refuse the fixed items -- a
-            -- filter that could delete deliberate content is a settings
-            -- screen, not a nuisance filter.
-            if Wk:Hide("crests") then
-                return "a fixed checklist item could be hidden"
+
+            -- ...and the list is the curated one, entire. Pinned as a
+            -- count because the failure this guards against is silent
+            -- in both directions: a filter that eats a real row leaves
+            -- a checklist that quietly stops asking for something.
+            if #rows ~= #(Wk.ITEMS or {}) then
+                return "the checklist is " .. #rows .. " rows against "
+                    .. #(Wk.ITEMS or {}) .. " deliberate ones"
             end
-            if not Wk:Hide("cur:3512") then
-                return "a discovered row refused to be hidden"
+
+            -- Nothing can be hidden any more, and that has to be the
+            -- answer rather than an error. Hiding existed to delete the
+            -- noise discovery produced; with no noise, a filter that
+            -- could remove a deliberate row is a settings screen. Old
+            -- saved variables still name rows that no longer exist, so
+            -- the call has to refuse rather than throw.
+            if Wk:Hide("crests") or Wk:Hide("cur:3512") or Wk:Hide(nil) then
+                return "a deliberate checklist row could still be hidden"
             end
-            local stillThere = false
-            for _, r in ipairs(Wk:GetList()) do
-                if r.id == "cur:3512" then stillThere = true end
-            end
-            if stillThere then return "a hidden row came back" end
-            Wk:UnhideAll()
             -- Crests are capped for the SEASON, not the week, so
             -- reading only the weekly fields gave every crest a cap of
             -- zero -- and "have you capped this week" could then never
@@ -3329,17 +4308,6 @@ def main():
             if (part.weeklyRemaining or 0) ~= 120 then
                 return "a crest at 180 of 300 reports "
                     .. tostring(part.weeklyRemaining) .. " remaining, not 120"
-            end
-
-            if not tostring(keys.label):match("Restored Coffer Key") then
-                return "the discovered row reads '" .. tostring(keys.label)
-                    .. "'; it should carry the name the client gave it"
-            end
-            if keys.manual then
-                return "coffer keys fell back to a manual tick; the weekly counter was not read"
-            end
-            if keys.done then
-                return "coffer keys read as done at 2 of 6 earned"
             end
 
             -- Ticking a manual item sticks, and unticking undoes it.
@@ -5955,16 +6923,54 @@ def main():
 
             -- And the preview has to land on something real, which is
             -- exactly what broke last time.
-            if ns.UtilityAdvisor and ns.UtilityAdvisor.ShowTest then
-                ns.UtilityAdvisor:ShowTest()
-                local shown = ns.UtilityAdvisor._lastShownMapID
+            local UA = ns.UtilityAdvisor
+            if UA and UA.ShowTest then
+                UA:ShowTest()
+                local shown = UA._lastShownMapID
                 if not shown or not d[shown] then
                     return "the preview samples a dungeon the data does not have"
                 end
-                if ns.UtilityAdvisor.Hide then ns.UtilityAdvisor:Hide() end
             end
 
-            return string.format("ok:%d dungeons, 13 classes each, built %s",
+            -- Stepping through has to actually reach all of them. The
+            -- point of the command is checking every dungeon renders
+            -- without running a season of keystones, so a cycle that
+            -- silently skipped one would defeat its only purpose.
+            if UA and UA.CycleTest then
+                local seen, first = {}, nil
+                UA._lastShownMapID = nil
+                for i = 1, n do
+                    UA:CycleTest(1)
+                    local at = UA._lastShownMapID
+                    if not at or not d[at] then
+                        return "step " .. i .. " landed on a dungeon the data does not have"
+                    end
+                    if seen[at] then
+                        return string.format("step %d revisited %s before covering all %d",
+                            i, d[at].header, n)
+                    end
+                    seen[at] = true
+                    first = first or at
+                end
+                UA:CycleTest(1)
+                if UA._lastShownMapID ~= first then
+                    return "the cycle does not wrap back to the first dungeon"
+                end
+                UA:CycleTest(-1)
+                if UA._lastShownMapID == first then
+                    return "stepping back from the first did not wrap to the last"
+                end
+                -- And by name, on a fragment rather than the whole title.
+                for _, entry in pairs(d) do
+                    local word = entry.header:match("(%a%a%a%a+)")
+                    if word and UA:FindTestDungeon(word) == nil then
+                        return "no dungeon matched its own name fragment " .. word
+                    end
+                end
+            end
+            if UA and UA.Hide then UA:Hide() end
+
+            return string.format("ok:%d dungeons, 13 classes each, all reachable by name, built %s",
                 n, ns.UTILITY_BUILT_AT)
         end
     """)(ns)
@@ -5975,7 +6981,519 @@ def main():
         print("  FAIL utility advisor: %s" % utility)
         failures.append(("utility advisor", str(utility)))
 
-    # Every panel of the situation window can be raised from chat.
+    # Nothing here uses a Lua the client does not have.
+    #
+    # This file runs on 5.5 and the game runs 5.1, which makes the
+    # harness BLIND in one specific direction: anything added to Lua
+    # after 5.1 works perfectly here and is "attempt to call a nil value"
+    # in game. That is not hypothetical -- coroutine.isyieldable() got
+    # into the loot scanner exactly this way, passed every check, and
+    # broke the moment it ran for real.
+    #
+    # Static, because the point is to catch the call that is never
+    # reached during a load test as well as the one that is.
+    POST_51 = (
+        "coroutine.isyieldable", "coroutine.close",
+        "math.type", "math.tointeger", "math.maxinteger", "math.mininteger",
+        "math.ult", "table.move", "table.pack",
+        "string.pack", "string.unpack", "string.packsize",
+        "rawlen", "utf8.",
+    )
+
+    def strip_lua_comments(src):
+        # Block comments first, then line comments. Our own explanation
+        # of this bug names the very functions it looks for, so scanning
+        # comments would flag the documentation rather than the code.
+        # Written with chr() rather than escapes on purpose: this
+        # block is generated through tooling that has eaten a
+        # backslash more than once, and a mangled escape here turns
+        # into a syntax error in the file that checks everything else.
+        src = re.sub(re.escape("--[[") + ".*?" + re.escape("]]"), "", src, flags=re.S)
+        return re.sub("--[^" + chr(10) + "]*", "", src)
+
+    modern = []
+    for rel in toc_files():
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path) or rel.startswith("Libs"):
+            continue
+        code = strip_lua_comments(open(path, encoding="utf-8-sig").read())
+        for name in POST_51:
+            if name in code:
+                line = code[:code.index(name)].count(chr(10)) + 1
+                modern.append("%s uses %s (Lua 5.2+), around line %d" % (rel, name, line))
+    if modern:
+        print("  FAIL lua 5.1: %s" % "; ".join(modern))
+        failures.append(("lua 5.1", "; ".join(modern)))
+    else:
+        print("  ok   lua 5.1: no post-5.1 standard library calls in %d addon file(s)"
+              % len([r for r in toc_files() if not r.startswith("Libs")]))
+
+    # The loot scan does not run for a whole frame.
+    #
+    # It is thousands of Encounter Journal calls -- every tier of every
+    # expansion, then every boss at every difficulty -- and as one
+    # synchronous pass it grew past the client's watchdog and died with
+    # "script ran too long", blamed on whichever EJ call happened to be
+    # executing. What matters now is that it yields, and that it still
+    # finishes with the same answer.
+    loot = L.eval("""
+        function(ns)
+            if not (ns.ScanLootBrowserSlot and ns.LootScanRunner) then
+                return "the loot scanner is not published"
+            end
+            local saved = {}
+            local function stub(name, fn) saved[name] = _G[name]; _G[name] = fn end
+            -- A millisecond per journal call, against an 8ms budget, so
+            -- the yield fires after a handful of them. The real timings
+            -- depend on how much the journal holds; what is being tested
+            -- is that exceeding the budget hands the frame back at all.
+            local calls, clock = 0, 0
+            local function tick() calls = calls + 1; clock = clock + 1 end
+            stub("debugprofilestop", function() return clock end)
+
+            -- A pcall that behaves like the client's.
+            --
+            -- Lua 5.1 cannot yield across a C call, and pcall is one --
+            -- so wrapping yielding work in a pcall dies in game with
+            -- "attempt to yield across metamethod/C-call boundary". This
+            -- file runs 5.5, where pcall IS yieldable, so that mistake
+            -- passed every check and shipped. Running the target on its
+            -- own coroutine and refusing a suspend reproduces the 5.1
+            -- rule exactly.
+            stub("pcall", function(fn, ...)
+                local co = coroutine.create(fn)
+                local res = table.pack(coroutine.resume(co, ...))
+                if res[1] and coroutine.status(co) == "suspended" then
+                    return false, "attempt to yield across metamethod/C-call boundary"
+                end
+                return table.unpack(res, 1, res.n)
+            end)
+            stub("UnitClass", function() return "Warrior", "WARRIOR", 1 end)
+            stub("GetSpecializationInfoForClassID", function() return 71 end)
+            stub("GetItemInfo", function()
+                return "x", "|cffa335ee|Hitem:1|h[x]|h|r", 4, 0, 0, "", "", 1, "", 1, 0, 0, 0, 0, 0, 0, 0
+            end)
+            local TIERS, tier = 11, 1
+            local NAMES = { "Altar of Fangs", "Den of Nalorakk", "Kings' Rest", "Murder Row",
+                            "Ruby Life Pools", "Temple of Sethraliss", "The Blinding Vale",
+                            "Voidscar Arena" }
+            -- Mutated in place, not replaced. LootBrowserData.lua does
+            -- `local CEJ = C_EncounterJournal` at load, so swapping the
+            -- global afterwards leaves the module holding the old table
+            -- and the sweep silently finds nothing -- which reads as
+            -- "it finished in one frame" rather than "the stub missed".
+            local CEJ = _G.C_EncounterJournal
+            local savedCEJ = {}
+            local function ej(name, fn) savedCEJ[name] = CEJ[name]; CEJ[name] = fn end
+            for name, fn in pairs({
+                GetCurrentTier = function() tick() return TIERS end,
+                GetNumTiers = function() tick() return TIERS end,
+                SelectTier = function(x) tick() tier = x end,
+                GetInstanceByIndex = function(i)
+                    tick()
+                    if i > 20 then return nil end
+                    if tier == TIERS and i <= #NAMES then return 1000 + i, NAMES[i] end
+                    return 2000 + tier * 100 + i, "Old Instance " .. i
+                end,
+                SelectInstance = function() tick() end,
+                GetEncounterInfoByIndex = function(i)
+                    tick()
+                    if i > 4 then return nil end
+                    return "Boss " .. i, nil, 5000 + i
+                end,
+                SelectEncounter = function() tick() end,
+                SetDifficulty = function() tick() end,
+                GetDifficulty = function() tick() return 8 end,
+                SetLootFilter = function() tick() end,
+                SetSlotFilter = function() tick() end,
+                GetSlotFilter = function() tick() return 0 end,
+                GetLootFilter = function() tick() return 1, 1 end,
+                GetNumLoot = function() tick() return 3 end,
+                GetLootInfoByIndex = function(i)
+                    tick()
+                    if i > 3 then return nil end
+                    return { name = "Item " .. i, itemID = 200000 + i, icon = 1,
+                             link = "|cffa335ee|Hitem:1|h[x]|h|r" }
+                end,
+            }) do ej(name, fn) end
+
+            local function finish(msg)
+                for name, fn in pairs(saved) do _G[name] = fn end
+                for name, fn in pairs(savedCEJ) do CEJ[name] = fn end
+                if ns.ClearAllLootBrowserCaches then ns:ClearAllLootBrowserCaches() end
+                return msg
+            end
+
+            ns.lootBrowserState = ns.lootBrowserState or {}
+            ns.lootBrowserState.selectedClassID = 1
+            ns.lootBrowserState.selectedSpecID = 71
+            -- The instance cache too, not just the loot cache: with it
+            -- already warm the sweep is a fraction of its real size and
+            -- the test would be measuring almost nothing.
+            if ns.ClearAllLootBrowserCaches then ns:ClearAllLootBrowserCaches() end
+
+            local first = ns:ScanLootBrowserSlot(1, 0)
+            if #first > 0 then
+                return finish("the first ask returned rows synchronously, so it did not yield")
+            end
+            if not ns:IsLootScanRunning() then return finish("no pass was started") end
+
+            local drive = ns.LootScanRunner:GetScript("OnUpdate")
+            if not drive then return finish("the scan runner has no OnUpdate") end
+            local frames = 0
+            while ns:IsLootScanRunning() and frames < 5000 do
+                frames = frames + 1
+                drive(ns.LootScanRunner)
+            end
+            if ns:IsLootScanRunning() then return finish("the pass never finished") end
+            if frames < 2 then
+                return finish("the whole sweep fitted in one frame, so it is not yielding")
+            end
+
+            local second = ns:ScanLootBrowserSlot(1, 0)
+            if #second == 0 then return finish("the finished pass cached nothing") end
+
+            -- A request made while the login prewarm is working must not
+            -- be dropped. It used to be: the pass that finished was the
+            -- prewarm's, nothing ever started the one that was asked
+            -- for, and the browser sat there showing the wrong filter.
+            ns:ClearAllLootBrowserCaches()
+            ns:ScanLootBrowserSlot(1, 0, true)          -- prewarm, nobody waiting
+            for _ = 1, 3 do drive(ns.LootScanRunner) end
+            if not ns:IsLootScanRunning() then
+                return finish("the prewarm finished too early to test cancellation")
+            end
+            ns:ScanLootBrowserSlot(1, 5)                -- the player opens the browser
+            if not ns:IsLootScanRunning() then
+                return finish("asking during a prewarm started no pass at all")
+            end
+            local n = 0
+            while ns:IsLootScanRunning() and n < 5000 do
+                n = n + 1
+                drive(ns.LootScanRunner)
+            end
+            if #ns:ScanLootBrowserSlot(1, 5) == 0 then
+                return finish("the filter asked for during a prewarm was never scanned")
+            end
+
+            return string.format(
+                "ok:%d journal calls over %d frames, %d rows cached, a prewarm yields to a real ask",
+                calls, frames, #second)
+        end
+    """)(ns)
+    if loot and str(loot).startswith("ok:"):
+        print("  ok   loot scan: spread across frames, not one long block (%s)"
+              % str(loot)[3:])
+    else:
+        print("  FAIL loot scan: %s" % loot)
+        failures.append(("loot scan", str(loot)))
+
+    # Bindings.xml points at things that exist -- and is a file the
+    # client will actually read.
+    #
+    # The client loads that file itself, so nothing here parses it and a
+    # binding whose body calls a renamed global fails the quietest way
+    # possible: the key does nothing, in a panel where "nothing happened"
+    # reads as "I must have bound it wrong". The names it depends on are
+    # globals set in Lua, which is exactly what this file can check.
+    bindings_path = os.path.join(ROOT, "Bindings.xml")
+    if not os.path.exists(bindings_path):
+        print("  ok   bindings: none declared")
+    else:
+        # Not named `xml`: that is the module this now parses with, and
+        # the local shadowed it.
+        source = open(bindings_path, encoding="utf-8").read()
+        g = L.globals()
+        problems = []
+        # Well-formedness FIRST, with a real parser.
+        #
+        # This check used to go straight to the regex below, which meant
+        # it read a file the client refuses to load and reported it
+        # healthy. A malformed Bindings.xml is not a partial failure: the
+        # client drops the whole file, so the binding stops existing and
+        # the Key Bindings panel simply has nothing in it.
+        #
+        # The way it actually broke is worth naming, because it is a
+        # habit rather than a typo. XML forbids a double hyphen inside a
+        # comment body, and every Lua file in this addon uses one as an
+        # em-dash -- like this -- so writing the header comment in the
+        # house style is enough to break the file. expat catches it;
+        # nothing else here would, least of all the regex that strips
+        # comments before looking at anything.
+        try:
+            xml.parsers.expat.ParserCreate().Parse(source.encode("utf-8"), True)
+        except xml.parsers.expat.ExpatError as e:
+            problems.append("Bindings.xml is not well-formed (%s); the client "
+                            "drops the whole file, so the binding does not exist" % e)
+        # Comments stripped only now, and only for the name matching
+        # below: the explanation above the bindings names the very
+        # globals being looked for, and matching those would check the
+        # comment rather than the code.
+        body = re.sub(r"<!--.*?-->", "", source, flags=re.S)
+        found = re.findall(r"<Binding\s+([^>]*)>(.*?)</Binding>", body, flags=re.S)
+        if not found:
+            problems.append("Bindings.xml declares no bindings")
+        for attrs, code in found:
+            name = re.search(r'name="([^"]+)"', attrs)
+            if not name:
+                problems.append("a binding has no name")
+                continue
+            name = name.group(1)
+            if g["BINDING_NAME_" + name] is None:
+                problems.append("%s has no BINDING_NAME_ global, so it shows as its raw id" % name)
+            header = re.search(r'header="([^"]+)"', attrs)
+            if header and g["BINDING_HEADER_" + header.group(1)] is None:
+                problems.append("%s files under header %s, which has no BINDING_HEADER_ global"
+                                % (name, header.group(1)))
+            # Everything the body calls has to be a global function --
+            # the body runs in the global environment and cannot see an
+            # addon's namespace.
+            for fn in re.findall(r"([A-Za-z_][\w]*)\s*\(", code):
+                if g[fn] is None:
+                    problems.append("%s calls %s(), which does not exist" % (name, fn))
+                elif not callable(g[fn]):
+                    problems.append("%s calls %s(), which is not a function" % (name, fn))
+        if problems:
+            print("  FAIL bindings: %s" % "; ".join(problems))
+            failures.append(("bindings", "; ".join(problems)))
+        else:
+            print("  ok   bindings: %d binding(s), each named and pointing at a real function"
+                  % len(found))
+
+    # Other people's interrupts land on the tracker.
+    #
+    # The tracker cannot read a party member's spell id -- it is secret
+    # once tainted -- so somebody else's kick is inferred: their cast is
+    # noted by timestamp, and an enemy's interrupt event within a moment
+    # of it is attributed to them. That makes WHICH unit tokens count the
+    # whole mechanism, and it used to be nameplates alone, which fails
+    # entirely for anyone with enemy nameplates off.
+    interrupts = L.eval("""
+        function(ns)
+            local I, S = ns.Interrupts, ns.InterruptsSettings
+            if not (I and S) then return "the interrupt tracker is not loaded" end
+
+            local saved = {}
+            local function stub(name, fn) saved[name] = _G[name]; _G[name] = fn end
+            local clock = 1000
+            stub("GetTime", function() return clock end)
+            stub("IsInGroup", function() return true end)
+            stub("UnitExists", function(u)
+                return u == "player" or u == "party1" or u == "party2"
+                    or u == "target" or u == "nameplate1" or u == "nameplate2"
+            end)
+            stub("UnitName", function(u) return u end)
+            stub("UnitClass", function(u)
+                if u == "party1" then return "Shaman", "SHAMAN" end
+                if u == "party2" then return "Mage", "MAGE" end
+                return "Warrior", "WARRIOR"
+            end)
+            local function creature(u)
+                if u == "target" or u == "nameplate1" then return "Creature-1" end
+                if u == "nameplate2" then return "Creature-2" end
+                return "P-" .. tostring(u)
+            end
+            stub("UnitGUID", creature)
+            -- The tracker deduplicates with unit tokens now, because enemy
+            -- guids come back secret in Midnight. Same two mobs, asked the
+            -- way the addon asks.
+            stub("UnitIsUnit", function(a, b) return creature(a) == creature(b) end)
+
+            local wasEnabled = S:Get("enabled")
+            S:Set("enabled", true)
+            FireEvent("GROUP_ROSTER_UPDATE")
+
+            local function onCd(unit)
+                local e = I.state[UnitGUID(unit)]
+                return (e and e.readyAt and e.readyAt > clock) and true or false
+            end
+            local function kick(caster, enemy)
+                clock = clock + 60
+                FireEvent("UNIT_SPELLCAST_SUCCEEDED", caster, "c", 57994)
+                clock = clock + 0.05
+                FireEvent("UNIT_SPELLCAST_INTERRUPTED", enemy)
+            end
+            local function finish(msg)
+                S:Set("enabled", wasEnabled)
+                for name, fn in pairs(saved) do _G[name] = fn end
+                return msg
+            end
+
+            if onCd("party1") then return finish("a cooldown was running before anybody kicked") end
+
+            kick("party1", "nameplate1")
+            if not onCd("party1") then
+                return finish("a party kick reported on a nameplate was not attributed")
+            end
+
+            kick("party2", "target")
+            if not onCd("party2") then
+                return finish("a party kick reported on the target was ignored -- "
+                    .. "nameplates are not the only way this event arrives")
+            end
+
+            -- One kick, reported on both tokens for the same enemy. The
+            -- duplicate must not consume a second player's cast.
+            clock = clock + 60
+            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party1", "c", 57994)
+            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party2", "c", 2139)
+            clock = clock + 0.05
+            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate1")
+            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "target")
+            if onCd("party1") and onCd("party2") then
+                return finish("one interrupt reported twice put two people on cooldown")
+            end
+            if not (onCd("party1") or onCd("party2")) then
+                return finish("one interrupt reported twice attributed to nobody")
+            end
+
+            -- The other side of the same window: two DIFFERENT mobs kicked
+            -- close together are two kicks, and dropping the second would
+            -- leave a real cooldown untracked.
+            clock = clock + 300
+            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party1", "c", 57994)
+            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party2", "c", 2139)
+            clock = clock + 0.05
+            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate1")
+            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate2")
+            if not (onCd("party1") and onCd("party2")) then
+                return finish("two enemies kicked in the same window counted as one")
+            end
+
+            return finish("ok:nameplate and target both attribute, duplicates charge "
+                .. "one player, two enemies charge two")
+        end
+    """)(ns)
+    if interrupts and str(interrupts).startswith("ok:"):
+        print("  ok   interrupts: other players' kicks are attributed (%s)"
+              % str(interrupts)[3:])
+    else:
+        print("  FAIL interrupts: %s" % interrupts)
+        failures.append(("interrupts", str(interrupts)))
+
+    # The ready check survives being refused the aura list.
+    #
+    # This has now moved twice. 11.x made aura FIELDS secret, so
+    # comparing or indexing with one threw; 12.x put the wall in front of
+    # the door, and GetAuraDataByIndex itself raises "Auras cannot be
+    # accessed when secret while tainted". An addon is tainted by
+    # definition, so there is no version of this we can win -- the only
+    # question is whether the window dies, quietly lies, or says it does
+    # not know. It has to be the third, and only rendering can show which.
+    auras = L.eval("""
+        function(ns)
+            if not (ns.ReadyCheck and ns.ReadyCheck.Preview) then
+                return "no ready check to render"
+            end
+            local frame = _G.YippYappReadyCheck
+            if not (frame and frame._fullRows) then return "the row pool is not published" end
+
+            -- Everything the roster walk needs, kept local to this check
+            -- and put back afterwards so nothing else inherits a group.
+            local saved = {}
+            local function stub(name, fn)
+                saved[name] = _G[name]
+                _G[name] = fn
+            end
+            stub("IsInGroup", function() return true end)
+            stub("IsInRaid", function() return false end)
+            stub("GetNumGroupMembers", function() return 1 end)
+            stub("UnitExists", function(u) return u == "player" end)
+            stub("UnitIsUnit", function(a, b) return a == b end)
+            stub("UnitClass", function() return "Warrior", "WARRIOR" end)
+            stub("UnitName", function() return "Tester" end)
+            stub("Ambiguate", function(n) return n end)
+            stub("GetReadyCheckStatus", function() return "ready" end)
+            stub("UnitIsConnected", function() return true end)
+            stub("UnitIsDeadOrGhost", function() return false end)
+            stub("GetInventoryItemDurability", function() return 100, 100 end)
+            stub("GetInventoryItemLink", function() return nil end)
+            stub("IsInInstance", function() return false, "none" end)
+
+            local realAuras = C_UnitAuras
+            local refusing = true
+            local calls = 0
+            C_UnitAuras = {
+                GetAuraDataByIndex = function(_, i)
+                    if refusing then
+                        calls = calls + 1
+                        error("Auras cannot be accessed when secret while tainted by 'YippYappHelper'")
+                    end
+                    if i == 1 then
+                        return { spellId = 21562, name = "Power Word: Fortitude", icon = 1 }
+                    end
+                    return nil
+                end,
+                GetAuraDataBySpellName = function() return nil end,
+            }
+
+            local function columns()
+                for _, row in ipairs(frame._fullRows) do
+                    if row:IsShown() then
+                        local counts = { have = 0, missing = 0, unknown = 0, na = 0 }
+                        for _, btn in ipairs(row.icons or {}) do
+                            if btn._present == true then counts.have = counts.have + 1
+                            elseif btn._present == false then counts.missing = counts.missing + 1
+                            elseif btn._blocked then counts.unknown = counts.unknown + 1
+                            else counts.na = counts.na + 1 end
+                        end
+                        return counts
+                    end
+                end
+            end
+
+            local function finish(msg)
+                C_UnitAuras = realAuras
+                for name, fn in pairs(saved) do _G[name] = fn end
+                if ns.ReadyCheck.Hide then ns.ReadyCheck.Hide() end
+                return msg
+            end
+
+            -- Refused.
+            local ok, err = pcall(ns.ReadyCheck.Preview, false)
+            if not ok then
+                return finish("a refused aura scan still errors the render: " .. tostring(err))
+            end
+            if calls == 0 then return finish("the aura API was never called") end
+            local c = columns()
+            if not c then return finish("nothing rendered while refused") end
+            if c.missing > 0 then
+                return finish(string.format(
+                    "%d column(s) read as MISSING while auras were unreadable -- that is an accusation, not a reading",
+                    c.missing))
+            end
+            if c.unknown == 0 then return finish("no column reported unknown") end
+            local blockedUnknown = c.unknown
+
+            -- Allowed, so the two are provably different renders rather
+            -- than one grey window that always looks the same.
+            ns.ReadyCheck.Hide()
+            refusing = false
+            FireEvent("GROUP_ROSTER_UPDATE")
+            local ok2 = pcall(ns.ReadyCheck.Preview, false)
+            if not ok2 then return finish("the normal render broke") end
+            local c2 = columns()
+            if not c2 then return finish("nothing rendered when allowed") end
+            if c2.unknown > 0 then
+                return finish(string.format(
+                    "%d column(s) still read unknown after access came back", c2.unknown))
+            end
+            if c2.have == 0 then
+                return finish("the buff that was there did not register when readable")
+            end
+
+            return finish(string.format("ok:%d columns unknown when refused, %d found when allowed",
+                blockedUnknown, c2.have))
+        end
+    """)(ns)
+    if auras and str(auras).startswith("ok:"):
+        print("  ok   ready check: a refused aura scan says unknown, not missing (%s)"
+              % str(auras)[3:])
+    else:
+        print("  FAIL ready check auras: %s" % auras)
+        failures.append(("ready check auras", str(auras)))
+
+    # Every self-opening window can be raised from chat, and owns itself.
     #
     # The three windows it hosts cannot be summoned in normal play -- you
     # cannot start a ready check to see where it sits -- so "/yh test" is
@@ -6000,7 +7518,6 @@ def main():
                 end
             end
 
-            local host = _G.YippYappHud
             local yh = SlashCmdList.YIPPYAPPHELPER
             if not yh then return "no /yh handler" end
 
@@ -6019,37 +7536,46 @@ def main():
                 end
                 if ns.Hud:Find(id) ~= id then return id .. " cannot be found by its own id" end
 
-                -- And the command has to put it on screen at its own size.
+                -- And the command has to put that window on screen.
                 yh("test " .. m.aliases[1])
-                if ns.Hud:Visible() ~= id then
-                    return string.format("/yh test %s raised %s",
-                        m.aliases[1], tostring(ns.Hud:Visible()))
+                if not ns.Hud:IsShown(id) then
+                    return string.format("/yh test %s did not raise it", m.aliases[1])
                 end
-                if not host:IsShown() then
-                    return string.format("/yh test %s left the window hidden", m.aliases[1])
+
+                -- Each one owns its position now, so each has to be
+                -- anchored somewhere of its own rather than parented
+                -- into a shared host.
+                if not m.frame:GetPoint() then
+                    return id .. " is not anchored anywhere"
                 end
-                -- tonumber because GetScale is not stubbed and falls
-                -- through to the no-op, which returns the frame itself.
-                local w  = math.floor(tonumber(host:GetWidth()) or 0)
-                local pw = math.floor((tonumber(m.panel:GetWidth()) or 0)
-                    * (tonumber(m.panel:GetScale()) or 1))
-                if math.abs(w - pw) > 1 then
-                    return string.format("%s: window is %dpx wide for a %dpx panel", id, w, pw)
+                if m.frame:GetParent() ~= UIParent then
+                    return id .. " is parented to something other than UIParent"
+                end
+                if not m.frame:IsMovable() then
+                    return id .. " cannot be dragged"
                 end
                 tried = tried + 1
             end
 
+            -- Independent windows: raising every one leaves every one up,
+            -- which is the whole point of splitting them.
+            local up = ns.Hud:Shown()
+            if #up ~= tried then
+                return string.format("%d windows raised but %d are showing", tried, #up)
+            end
+
             yh("test off")
-            if ns.Hud:Visible() or host:IsShown() then
+            if #ns.Hud:Shown() > 0 then
                 return "/yh test off left something on screen"
             end
-            if ns.Hud:Find("wobble") ~= nil then return "an unknown word matched a panel" end
+            if ns.Hud:Find("wobble") ~= nil then return "an unknown word matched a window" end
 
-            return string.format("ok:%d panels, each raised by name and dismissed", tried)
+            return string.format(
+                "ok:%d windows, each raised by name, each on its own anchor, all dismissed", tried)
         end
     """)(ns)
     if panels and str(panels).startswith("ok:"):
-        print("  ok   panels: every panel of the shared window is testable from chat (%s)"
+        print("  ok   windows: each moves itself and is testable from chat (%s)"
               % str(panels)[3:])
     else:
         print("  FAIL panels: %s" % panels)
@@ -6774,6 +8300,62 @@ def main():
     else:
         print("  FAIL trainer shooting: %s" % guns)
         failures.append(("trainer shooting", str(guns)))
+
+    # ------------------------------------------------------------
+    # The generated guide data is normalised before it ships.
+    # ------------------------------------------------------------
+    # Read as text rather than through Lua on purpose: this is a check on
+    # the SCRAPER's output, and the failure it guards against is a future
+    # regenerate that skips canonical_sources. That would put "The Coiled
+    # Alter" back beside "The Coiled Altar" -- displaying a misspelling
+    # and sorting one place as two, both silently.
+    import difflib as _difflib
+    _guide = os.path.join(ROOT, "Features", "Gear", "ClassGuideData.lua")
+    try:
+        _raw = open(_guide, encoding="utf-8", errors="replace").read()
+    except OSError as exc:
+        _raw = None
+        print("  FAIL guide data: %s" % exc)
+        failures.append(("guide data", str(exc)))
+    if _raw:
+        _fields = re.findall(r'source = "([^"]*)"', _raw)
+        _segs = {}
+        for _f in _fields:
+            for _part in _f.split("/"):
+                _part = _part.strip()
+                if _part:
+                    _segs[_part] = _segs.get(_part, 0) + 1
+        _bad = []
+        for _f in _fields:
+            if "(Raid)" in _f:
+                _bad.append("%r still carries (Raid)" % _f)
+            if "|" in _f:
+                _bad.append("%r still carries a pipe, which is a FontString escape" % _f)
+
+        def _key(n):
+            n = n.lower().replace("’", "'").replace("'", "")
+            return re.sub(r"^the\s+", "", n).strip()
+
+        # Anything the scraper would have merged must already be merged.
+        _names = sorted(_segs, key=lambda n: -_segs[n])
+        for _i, _a in enumerate(_names):
+            for _b in _names[_i + 1:]:
+                _r = _difflib.SequenceMatcher(None, _key(_a), _key(_b)).ratio()
+                if _r >= 0.88:
+                    _bad.append("%r (%d) and %r (%d) are the same place at %.3f"
+                                % (_a, _segs[_a], _b, _segs[_b], _r))
+        # And the corrections that no ratio could have made.
+        for _wrong in ("Nymrissa Wavebinder",):
+            if _wrong in _segs:
+                _bad.append("%r is the guides' misspelling; the journal says otherwise"
+                            % _wrong)
+        if _bad:
+            for _b in _bad[:6]:
+                print("  FAIL guide sources: %s" % _b)
+            failures.append(("guide sources", _bad[0]))
+        else:
+            print("  ok   guide sources: %d fields, %d distinct places, one spelling each"
+                  % (len(_fields), len(_segs)))
 
     return failures
 

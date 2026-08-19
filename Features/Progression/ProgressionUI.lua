@@ -352,12 +352,15 @@ local function ensureCard(i)
     if raidCards[i] then return raidCards[i] end
     local card = CreateFrame("Frame", nil, raidCardContainer, "BackdropTemplate")
     card:SetSize(CARD_W, CARD_H)
-    card:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
+    -- The skin's surface, like every other card on this page.
+    --
+    -- These were the last frames here still rolling their own backdrop
+    -- and painting it 0.10, 0.10, 0.10 -- a flat neutral grey, which is
+    -- exactly the "colour the skin cannot reach" the widget layer exists
+    -- to stop. Every other card in this file already went through
+    -- Apply, so the raid row was the odd one out and looked it: grey
+    -- blocks in a brown page.
+    ns.Widgets:Apply(card, "row")
     ns.SmoothFrame(card)
     -- Stripe texture lives on the card permanently; we just re-tint
     -- or hide it on each rebuild.
@@ -383,9 +386,15 @@ local function BuildRaidCards()
         cardResetFs(card)
         card:ClearAllPoints()
         card:SetPoint("TOPLEFT", raidCardContainer, "TOPLEFT", PAD + SECTION_PAD + x, 0)
-        card:SetBackdropColor(0.10, 0.10, 0.10, 0.9)
-        card:SetBackdropBorderColor(c and (c.r * 0.6) or 0.25, c and (c.g * 0.6) or 0.25, c and (c.b * 0.6) or 0.25, 0.7)
-
+        -- No SetBackdropColor / SetBackdropBorderColor here any more.
+        --
+        -- Repainting after Apply would put the grey straight back, and
+        -- the border tint would not land in any case: a skin drawing its
+        -- edge from a nine-slice leaves no backdrop for
+        -- SetBackdropBorderColor to reach, so the call succeeds and does
+        -- nothing. The crest colour rides the stripe instead -- the same
+        -- trade MakeCard above already made, and the stripe was always
+        -- the clearer of the two signals.
         if c then
             card._stripe:SetColorTexture(c.r, c.g, c.b, 0.85)
             card._stripe:Show()
