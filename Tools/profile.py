@@ -35,19 +35,16 @@ from lupa import LuaRuntime                       # noqa: E402
 import loadcheck as LC                            # noqa: E402
 
 
-def build(track_regions=False, stub_anchors=True):
+def build(stub_anchors=True):
     """A loaded addon, in a fresh Lua state.
 
-    `track_regions` registers every region so Tools/render.py can walk
-    the tree. `stub_anchors` silences the anchor recorder, which is
-    right for measuring garbage and wrong for drawing -- the renderer
-    needs exactly the anchors this throws away.
+    `stub_anchors` silences the anchor recorder, which is right for
+    measuring garbage and wrong for anything that wants to know where
+    things ended up.
     """
     L = LuaRuntime(unpack_returned_tuples=False)
     L.execute("_G = _G or _ENV")
     L.execute(LC.PRELUDE)
-    if track_regions:
-        L.execute("_TRACK_REGIONS = true")
     ns = L.eval("{}")
     run_lua = L.eval("""
         function(src, name, ns)

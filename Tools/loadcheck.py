@@ -186,10 +186,9 @@ function Region.SetPoint(self, p, rel, relP, x, y)
     return self
 end
 function Region.ClearAllPoints(self) self._pts = nil; self._all = nil; return self end
--- Recorded rather than ignored, so Tools/render.py can give a texture
--- its parent's rect. It used to fall through to the no-op catch-all,
--- which is fine for a check that reads numbers and useless for one that
--- draws them -- a full-bleed background had no geometry at all.
+-- Recorded rather than ignored. It used to fall through to the no-op
+-- catch-all, which meant a full-bleed background had no geometry at all
+-- and any check that asked about one got a silent wrong answer.
 function Region.SetAllPoints(self, rel) self._all = rel or self._parent; return self end
 function Region.IsObjectType(self, t) return t == self._type end
 function Region.GetObjectType(self) return self._type or "Frame" end
@@ -210,24 +209,8 @@ function Region.GetPoint(self) return "TOPLEFT", nil, "TOPLEFT", 0, 0 end
 function Region.GetCenter(self) return 0, 0 end
 function Region.GetEffectiveScale(self) return 1 end
 
--- Every region ever made, for Tools/render.py.
---
--- OPT-IN, because it is not free: registering appends to a table on
--- every creation, and Tools/profile.py measures bytes of garbage per
--- frame. Set _TRACK_REGIONS between the prelude and loading the addon
--- and you get a tree that can be drawn; leave it alone and the stub
--- behaves exactly as it always did.
-_REGIONS = {}
 function NewRegion(kind, parent)
     local r = setmetatable({ _type = kind or "Frame", _parent = parent }, Region)
-    if _TRACK_REGIONS then
-        -- __rid, not _id. The addon sets its own `_id` on some frames
-        -- (the shell's tabs carry one), and a registry that used the
-        -- same name had its numbering silently overwritten by the page
-        -- it was trying to draw.
-        r.__rid = #_REGIONS + 1
-        _REGIONS[r.__rid] = r
-    end
     return r
 end
 
@@ -331,7 +314,21 @@ function hooksecurefunc() end
 function tinsert(t, ...) return table.insert(t, ...) end
 function tremove(t, ...) return table.remove(t, ...) end
 function wipe(t) for k in pairs(t) do t[k] = nil end return t end
-function strsplit(sep, s) return s end
+-- Really splits, because it used to hand the string back whole -- which
+-- silently made every "/yh <command> <argument>" untestable here: the
+-- command matched only when it was typed with no argument at all.
+function strsplit(sep, s, limit)
+    s = tostring(s or "")
+    local out, start = {}, 1
+    while not (limit and #out == limit - 1) do
+        local a, b = s:find("[" .. sep .. "]", start)
+        if not a then break end
+        out[#out + 1] = s:sub(start, a - 1)
+        start = b + 1
+    end
+    out[#out + 1] = s:sub(start)
+    return (table.unpack or unpack)(out)
+end
 function strjoin(sep, ...) return table.concat({ ... }, sep) end
 function strtrim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 function format(...) return string.format(...) end
