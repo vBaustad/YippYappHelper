@@ -1365,10 +1365,15 @@ function ns:GetMarkLaunder(slotID)
     local prevCrestTrack = ns.TRACK_CREST[prevTrack]
     if not crestTrack or not prevCrestTrack then return nil end
 
-    -- Read from the game, not inferred. Whether wearing a piece is
-    -- enough to mark a slot -- rather than upgrading one into it -- is
-    -- not a rule this addon should be guessing at, and it does not have
-    -- to: C_ItemUpgrade answers it per slot.
+    -- What sets a mark is BINDING. Not equipping the piece, not
+    -- upgrading it: the moment it is soulbound the slot has its item
+    -- level, and a piece traded back to the group inside its window
+    -- never marks anything at all.
+    --
+    -- Which is why this is read from the client rather than derived from
+    -- what the player is wearing. The two agree most of the time and
+    -- come apart exactly when a drop is fresh -- the moment somebody is
+    -- most likely to be looking at this panel.
     local mark = ns:GetFreeUpgradeIlvl(slotID) or 0
 
     -- Zero is not "this slot has held nothing". It is "the client has
@@ -1439,6 +1444,23 @@ function ns:GetMarkLaunder(slotID)
         end
     end
     if not best then return nil end
+
+    -- Anything for this slot still sitting unbound above the mark. It
+    -- has not marked the slot, and it will the moment it binds -- so
+    -- every number above is the price BEFORE a decision the player has
+    -- not made yet, and the row must not read as though it were final.
+    --
+    -- The highest one, because that is the one that moves the mark
+    -- furthest. How far it moves is deliberately not predicted: rings
+    -- and trinkets share a mark between two slots and one bound piece
+    -- does not necessarily move it, so the row says the price is
+    -- provisional and stops there.
+    for _, spare in ipairs(ns:GetBagSpares(slotID)) do
+        if spare.unbound and spare.ilvl > mark
+            and (not best.pending or spare.ilvl > best.pending.ilvl) then
+            best.pending = spare
+        end
+    end
 
     best.slotID         = slotID
     best.track          = track
@@ -1864,8 +1886,19 @@ function ns:GetRecommendation(slotID)
         -- would be telling the player to wait for the same price.
         local cheaperExists = launder.paidRanks > 1
 
+        -- And nothing is worth waiting for until the price is real. A
+        -- piece for this slot still inside its trade window has not
+        -- marked anything yet, so "hold out for a cheaper spare" would
+        -- be advice about a number that changes the moment the player
+        -- decides to keep what they already looted.
+        local pending = launder.pending
+
         local line
-        if net > 0 then
+        if pending then
+            line = "The " .. pending.track .. " " .. pending.rank .. "/" ..
+                pending.maxRank .. " in your bags is still tradeable — "
+                .. "settle that first, this price follows it"
+        elseif net > 0 then
             line = "The " .. piece .. " in your bags does this for " ..
                 price .. " — then this rank is free"
         elseif launder.spareIsCheap then
@@ -1884,6 +1917,18 @@ function ns:GetRecommendation(slotID)
         end
 
         local detail = {}
+        if pending then
+            detail[1] = "A piece marks its slot when it binds, not when "
+                .. "you put it on — so while that one can still be handed "
+                .. "to somebody else, this slot has only reached " ..
+                launder.mark .. " and the " .. piece .. " prices at " ..
+                price .. "."
+            detail[2] = "Keep it and the slot moves up to " .. pending.ilvl ..
+                ", and the " .. piece .. " gets cheaper by however many of "
+                .. "its ranks that covers. Worth settling first — this is "
+                .. "the only number here that is still up to you."
+            return ns.RECOMMEND.USE_LOWER_TRACK, line, detail
+        end
         if launder.freeRanks > 0 then
             detail[1] = "This slot has already reached " .. launder.mark ..
                 ", so " .. launder.freeRanks .. " of that piece's ranks cost "

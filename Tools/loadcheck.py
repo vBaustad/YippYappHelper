@@ -3695,6 +3695,100 @@ def main():
         print("  FAIL spare piece (expensive): %s" % dear)
         failures.append(("spare piece (expensive)", str(dear)))
 
+    # A price that is still up to the player.
+    #
+    # Binding is what marks a slot -- not equipping, not upgrading -- so a
+    # drop with time left on its trade window has put nothing on the slot
+    # yet. Price the Champion spare against the mark while that is true
+    # and the row confidently quotes a hundred for something that costs
+    # twenty the moment the player decides to keep what they looted.
+    #
+    # So the row is not allowed to recommend waiting here. It names the
+    # undecided piece instead, and says the price follows that decision.
+    pending = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realFree = ns.IsCrestFree
+            -- Worn: whatever was in the slot before. In the bags: the
+            -- Hero drop, still tradeable, and the Champion piece.
+            local worn = {
+                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Old]|h|r",
+                ilvl = T.Hero[1], quality = 4, icon = 134400,
+                track = "Hero", rank = 1, maxRank = 6, crafted = false,
+            }
+            local champ = {
+                itemID = 2, link = "|cffa335ee|Hitem:2::::::::80:::::|h[Spare]|h|r",
+                track = "Champion", rank = 1, maxRank = 6, ilvl = T.Champion[1],
+            }
+            local fresh = {
+                itemID = 3, link = "|cffa335ee|Hitem:3::::::::80:::::|h[Fresh]|h|r",
+                track = "Hero", rank = 2, maxRank = 6, ilvl = T.Hero[2],
+                unbound = true,
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 16 and worn or nil
+            end
+            ns.GetBagSpares = function(self, slotID)
+                return slotID == 16 and { champ, fresh } or {}
+            end
+            ns.IsCrestFree = function() return false end
+            YYH_WATERMARKS[16] = T.Champion[1]    -- the slot has seen 292
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                ns.IsCrestFree = realFree
+                YYH_WATERMARKS[16] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[16] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local l = ns:GetMarkLaunder(16)
+            if not l then return restore("no trade found at all") end
+            if l.pending ~= fresh then
+                return restore("the undecided piece was not spotted")
+            end
+
+            local _, reason, detail = ns:GetRecommendation(16)
+            local said = reason .. " " .. table.concat(detail or {}, " ")
+            -- The expensive-case check above proves this row WOULD tell
+            -- the player to wait on exactly this fixture. It must not,
+            -- while the mark is still a decision.
+            if said:find("further up its track", 1, true) then
+                return restore("it recommends waiting on a price that has "
+                    .. "not settled: " .. said)
+            end
+            if not said:find("still tradeable", 1, true) then
+                return restore("nothing says the piece is undecided: " .. said)
+            end
+            -- And it explains itself in terms of the decision, not the
+            -- bookkeeping: binding is the thing the player does.
+            if not said:find("binds", 1, true) then
+                return restore("it never says what settles the price: " .. said)
+            end
+
+            -- Once it is bound the row goes back to being about crests.
+            fresh.unbound = false
+            local _, boundReason = ns:GetRecommendation(16)
+            if boundReason:find("still tradeable", 1, true) then
+                return restore("a bound piece is still treated as pending")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if pending == "ok":
+        print("  ok   spare piece: a drop still inside its trade window has "
+              "marked nothing, so the row holds its price rather than advising")
+    else:
+        print("  FAIL spare piece (unbound): %s" % pending)
+        failures.append(("spare piece (unbound)", str(pending)))
+
     # A row is about the slot it is headed with.
     #
     # The overlap warning used to spend most of its width sending crests

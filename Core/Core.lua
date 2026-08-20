@@ -33,6 +33,46 @@ function ns:InvalidateScanCache()
     wipe(scanCache)
 end
 
+------------------------------------------------------------
+-- The tooltip lines that mean an item has not bound yet.
+--
+-- Binding is what marks a slot -- not equipping it, not upgrading it.
+-- A piece handed back to the group inside its trade window never marks
+-- anything, and the same piece kept until it binds marks the slot the
+-- moment it does.
+--
+-- Which makes "unbound" a state the advisor has to be able to see. A
+-- Hero drop sitting in the bags with time left on it has NOT put its
+-- item level on the slot, so anything priced against the slot's mark
+-- while it sits there is priced against a number that is about to
+-- change.
+--
+-- Read positively, off the two lines that say so, rather than inferred
+-- from "this is above the mark, so it must be unbound". That inference
+-- is wrong exactly where it would matter most: rings and trinkets share
+-- one mark between two slots, so a bound piece can sit above it without
+-- ever having been unbound.
+--
+-- Taken from the client's own globals so this survives a locale, with
+-- English fallbacks for the load harness, which has no client strings.
+-- Matched on the fixed part before the first substitution.
+local UNBOUND_LINES = {}
+do
+    for _, s in ipairs({
+        BIND_TRADE_TIME_REMAINING
+            or "You may trade this item with players that were also eligible",
+        ITEM_BIND_ON_EQUIP or "Binds when equipped",
+    }) do
+        local fixed = s:match("^(.-)%%") or s
+        -- A format string whose very first token is a substitution
+        -- would leave nothing to match on, and a zero-length needle
+        -- finds itself in every line.
+        if fixed ~= "" then
+            UNBOUND_LINES[#UNBOUND_LINES + 1] = fixed
+        end
+    end
+end
+
 --- Read the upgrade line off whatever was last put in the scan tooltip.
 ---
 --- Split out of ScanUpgradeTrack because the same three numbers have to
@@ -60,6 +100,12 @@ local function ParseUpgradeTooltip()
         local line = _G["YYHUpgradeScanTooltipTextLeft" .. i]
         if line then
             local text = line:GetText() or ""
+            -- Still the player's to give away, which means it has not
+            -- marked anything yet. See UNBOUND_LINES for why this is
+            -- read off the tooltip rather than assumed.
+            for _, prefix in ipairs(UNBOUND_LINES) do
+                if text:find(prefix, 1, true) then found.unbound = true end
+            end
             -- Match "Upgrade Level: Champion 3/5" or similar
             if not found.track then
                 local trackName, currRank, maxRank = text:match("Upgrade Level:%s+(%S+)%s+(%d+)/(%d+)")
@@ -208,6 +254,7 @@ local function ScanBagSpares()
                             maxRank = maxRank,
                             ilvl    = ilvl,
                             crafted = found.crafted,
+                            unbound = found.unbound or false,
                         }
                         for _, slotID in ipairs(slots) do
                             out[slotID] = out[slotID] or {}
