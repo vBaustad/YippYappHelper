@@ -1862,7 +1862,19 @@ function ns:GetRecommendation(slotID)
     -- questions and both are printed now.
     ------------------------------------------------------------
     local label, outcome = ns.RECOMMEND.UPGRADE_NOW, ""
-    if mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
+    local trackMax = ns:GetMaxIlvlForTrack(track)
+
+    -- A track that tops out under everything the player loots is
+    -- the dominant fact about any spend on it, so it is tested
+    -- before the rest. Reaching such a cap still reported "caps the
+    -- track", which sounds like an achievement and hides that the
+    -- cap is below the worst thing the player is handed -- the mark
+    -- it sets can never pay out, and the ranks are stats until the
+    -- slot turns over.
+    if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
+        label = ns.RECOMMEND.SAFE_TEMP
+        outcome = " — " .. track .. " tops out under everything you loot"
+    elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- The item stops at the cap. What carries on is the slot: its
         -- mark now sits at this level, so the next piece to land there
         -- is lifted to it for nothing.
@@ -1876,13 +1888,12 @@ function ns:GetRecommendation(slotID)
         outcome = " — over " .. plan.bandLow .. ", refunded when a " ..
             plan.bandLow .. " drops"
     elseif (plan.bandLow or 0) > 0 then
-        -- Nothing bought here outlives a drop. Still worth doing when
-        -- the crests have nowhere better to be -- which on an outgrown
-        -- wallet is always -- but the player should know they are
-        -- renting it.
+        -- Nothing bought here outlives a drop, but the track could still
+        -- cross the floor -- which makes this a fixable stopgap rather
+        -- than a doomed one, so the fix gets named.
         label = ns.RECOMMEND.SAFE_TEMP
-        outcome = " — under your " .. plan.bandLow ..
-            " floor, so a drop replaces it"
+        outcome = " — stops under the " .. plan.bandLow .. " you loot; " ..
+            trackMax .. " clears it"
     end
 
     -- Which wallet this is the best use of, not which row is the most
@@ -1934,7 +1945,13 @@ function ns:GetRecommendation(slotID)
     end
 
     -- 2. What it buys on the piece that replaces it.
-    if mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
+    if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
+        detail[#detail + 1] = track .. " caps at " .. trackMax ..
+            " and the lowest thing you get handed is " .. plan.bandLow ..
+            ", so every rank on it is a stopgap until the slot turns "
+            .. "over — even the last one, which marks the slot at a level "
+            .. "no drop will ever arrive below."
+    elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- Said in ranks, because that is how the game shows gear and
         -- how players talk about it. "308 instead of 305" is the same
         -- fact in a unit nobody carries in their head.
@@ -1948,10 +1965,11 @@ function ns:GetRecommendation(slotID)
         detail[#detail + 1] = "Nothing you run drops above " ..
             plan.bandHigh .. ", so this one is yours to keep."
     elseif (plan.bandLow or 0) > 0 and mine.bankedRanks == 0 then
-        detail[#detail + 1] = "It sits under the " .. plan.bandLow ..
-            " you get handed, so the next piece to drop here simply "
-            .. "replaces it — worth doing only because these crests have "
-            .. "nowhere better to go."
+        detail[#detail + 1] = "Stopping at " .. mine.paidIlvl ..
+            " leaves it under the " .. plan.bandLow ..
+            " you get handed, so the next piece here simply replaces it. "
+            .. "Carrying it to " .. trackMax .. " instead would mean that "
+            .. "piece starts a rank up."
     end
 
     -- 3. The track, in one sentence that ends in a conclusion.

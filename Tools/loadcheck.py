@@ -2577,6 +2577,10 @@ def main():
             local SET = {
                 { 16, "Champion", 3 }, { 13, "Champion", 1 }, { 14, "Champion", 1 },
                 {  8, "Champion", 1 }, { 12, "Champion", 1 },
+                -- Veteran caps at 295, ten below the worst thing this
+                -- character is handed, so nothing on it can outlive a
+                -- drop -- not even its last rank.
+                {  9, "Veteran",  3 },
             }
             local bySlot = {}
             for _, e in ipairs(SET) do
@@ -2589,7 +2593,8 @@ def main():
             end
             ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
             ns.GetCrestCountByTrack = function(self, track)
-                return track == "Champion" and 200 or 0
+                if track == "Champion" or track == "Veteran" then return 200 end
+                return 0
             end
             ns:InvalidateCrestPlans()
 
@@ -2664,20 +2669,49 @@ def main():
 
             -- And the run that stops short is warned about rather than
             -- quietly listed as an upgrade like any other.
-            if not said[14]:find("a drop replaces it", 1, true) then
+            -- Trinket 2 stops at 298, under the 305 floor -- but
+            -- Champion reaches 308, so this is a stopgap the player can
+            -- fix. Saying only "a drop replaces it" states the problem
+            -- and withholds the answer.
+            if not said[14]:find("stops under the 305 you loot; 308 clears it",
+                                 1, true) then
                 return restore("Trinket 2 stops under the drop floor without "
-                    .. "saying so: " .. said[14])
+                    .. "naming what would clear it: " .. said[14])
+            end
+
+            -- And the case that prompted this. On Veteran, "under your
+            -- 305 floor" named a Hero raid drop that has nothing to do
+            -- with the piece, and was vacuously true besides: Veteran
+            -- stops at 295, so no rank of it can ever clear 305 and the
+            -- sentence fired on every row without telling them apart.
+            -- Worse, the row that DID reach 295 said "caps the track",
+            -- which reads as an achievement.
+            if not said[9]:find("Veteran tops out under everything you loot",
+                                1, true) then
+                return restore("a Veteran row does not say the whole track "
+                    .. "lands under the drop floor: " .. said[9])
+            end
+            if said[9]:find("305", 1, true) then
+                return restore("a Veteran row quotes the Hero drop floor: "
+                    .. said[9])
             end
             if said[14]:find("caps the track", 1, true) then
                 return restore("Trinket 2 claims a cap it does not reach")
             end
 
-            -- Every funded row prices itself, in crests.
+            -- Every funded row prices itself, in crests, and names the
+            -- wallet it is spending -- its OWN, not whichever one the
+            -- page happens to be mostly about.
             for slot, reason in pairs(said) do
-                if reason:find(" for ", 1, true)
-                    and not reason:find("Champion", 1, true) then
-                    return restore("slot " .. slot .. " spends without naming the "
-                        .. "currency: " .. reason)
+                if reason:find(" for ", 1, true) then
+                    local named = false
+                    for _, t in ipairs(ns.TRACK_ORDER) do
+                        if reason:find(t, 1, true) then named = true break end
+                    end
+                    if not named then
+                        return restore("slot " .. slot .. " spends without "
+                            .. "naming the currency: " .. reason)
+                    end
                 end
             end
 
@@ -5202,16 +5236,26 @@ def main():
             -- filled in. What IS asserted about the real rows is that
             -- the field reached the data at all -- plumbing wired to
             -- nothing is the failure this would otherwise miss.
-            local wired = 0
+            local wired, counting = 0, 0
             for _, item in ipairs(Wk.ITEMS) do
-                if item.quests then wired = wired + 1 end
+                if item.questsAny then wired = wired + 1 end
+                if item.questsAll then counting = counting + 1 end
+                -- The two fields mean opposite things, so a row setting
+                -- both is a row whose answer depends on which branch
+                -- runs first. That is a bug, not a preference.
+                if item.questsAny and item.questsAll then
+                    return item.id .. " sets both questsAny and questsAll"
+                end
             end
             if wired == 0 then
-                return "no checklist row carries a quests field; the plumbing is unused"
+                return "no checklist row carries a questsAny field; the plumbing is unused"
+            end
+            if counting == 0 then
+                return "no checklist row counts; the questsAll path is unused"
             end
 
             local realFlagged = C_QuestLog.IsQuestFlaggedCompleted
-            local probe = { id = "harnessquest", label = "probe", quests = { 111 } }
+            local probe = { id = "harnessquest", label = "probe", questsAny = { 111 } }
 
             C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 111 end
             local done, isManual = Wk:IsDone(probe)
@@ -5226,7 +5270,7 @@ def main():
 
             -- Any id in the list counts, because one chore is routinely
             -- several ids and only one of them gets completed.
-            probe.quests = { 111, 222 }
+            probe.questsAny = { 111, 222 }
             C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 222 end
             if not (Wk:IsDone(probe)) then
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
@@ -5247,16 +5291,85 @@ def main():
 
             -- An empty list is "nothing to go on", which is what keeps a
             -- row that has no id yet behaving exactly as it did before.
-            probe.quests = {}
+            probe.questsAny = {}
             local _, emptyManual = Wk:IsDone(probe)
             if not emptyManual then
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
                 return "a row with no ids stopped falling back to its manual tick"
             end
 
+            -- questsAll is the opposite reading of the same list: several
+            -- separate pickups, so the row counts and is only finished
+            -- when the lot are in. Sparks need it -- four are available
+            -- in a catch-up week and one a week after.
+            local counter = { id = "harnesscount", label = "probe",
+                              questsAll = { 111, 222, 333, 444 } }
+            C_QuestLog.IsQuestFlaggedCompleted = function(id)
+                return id == 111 or id == 222
+            end
+            local cDone, cManual, cHave, cOf = Wk:IsDone(counter)
+            if cDone then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "two of four sparks read as the row being finished"
+            end
+            if cManual then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a counting row was offered as a manual click"
+            end
+            if cHave ~= 2 or cOf ~= 4 then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return ("a counting row reported %s of %s, not 2 of 4")
+                    :format(tostring(cHave), tostring(cOf))
+            end
+
+            C_QuestLog.IsQuestFlaggedCompleted = function() return true end
+            if not (Wk:IsDone(counter)) then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "all four collected still did not finish the row"
+            end
+
+            -- And the count has to survive the trip to the page, or the
+            -- row renders a tick where it should render a fraction.
+            --
+            -- Driven by lending the real counting row a set of fake ids
+            -- rather than by reading whatever it ships with, which is
+            -- empty until somebody confirms them in game. This way the
+            -- path under test is the real one -- item to GetList to the
+            -- fields ShellHome reads -- without the check depending on
+            -- data that does not exist yet.
+            local counted
+            for _, item in ipairs(Wk.ITEMS) do
+                if item.questsAll then counted = item; break end
+            end
+            local realIds = counted.questsAll
+            counted.questsAll = { 111, 222, 333, 444 }
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 111 end
+            local row
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == counted.id then row = r end
+            end
+            counted.questsAll = realIds
+            if not (row and row.of) then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "GetList dropped the count, so no row can render one"
+            end
+            if row.have ~= 1 or row.of ~= 4 then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return ("the page would show %s of %s, not 1 of 4")
+                    :format(tostring(row.have), tostring(row.of))
+            end
+            if row.manual then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a counting row reached the page as a manual tick"
+            end
+
             -- And a tick left in the store from before an id existed
             -- must not go on being the answer once one does.
-            probe.quests = { 111 }
+            -- Flag set here rather than inherited from the block above,
+            -- so inserting a check between the two cannot silently turn
+            -- this one into an assertion about the wrong thing.
+            C_QuestLog.IsQuestFlaggedCompleted = function() return false end
+            probe.questsAny = { 111 }
             Wk:Toggle(manual.item)
             local storeKey
             for k in pairs(YippYappHelperDB.weekly) do storeKey = k end
