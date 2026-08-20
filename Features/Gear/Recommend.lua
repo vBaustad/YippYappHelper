@@ -889,6 +889,70 @@ function ns:GetTrackPolicy(crestTrack)
     return policy
 end
 
+------------------------------------------------------------
+-- How close the player is to never needing this crest again.
+--
+-- A track has a finish line and it is not the achievement: it is the
+-- moment every slot sits at or above the track's cap, because from then
+-- on the crest has nothing left to buy. That is the fact worth telling
+-- someone -- "three pieces and you are done with Champion for good" is
+-- a reason to spend, where "Champion tops out at 308" is a rule they
+-- did not ask to be taught.
+--
+-- Slots count as done however they got there. A Hero piece sitting at
+-- 311 is past the Champion cap and will never want a Champion crest, so
+-- it is finished for this purpose even though nothing was spent on it.
+------------------------------------------------------------
+function ns:GetTrackCompletion(crestTrack)
+    if not crestTrack then return nil end
+    local capIlvl = ns:GetMaxIlvlForTrack(crestTrack)
+    if capIlvl <= 0 then return nil end
+
+    local cost = ns:GetCrestCost(crestTrack)
+    local out = {
+        track     = crestTrack,
+        capIlvl   = capIlvl,
+        slots     = 0,
+        done      = 0,     -- at or above the cap, by any route
+        needCrest = 0,     -- on this track, still climbing
+        needDrop  = 0,     -- below the cap and crests cannot get there
+        cost      = 0,     -- to finish every needCrest slot
+        held      = ns:GetCrestCountByTrack(crestTrack),
+    }
+
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        out.slots = out.slots + 1
+        local info = ns:GetSlotInfo(si.slot)
+        local ilvl = info and info.ilvl or 0
+        if ilvl >= capIlvl then
+            out.done = out.done + 1
+        else
+            local canUp, up = ns:CanUpgradeItem(si.slot)
+            local track = up and up.track
+            if canUp and track and ns.TRACK_CREST[track] == crestTrack then
+                local left = math.max((up.maxUpgrade or 0) - (up.currUpgrade or 0), 0)
+                if left > 0 then
+                    out.needCrest = out.needCrest + 1
+                    out.cost = out.cost + left * cost
+                else
+                    out.needDrop = out.needDrop + 1
+                end
+            else
+                -- Empty, off-season, or parked on a lower track whose
+                -- own cap sits under this one. Crests cannot move it.
+                out.needDrop = out.needDrop + 1
+            end
+        end
+    end
+
+    out.canFinish = out.cost > 0 and out.held >= out.cost
+    out.short     = math.max(out.cost - out.held, 0)
+    out.surplus   = math.max(out.held - out.cost, 0)
+    -- Done means done: no slot left that this crest could still buy.
+    out.finished  = out.needCrest == 0
+    return out
+end
+
 --- One line a player can act on, for a whole track.
 function ns:GetTrackPolicyLine(crestTrack)
     local p = ns:GetTrackPolicy(crestTrack)
@@ -1789,58 +1853,94 @@ function ns:GetRecommendation(slotID)
     ------------------------------------------------------------
     -- The long version, for the hover.
     --
-    -- The row has to fit one line in a panel a third of the screen
-    -- wide, and the reasoning behind it does not. Everything the short
-    -- line had to drop lives here: the arithmetic, both ends of the
-    -- drop band, what the mark actually does, and where this track's
-    -- whole budget stands.
+    -- What this is NOT: a description of the upgrade system. An earlier
+    -- pass filled this with true sentences about how tracks and marks
+    -- work -- "Champion tops out at 308 and the item stops there" --
+    -- which is a rule the player did not ask to be taught, dressed up
+    -- as advice. Nobody hovers a recommendation to find out how the game
+    -- works. They hover it to find out why THIS one.
     --
-    -- Written as separate lines rather than a paragraph because a
-    -- tooltip wraps each one on its own, and a player scanning for the
-    -- number they care about should not have to read prose to find it.
+    -- So every line here is a consequence for this character: what the
+    -- spend finishes, what it makes cheaper later, and how much closer
+    -- it gets them to never needing this crest again. The mechanics are
+    -- still in there, but stated as what they do rather than what they
+    -- are -- "a Hero piece landing here would start at 308" says the
+    -- same thing as a paragraph about high-water marks, and says it
+    -- about the player's own weapon.
     ------------------------------------------------------------
-    local detail = {
-        mine.paidRanks .. " x " .. crestCost .. " " .. crestTrack ..
-            " = " .. mine.paidCost .. ", taking " .. ilvl .. " to " ..
-            mine.paidIlvl .. " (" .. (rank + mine.paidRanks) .. "/" ..
-            maxRank .. ")",
-    }
-    if (plan.bandLow or 0) > 0 and (plan.bandHigh or 0) > 0 then
-        detail[#detail + 1] = "Your content hands out " .. plan.bandLow ..
-            " to " .. plan.bandHigh .. ". A rank above " .. plan.bandHigh ..
-            " is yours for good; one under " .. plan.bandLow ..
-            " is replaced by the next drop in this slot."
+    local detail = {}
+    local finish = ns.GetTrackCompletion and ns:GetTrackCompletion(crestTrack)
+
+    -- 1. What it does to this slot.
+    if mine.promotes then
+        detail[#detail + 1] = "Maxes " .. (mine.slotName or "this slot") ..
+            " — the last " .. mine.paidRanks ..
+            (mine.paidRanks == 1 and " rank " or " ranks ") .. crestTrack ..
+            " can give it, for " .. mine.paidCost .. " crests."
+    else
+        local shortBy = mine.wantedRanks - mine.paidRanks
+        detail[#detail + 1] = "Takes " .. (mine.slotName or "this slot") ..
+            " to " .. mine.paidIlvl .. ", " .. shortBy ..
+            (shortBy == 1 and " rank " or " ranks ") .. "short of the " ..
+            ns:GetMaxIlvlForTrack(track) .. " cap."
     end
-    if mine.promotes and mine.promotesTo then
-        -- The mechanic itself, spelled out, because it is the one people
-        -- get wrong -- including an earlier pass of this file.
-        detail[#detail + 1] = crestTrack .. " tops out at " ..
-            ns:GetMaxIlvlForTrack(track) .. " and the item stops there; it "
-            .. "does not move onto the " .. mine.promotesTo .. " track."
-        if (plan.markRanks or 0) > 0 then
-            detail[#detail + 1] = "What carries on is the slot. Its mark sits "
-                .. "at " .. mine.paidIlvl .. ", so the next " ..
-                mine.promotesTo .. " piece to land here is lifted to " ..
-                mine.paidIlvl .. " free — worth " ..
-                (plan.markRanks * ns:GetCrestCost(mine.promotesTo)) .. " " ..
-                mine.promotesTo .. "."
+
+    -- 2. What it buys on the piece that replaces it.
+    if mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
+        local saved = plan.markRanks * ns:GetCrestCost(mine.promotesTo)
+        detail[#detail + 1] = "A " .. mine.promotesTo ..
+            " piece dropping here would start at " .. mine.paidIlvl ..
+            " instead of " .. plan.bandLow .. " — " .. plan.markRanks ..
+            (plan.markRanks == 1 and " free rank, " or " free ranks, ") ..
+            saved .. " " .. mine.promotesTo .. " you never spend."
+    elseif mine.stickyRanks > 0 then
+        detail[#detail + 1] = "Nothing you run drops above " ..
+            plan.bandHigh .. ", so this one is yours to keep."
+    elseif (plan.bandLow or 0) > 0 and mine.bankedRanks == 0 then
+        detail[#detail + 1] = "It sits under the " .. plan.bandLow ..
+            " you get handed, so the next piece to drop here simply "
+            .. "replaces it — worth doing only because these crests have "
+            .. "nowhere better to go."
+    end
+
+    -- 3. Where that leaves the track.
+    if finish then
+        local after = math.max(finish.needCrest - (mine.promotes and 1 or 0), 0)
+        detail[#detail + 1] = finish.done .. " of your " .. finish.slots ..
+            " slots are already at " .. finish.capIlvl .. " or better" ..
+            (mine.promotes and (", and this makes " .. (finish.done + 1) .. ".")
+                or ".")
+
+        if after == 0 then
+            detail[#detail + 1] = "That is the last one — after this you never "
+                .. "need a " .. crestTrack .. " crest again."
+        elseif after > 0 then
+            -- Both sides net off what this row already spends. The
+            -- crests buy ranks whether or not they finish the piece, so
+            -- charging them to the wallet but not to the demand would
+            -- report the same spend as pure loss.
+            local rest = math.max(finish.cost - mine.paidCost, 0)
+            local left = math.max(finish.held - mine.paidCost, 0)
+            local line = after .. (after == 1 and " piece" or " pieces") ..
+                " left after this, " .. rest .. " crests to finish them, and " ..
+                left .. " in hand"
+            if left >= rest then
+                detail[#detail + 1] = line ..
+                    " — enough for all of them. Do that and " .. crestTrack ..
+                    " is done; only " ..
+                    (plan.markTrack or "the higher tracks") ..
+                    " and up matter after that."
+            else
+                detail[#detail + 1] = line .. ", so " .. (rest - left) ..
+                    " short."
+            end
+        end
+        if finish.needDrop > 0 then
+            detail[#detail + 1] = finish.needDrop ..
+                (finish.needDrop == 1 and " slot is" or " slots are") ..
+                " below " .. finish.capIlvl .. " and need a drop, not crests."
         end
     end
-    if plan.outgrown then
-        -- The point is which TRACK a drop lands on, not which item
-        -- level. Champion caps at 308 and the band starts at 305, so
-        -- comparing the two numbers reads as nonsense -- what matters is
-        -- that a 305 piece is Hero, and Champion crests cannot touch it.
-        local _, _, dropTrack = ns:GetDropBand()
-        detail[#detail + 1] = "Everything you are handed arrives on the " ..
-            (dropTrack or "next") .. " track (" .. plan.bandLow ..
-            " and up), which " .. crestTrack .. " crests cannot upgrade."
-        detail[#detail + 1] = "So nothing you run pays " .. crestTrack ..
-            " directly any more — it arrives when a higher track caps and "
-            .. "spills down."
-    end
-    local policy = ns.GetTrackPolicyLine and ns:GetTrackPolicyLine(crestTrack)
-    if policy then detail[#detail + 1] = policy end
 
     return label, lead .. price .. " for " .. runStr .. ", " .. buys .. outcome,
         detail

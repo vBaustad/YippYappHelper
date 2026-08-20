@@ -2689,16 +2689,41 @@ def main():
                     .. (d and #d or 0) .. " lines of detail")
             end
             local joined = table.concat(d, " ")
-            for _, want in ipairs({ "305", "311", "does not move onto",
-                                    "mark sits at" }) do
-                if not joined:find(want, 1, true) then
-                    return restore("the hover never mentions '" .. want .. "'")
+
+            -- Nobody hovers a recommendation to find out how the game
+            -- works; they hover it to find out why THIS one. An earlier
+            -- pass filled this with true sentences about tracks and
+            -- marks -- a rules lecture dressed as advice -- so the
+            -- shapes that read as teaching are refused outright.
+            for _, lecture in ipairs({
+                "tops out at", "does not move onto", "What carries on",
+                "A rank above", "cannot upgrade", "is replaced by the next drop",
+            }) do
+                if joined:find(lecture, 1, true) then
+                    return restore("the hover explains the system instead of "
+                        .. "this upgrade: '" .. lecture .. "'")
                 end
             end
-            -- The whole-set view: a track budget is a fact about sixteen
-            -- slots and one wallet, and no per-slot rule can reach it.
-            if not joined:find("to finish them all", 1, true) then
-                return restore("the hover never says what the whole track costs")
+
+            -- It has to be about THIS slot, by name.
+            if not joined:find("Main Hand", 1, true) then
+                return restore("the hover never names the slot it is about")
+            end
+            -- The free ranks on the next piece, which is the whole
+            -- reason to carry a lower track to its cap.
+            if not (joined:find("free rank", 1, true)
+                and joined:find("Hero you never spend", 1, true)) then
+                return restore("the hover never says what maxing this buys on "
+                    .. "the piece that replaces it: " .. joined)
+            end
+            -- Where the player stands on being DONE with the track --
+            -- the fact that makes a spend feel like progress rather than
+            -- an isolated purchase.
+            if not joined:find("slots are already at 308 or better", 1, true) then
+                return restore("the hover never says how far along the track is")
+            end
+            if not joined:find("left after this", 1, true) then
+                return restore("the hover never says what is left to finish")
             end
 
             return restore("ok:" .. said[16])
@@ -2794,6 +2819,35 @@ def main():
                 end
             end
             if checked == 0 then return "no track produced a policy" end
+
+            -- The finish line the hover counts down to. Every slot is
+            -- done, climbing, or waiting on a drop -- and if those three
+            -- stop adding up, the "N pieces left" the panel promises is
+            -- measured against a set that does not exist.
+            for _, crest in ipairs(ns.CRESTS or {}) do
+                local f = ns:GetTrackCompletion(crest.track)
+                if f then
+                    if f.done + f.needCrest + f.needDrop ~= f.slots then
+                        return crest.track .. ": " .. f.done .. " done + "
+                            .. f.needCrest .. " climbing + " .. f.needDrop
+                            .. " waiting is not " .. f.slots .. " slots"
+                    end
+                    if f.finished ~= (f.needCrest == 0) then
+                        return crest.track .. ": calls itself finished with "
+                            .. f.needCrest .. " pieces still climbing"
+                    end
+                    -- A track nothing is climbing costs nothing to
+                    -- finish; anything else would price phantom ranks.
+                    if f.needCrest == 0 and f.cost ~= 0 then
+                        return crest.track .. ": nothing left to buy but "
+                            .. f.cost .. " to finish"
+                    end
+                    if f.canFinish ~= (f.cost > 0 and f.held >= f.cost) then
+                        return crest.track .. ": disagrees with itself about "
+                            .. "whether " .. f.held .. " covers " .. f.cost
+                    end
+                end
+            end
             return string.format("ok:%d:%d:%d", onTrack, #c.empty, checked)
         end
     """)(ns)

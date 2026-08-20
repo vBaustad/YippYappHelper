@@ -221,6 +221,11 @@ that never pays Champion. The advice is never "run M0s for Champion" — it is
 - **No model of time.** `ns.CREST_WEEKLY_INCREMENT` is defined and read by
   nothing. Caps make this a throughput problem, so "you need 380 more
   Champion" is only actionable as "that is two weeks of overflow".
+- **The hover is where the reasoning lives; the page has none of it.** The
+  row is one line and the tooltip carries the rest, but a player who never
+  hovers sees only the verdict. The track's finish line — "3 pieces and you
+  are done with Champion" — is the strongest sentence the addon produces and
+  it is hidden behind a mouse.
 - **The whole-set view is only half wired.** `ns:GetGearCensus`,
   `ns:GetTrackPolicy` and `ns:GetTrackPolicyLine` exist and the hover prints
   the policy line, but nothing above the list says it. A track budget is a
