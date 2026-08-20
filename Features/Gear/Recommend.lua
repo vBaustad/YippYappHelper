@@ -1650,29 +1650,58 @@ function ns:GetRecommendation(slotID)
     local waste = ns:GetCrestWaste(slotID)
     if waste then
         local sinks = #waste.sinkSlots
+        local nextRank = waste.overlapRanks + 1
+
+        -- The row is about THIS slot.
+        --
+        -- It used to spend most of its width directing crests elsewhere
+        -- -- "Spend Champion on Waist +5 more (140 held)" -- on a row
+        -- headed Neck. True, useful, and the wrong place for it: a
+        -- player reading the Neck row is deciding about the neck, and
+        -- three-quarters of the sentence was about a belt.
+        --
+        -- What belongs here is the one fact that decides it: the first
+        -- ranks of this track land on item levels the track below
+        -- already reaches, so spending the scarcer crest on them buys
+        -- nothing the cheaper one could not.
+        --
+        -- "to", not an arrow: U+2192 is outside the client font's range
+        -- and draws as an empty box. The em dash is fine -- it is used
+        -- 180-odd times across the addon and renders.
+        local line = "Ranks 1-" .. waste.overlapRanks .. " are wasted " ..
+            waste.crestTrack .. " — " .. waste.prevTrack .. " reaches " ..
+            waste.toIlvl .. " too. Keep " .. waste.crestTrack ..
+            " for rank " .. nextRank .. "+"
+
+        -- Where the cheaper crests could go instead is still worth
+        -- knowing; it just belongs on the hover, with the arithmetic.
+        local detail = {
+            waste.crestTrack .. " " .. waste.rank .. "/" .. waste.maxRank ..
+                " to " .. waste.overlapRanks .. "/" .. waste.maxRank ..
+                " is " .. waste.fromIlvl .. " to " .. waste.toIlvl ..
+                ", and a maxed " .. waste.prevTrack .. " piece is " ..
+                waste.toIlvl .. " as well — so those " .. waste.wastedCrests ..
+                " " .. waste.crestTrack .. " buy item level " ..
+                waste.prevCrestTrack .. " already reaches.",
+        }
         if sinks > 0 then
             local where = waste.sinkSlots[1]
             if sinks > 1 then
-                where = where .. " +" .. (sinks - 1) .. " more"
+                where = where .. " and " .. (sinks - 1) .. " other" ..
+                    (sinks > 2 and "s" or "")
             end
-            return ns.RECOMMEND.WASTED_CREST,
-                waste.wastedCrests .. " " .. waste.crestTrack .. " for " ..
-                -- "to", not an arrow: U+2192 is outside the client
-                -- font's range and draws as an empty box. Seen on the
-                -- dashboard, and this is the same string built the same
-                -- way. The em dash below is fine -- it is used 180-odd
-                -- times across the addon and renders.
-                waste.fromIlvl .. " to " .. waste.toIlvl .. " — a maxed " ..
-                waste.prevTrack .. " piece lands there too. Spend " ..
-                waste.prevCrestTrack .. " on " .. where ..
-                " (" .. waste.prevCrestCount .. " held); keep " ..
-                waste.crestTrack .. " for rank " .. (waste.overlapRanks + 1) .. "+"
+            detail[#detail + 1] = "You hold " .. waste.prevCrestCount .. " " ..
+                waste.prevCrestTrack .. ", and " .. where ..
+                " can still take them."
         end
-        return ns.RECOMMEND.USE_LOWER_TRACK,
-            "Rank " .. rank .. "/" .. maxRank .. " — " .. waste.toIlvl ..
-            " is also a maxed " .. waste.prevTrack .. " piece, so " ..
-            waste.prevCrestTrack .. " crests reach it. Keep " ..
-            waste.crestTrack .. " for rank " .. (waste.overlapRanks + 1) .. "+"
+        detail[#detail + 1] = "Rank " .. nextRank ..
+            " and up is the part nothing cheaper reaches, which is what " ..
+            waste.crestTrack .. " is for."
+
+        if sinks > 0 then
+            return ns.RECOMMEND.WASTED_CREST, line, detail
+        end
+        return ns.RECOMMEND.USE_LOWER_TRACK, line, detail
     end
 
     -- ============================================================

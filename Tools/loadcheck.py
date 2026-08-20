@@ -3396,6 +3396,61 @@ def main():
         print("  FAIL free upgrades: %s" % freebies)
         failures.append(("free upgrades", str(freebies)))
 
+    # A row is about the slot it is headed with.
+    #
+    # The overlap warning used to spend most of its width sending crests
+    # somewhere else -- "Spend Champion on Waist +5 more (140 held)" on a
+    # row headed Neck. True, useful, and the wrong place for it: someone
+    # reading the Neck row is deciding about the neck. The fact that
+    # decides it is that the first ranks of this track land where the
+    # track below already reaches; where the cheaper crests could go
+    # instead belongs on the hover with the arithmetic.
+    overlap = L.eval("""
+        function(ns)
+            -- The fixture parks Back on Hero 1/6 with Champion pieces
+            -- under it, which is the shape GetCrestWaste fires on.
+            local rec, reason, detail = ns:GetRecommendation(15)
+            if rec ~= ns.RECOMMEND.WASTED_CREST
+                and rec ~= ns.RECOMMEND.USE_LOWER_TRACK then
+                return "Back is not flagged as an overlap spend: "
+                    .. tostring(reason)
+            end
+            if not reason:find("Ranks 1-2 are wasted Hero", 1, true) then
+                return "the row does not say which ranks are wasted: " .. reason
+            end
+            if not reason:find("Keep Hero for rank 3+", 1, true) then
+                return "the row does not say what the crest is for: " .. reason
+            end
+            -- No other slot's name on this row.
+            for _, si in ipairs(ns.SLOT_IDS) do
+                if si.slot ~= 15 and reason:find(si.name, 1, true) then
+                    return "the row sends the player to " .. si.name
+                        .. ": " .. reason
+                end
+            end
+            if #reason > 100 then
+                return "the row runs to " .. #reason .. " characters"
+            end
+            -- ...but the hover still knows where they could go, or the
+            -- shortening threw the useful half away.
+            local joined = table.concat(detail or {}, " ")
+            if not joined:find("Waist", 1, true) then
+                return "the hover lost the slots that could take the cheaper "
+                    .. "crests: " .. joined
+            end
+            if not joined:find("Champion already reaches", 1, true) then
+                return "the hover never shows the overlap arithmetic"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if overlap == "ok":
+        print("  ok   overlap warning: the row names its own slot and the "
+              "ranks at stake, the hover names where the crests could go")
+    else:
+        print("  FAIL overlap warning: %s" % overlap)
+        failures.append(("overlap warning", str(overlap)))
+
     # The season name, guarded at the source.
     #
     # Season 1's "of the Dawn" outlived the id table it belonged to and
