@@ -2716,14 +2716,32 @@ def main():
                 return restore("the hover never says what maxing this buys on "
                     .. "the piece that replaces it: " .. joined)
             end
-            -- Where the player stands on being DONE with the track --
-            -- the fact that makes a spend feel like progress rather than
-            -- an isolated purchase.
-            if not joined:find("slots are already at 308 or better", 1, true) then
-                return restore("the hover never says how far along the track is")
+            -- Where the player stands on being DONE with the track, and
+            -- what that means in weeks or drops -- the shortfall stated
+            -- as a decision rather than left as a number.
+            --
+            -- The running "N of your 16 slots" count this replaced read
+            -- as filler at best and absurd at worst: on a character with
+            -- none of the track finished it announced "0 of your 16, and
+            -- this makes 1".
+            if not joined:find("crests left against", 1, true) then
+                return restore("the hover never says what the rest of the track "
+                    .. "costs against what is in hand")
             end
-            if not joined:find("left after this", 1, true) then
-                return restore("the hover never says what is left to finish")
+            -- Outgrown, so no week count is claimed -- the income is
+            -- whatever spills out of a higher track capping and nothing
+            -- here can date that. It has to point at drops instead.
+            if not joined:find("faster route", 1, true) then
+                return restore("the hover leaves an outgrown shortfall without "
+                    .. "a route: " .. joined)
+            end
+            if joined:find(" weeks to finish", 1, true) then
+                return restore("the hover dates an outgrown track it cannot see "
+                    .. "the income for")
+            end
+            -- Six lines of reasoning was a briefing, not a tip.
+            if #d > 4 then
+                return restore("the hover runs to " .. #d .. " lines")
             end
 
             return restore("ok:" .. said[16])
@@ -2941,9 +2959,13 @@ def main():
             if close.short ~= 60 then
                 return restore("400 against 460 is short " .. close.short)
             end
-            if close.weeks ~= 0 then
-                return restore("a 60 shortfall inside a 120 allowance wants "
-                    .. tostring(close.weeks) .. " resets")
+            -- Inside the allowance: one week, and flagged as content to
+            -- run rather than a wait. Those are different sentences and
+            -- the distinction is the point of the flag.
+            if close.weeks ~= 1 or not close.withinAllowance then
+                return restore("a 60 shortfall inside a 120 allowance reads "
+                    .. tostring(close.weeks) .. " weeks, within="
+                    .. tostring(close.withinAllowance))
             end
 
             -- Short beyond the allowance: now it is resets, and the
@@ -2952,10 +2974,13 @@ def main():
             if poor.short ~= 260 then
                 return restore("200 against 460 is short " .. poor.short)
             end
-            local want = math.ceil((260 - 120) / ns.CREST_WEEKLY_INCREMENT)
-            if poor.weeks ~= want then
+            -- 260 short with 120 still allowed: this week takes 120, then
+            -- 100, then the last 40 -- three weeks, which is what a
+            -- player means by "how long until I can max these".
+            local want = 1 + math.ceil((260 - 120) / ns.CREST_WEEKLY_INCREMENT)
+            if poor.weeks ~= want or poor.withinAllowance then
                 return restore("260 short with 120 allowed reads "
-                    .. tostring(poor.weeks) .. " resets, not " .. want)
+                    .. tostring(poor.weeks) .. " weeks, not " .. want)
             end
 
             return restore(string.format("ok:%d:%d:%d",
@@ -2964,11 +2989,77 @@ def main():
     """)(ns)
     if timing and str(timing).startswith("ok:"):
         cost, near, far = str(timing)[3:].split(":")
-        print("  ok   shortfall timing: %s to finish the track — inside the "
-              "allowance it is %s resets, beyond it %s" % (cost, near, far))
+        print("  ok   shortfall timing: %s to finish the track — %s week inside "
+              "the allowance, %s beyond it" % (cost, near, far))
     else:
         print("  FAIL shortfall timing: %s" % timing)
         failures.append(("shortfall timing", str(timing)))
+
+    # The week you lose by spending in the wrong order.
+    #
+    # Reported from a real season: advice to max trinkets drained the
+    # wallet, and a Hero piece sitting one rank from its cap could not be
+    # finished -- with the season cap already reached there was no way to
+    # go back for it, and the Myth piece that wanted that slot's mark had
+    # to wait a reset. Twenty crests, a week late.
+    #
+    # Run scoring makes this rare on its own, because a one-rank
+    # completion is the best value per crest on any page. It is not
+    # impossible: a high-priority deep run can still outbid one. That is
+    # exactly when the row has to say so.
+    strand = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
+            -- Two pieces, both one rank from the Champion cap, and only
+            -- enough for one of them. The weapon outranks the ring.
+            local SET = { { 16, "Champion", 5 }, { 12, "Champion", 5 } }
+            local bySlot = {}
+            for _, e in ipairs(SET) do
+                bySlot[e[1]] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = T[e[2]][e[3]], quality = 4, icon = 134400,
+                    track = e[2], rank = e[3], maxRank = #T[e[2]], crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and 20 or 0
+            end
+            ns:InvalidateCrestPlans()
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local _, reason, detail = ns:GetRecommendation(16)
+            if not reason:find("Main Hand", 1, true)
+                and not reason:find("caps the track", 1, true) then
+                return restore("the weapon did not take the only affordable "
+                    .. "completion: " .. reason)
+            end
+            local joined = table.concat(detail or {}, " ")
+            if not joined:find("Leaves Ring 2 20 short", 1, true) then
+                return restore("nothing warns that the ring is left one rank "
+                    .. "from its cap: " .. joined)
+            end
+
+            -- And it does not cry wolf: the ring's own row is the one
+            -- being left behind, so it has nothing to warn about.
+            local _, _, ringDetail = ns:GetRecommendation(12)
+            if table.concat(ringDetail or {}, " "):find("Leaves ", 1, true) then
+                return restore("the stranded slot warns about itself")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if strand == "ok":
+        print("  ok   stranded completion: a slot left one rank from its cap is "
+              "named on the row that outbid it")
+    else:
+        print("  FAIL stranded completion: %s" % strand)
+        failures.append(("stranded completion", str(strand)))
 
     # The season name, guarded at the source.
     #
@@ -8327,6 +8418,77 @@ def main():
     else:
         print("  FAIL panels: %s" % panels)
         failures.append(("panels", str(panels)))
+
+    # Opening itself when the game loads, and the three times it must not.
+    #
+    # The event this rides on fires on every loading screen, so the
+    # interesting case is the one that must do nothing: walking through
+    # an instance door is a PLAYER_ENTERING_WORLD with both flags false,
+    # and a window that reopened on each of those would be unusable.
+    # That is the negative control here, alongside the setting being off.
+    #
+    # C_Timer.After is swapped for one that keeps the callback, because
+    # the real open is five seconds behind the login and the stub is a
+    # no-op -- so without this the check would assert the gate and call
+    # it a feature.
+    login = L.eval("""
+        function(ns)
+            if not ns.OpenOnLoginIfWanted then return "open on login is not wired up" end
+            if not (ns.Shell and ns.Shell.IsOpen) then return "no shell to open" end
+            if ns.Shell:IsOpen() then ns.Shell:Close() end
+
+            local realAfter = C_Timer.After
+            local queued
+            C_Timer.After = function(_, fn) queued = fn end
+
+            --- One loading screen. Returns what it scheduled, if anything.
+            local function load(isLogin, isReload)
+                queued = nil
+                local scheduled = ns.OpenOnLoginIfWanted(isLogin, isReload)
+                return scheduled, queued
+            end
+
+            local function done(msg)
+                C_Timer.After = realAfter
+                ns.SetOpenOnLogin(false)
+                return msg
+            end
+
+            ns.SetOpenOnLogin(false)
+            if load(true, false) then return done("opened on login with the setting off") end
+
+            ns.SetOpenOnLogin(true)
+            if load(false, false) then return done("opened on a zone change") end
+            if not load(false, true) then return done("did not open on a /reload") end
+
+            local scheduled, open = load(true, false)
+            if not (scheduled and open) then return done("nothing was scheduled on login") end
+            open()
+            if not ns.Shell:IsOpen() then return done("the window never opened") end
+            local page = ns.Shell._lastPage
+            if page ~= "home" then
+                return done("opened on " .. tostring(page) .. ", not the dashboard")
+            end
+
+            -- Already open, so a second load must leave it alone rather
+            -- than re-mounting the page underneath the player.
+            local reopened = false
+            local hook = ns.OpenTo
+            ns.OpenTo = function(...) reopened = true; return hook(...) end
+            local _, again = load(true, false)
+            if again then again() end
+            ns.OpenTo = hook
+            if reopened then return done("reopened a window that was already up") end
+
+            ns.Shell:Close()
+            return done("ok:shut when off, shut through a door, open on the dashboard on login and reload")
+        end
+    """)(ns)
+    if login and str(login).startswith("ok:"):
+        print("  ok   open on login: %s" % str(login)[3:])
+    else:
+        print("  FAIL open on login: %s" % login)
+        failures.append(("open on login", str(login)))
 
     # The gale moves you, and where it moves you is the mechanic.
     #
