@@ -864,7 +864,14 @@ C_Timer = { After = function() end, NewTimer = function() return NewRegion() end
 -- Answers only for something that looks like an item; a stub that hands
 -- back an icon for nil or "" would let "every slot drew a reward" pass
 -- on nine slots that have no reward.
+-- What the player is holding, per item id. Empty by default so a row
+-- that reads a bag has to say which item it means; a stub answering a
+-- count for every id would let a row pass while asking about nothing.
+ITEM_COUNTS = {}
 C_Item = {
+                   GetItemCount = function(id)
+                       return ITEM_COUNTS[id] or 0
+                   end,
                    DoesItemExist = function(loc)
                        return loc ~= nil and loc.slot ~= nil
                    end, GetItemIconByID = function(item)
@@ -3697,9 +3704,9 @@ def main():
 
     # A price that is still up to the player.
     #
-    # Binding is what marks a slot -- not equipping, not upgrading -- so a
-    # drop with time left on its trade window has put nothing on the slot
-    # yet. Price the Champion spare against the mark while that is true
+    # Binding is what marks a slot, and both keeping a drop and wearing it
+    # bind it -- so a drop with time left on its trade window is the one
+    # state where it has put nothing on the slot yet. Price the Champion spare against the mark while that is true
     # and the row confidently quotes a hundred for something that costs
     # twenty the moment the player decides to keep what they looted.
     #
@@ -6497,6 +6504,58 @@ def main():
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
                 return "an unnamed row had no label to fall back on"
             end
+
+            -- The bounty map, which neither the bag nor the quest flag
+            -- can answer on its own.
+            --
+            -- Three states, and the interesting one is the third: earned
+            -- this week and not in the bag means used, which is the
+            -- answer a bag count alone cannot reach and the reason this
+            -- row stopped being hand-ticked.
+            local bounty
+            for _, item in ipairs(Wk.ITEMS) do
+                if item.id == "bountymap" then bounty = item end
+            end
+            if not (bounty and bounty.itemID) then return "the bounty row lost its item id" end
+
+            QUEST_STUB_ID = -1
+            C_QuestLog.IsQuestFlaggedCompleted = function() return false end
+
+            -- Holding one: not spent, and not the player's to claim.
+            ITEM_COUNTS[bounty.itemID] = 1
+            local bDone, bManual = Wk:IsDone(bounty)
+            if bDone or bManual then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "holding the bounty did not read as an outstanding, automatic row"
+            end
+
+            -- Not earned and not holding: no map exists yet, so still
+            -- outstanding rather than done.
+            ITEM_COUNTS[bounty.itemID] = 0
+            if Wk:IsDone(bounty) then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a bounty that was never earned read as spent"
+            end
+
+            -- Earned this week, gone from the bag: spent.
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 95520 end
+            if not (Wk:IsDone(bounty)) then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a bounty earned and no longer held did not read as spent"
+            end
+
+            -- Earned AND holding beats the flag: a map in hand is still
+            -- worth spending whichever week it came from.
+            ITEM_COUNTS[bounty.itemID] = 1
+            if Wk:IsDone(bounty) then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a bounty still in the bag read as spent"
+            end
+            ITEM_COUNTS[bounty.itemID] = nil
 
             -- And a tick left in the store from before an id existed
             -- must not go on being the answer once one does.

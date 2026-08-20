@@ -36,10 +36,13 @@ end
 ------------------------------------------------------------
 -- The tooltip lines that mean an item has not bound yet.
 --
--- Binding is what marks a slot -- not equipping it, not upgrading it.
--- A piece handed back to the group inside its trade window never marks
--- anything, and the same piece kept until it binds marks the slot the
--- moment it does.
+-- Binding is what marks a slot, and there are two ways it happens:
+-- putting the piece on binds it, and so does letting its trade timer
+-- run out. Either way the slot has the item level from that moment.
+--
+-- Which leaves exactly one way not to get the mark, and it is a thing
+-- the player has to actively do: hand the piece to somebody else before
+-- it binds.
 --
 -- Which makes "unbound" a state the advisor has to be able to see. A
 -- Hero drop sitting in the bags with time left on it has NOT put its

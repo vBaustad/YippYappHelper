@@ -1365,15 +1365,17 @@ function ns:GetMarkLaunder(slotID)
     local prevCrestTrack = ns.TRACK_CREST[prevTrack]
     if not crestTrack or not prevCrestTrack then return nil end
 
-    -- What sets a mark is BINDING. Not equipping the piece, not
-    -- upgrading it: the moment it is soulbound the slot has its item
-    -- level, and a piece traded back to the group inside its window
-    -- never marks anything at all.
+    -- What sets a mark is BINDING, and both of the things a player
+    -- normally does with a drop bind it: putting it on, or simply
+    -- keeping it until the trade timer runs out. So the mark is the
+    -- default outcome, and the only way to miss it is to hand the piece
+    -- to somebody else while there is still time.
     --
     -- Which is why this is read from the client rather than derived from
-    -- what the player is wearing. The two agree most of the time and
-    -- come apart exactly when a drop is fresh -- the moment somebody is
-    -- most likely to be looking at this panel.
+    -- what the player is wearing. Worn gear is bound and has marked, so
+    -- the two agree most of the time -- and come apart on a drop that is
+    -- still in its window, which is the moment somebody is most likely
+    -- to be looking at this panel.
     local mark = ns:GetFreeUpgradeIlvl(slotID) or 0
 
     -- Zero is not "this slot has held nothing". It is "the client has
@@ -1918,11 +1920,12 @@ function ns:GetRecommendation(slotID)
 
         local detail = {}
         if pending then
-            detail[1] = "A piece marks its slot when it binds, not when "
-                .. "you put it on — so while that one can still be handed "
-                .. "to somebody else, this slot has only reached " ..
-                launder.mark .. " and the " .. piece .. " prices at " ..
-                price .. "."
+            detail[1] = "That piece marks the slot the moment it binds — "
+                .. "putting it on does that, and so does letting its trade "
+                .. "timer run out. Giving it away is the only thing that "
+                .. "does not. Until one of those happens the slot has still "
+                .. "only reached " .. launder.mark .. ", and the " .. piece ..
+                " prices at " .. price .. "."
             detail[2] = "Keep it and the slot moves up to " .. pending.ilvl ..
                 ", and the " .. piece .. " gets cheaper by however many of "
                 .. "its ranks that covers. Worth settling first — this is "
