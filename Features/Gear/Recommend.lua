@@ -991,7 +991,6 @@ function ns:GetTrackCompletion(crestTrack)
     -- constant. It has been defined and unused since it was written.
     ------------------------------------------------------------
     out.earnable = ns:GetEarnableCrests(crestTrack)
-    out.outgrown = ns:IsCrestOutgrown(crestTrack)
     if out.short > 0 then
         -- Counted the way a player counts it: weeks until the track is
         -- done, this one included. Reporting only the resets BEYOND the
@@ -1798,8 +1797,6 @@ function ns:GetRecommendation(slotID)
         -- arrives -- capping a higher track spills its income down a
         -- tier -- but as a by-product of content that pays something
         -- else, which is a different plan for the week.
-        local how = plan.outgrown and " (overflow only)" or ""
-
         if plan.spendable >= crestCost then
             -- Affordable on its own, but only by taking the crests off a
             -- slot worth more. This is the case the old "Hold crests"
@@ -1807,11 +1804,11 @@ function ns:GetRecommendation(slotID)
             -- gap would cost.
             return ns.RECOMMEND.HOLD_CRESTS,
                 who .. " first — " .. short .. " more " .. crestTrack ..
-                " covers this" .. how
+                " covers this"
         end
         return ns.RECOMMEND.UPGRADE_LATER,
             "Need " .. short .. " more " .. crestTrack .. " — " ..
-            who .. " first" .. how
+            who .. " first"
     end
 
     ------------------------------------------------------------
@@ -1981,24 +1978,38 @@ function ns:GetRecommendation(slotID)
             (after == 1 and " piece" or " pieces") .. " to max would cost " ..
             rest .. ", and you have " .. left .. "."
 
+        ------------------------------------------------------------
+        -- The cap is the constraint, not where the crest comes from.
+        --
+        -- This used to tell an outgrown track that "you only earn
+        -- Champion once Hero caps", which is simply false. Champion is
+        -- on offer all season -- M0, low keys, delves, the weekly
+        -- outdoor stuff -- and a player 60 short of their cap will find
+        -- those 60 without help. What they cannot do is exceed the cap,
+        -- and that is the only thing standing between them and the rest
+        -- of the track.
+        --
+        -- Which is also why this no longer branches on `outgrown`. The
+        -- allowance grows at the same rate on every track, so the answer
+        -- is the same shape whether or not the content has moved past
+        -- it. Outgrown still decides what a rank is WORTH -- rental
+        -- against banked -- and it has no business making claims about
+        -- income.
+        ------------------------------------------------------------
         if after == 0 then
             detail[#detail + 1] = "That is the last " .. crestTrack ..
                 " piece — after this you never need one again."
         elseif rest <= left then
             detail[#detail + 1] = state .. " Enough for all of them, and "
                 .. "then you are done with " .. crestTrack .. " for good."
-        elseif finish.outgrown then
-            -- No week count. An outgrown track is paid by whatever spills
-            -- out of a higher one capping, and nothing here can date that.
-            detail[#detail + 1] = state .. " You only earn " .. crestTrack ..
-                " once " .. (plan.markTrack or "the track above") ..
-                " caps, so drops will fix those slots before crests do."
         elseif finish.withinAllowance then
-            detail[#detail + 1] = state .. " The rest is still inside this "
-                .. "season's cap, so it is content to run, not a wait."
+            detail[#detail + 1] = state .. " The other " ..
+                (rest - left) .. " is still inside this season's cap, so it "
+                .. "is content to run rather than a wait."
         else
-            detail[#detail + 1] = state .. " About " .. finish.weeks ..
-                " weeks to earn the rest, or a drop finishes any of them sooner."
+            detail[#detail + 1] = state .. " The cap allows " ..
+                finish.earnable .. " more this season, so about " ..
+                finish.weeks .. " weeks — or a drop finishes any of them sooner."
         end
     end
 

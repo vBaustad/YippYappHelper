@@ -2738,17 +2738,26 @@ def main():
                 return restore("the hover never says what the rest of the track "
                     .. "costs against what is in hand")
             end
-            -- Outgrown, so no week count is claimed -- the income is
-            -- whatever spills out of a higher track capping and nothing
-            -- here can date that. It has to point at drops instead.
-            if not joined:find("drops will fix those slots before crests do",
-                               1, true) then
-                return restore("the hover leaves an outgrown shortfall without "
-                    .. "a route: " .. joined)
+            -- The shortfall ends in a decision, and the thing that
+            -- decides it is the CAP.
+            --
+            -- This used to assert the opposite: that an outgrown track
+            -- refuses a week count and points at drops, because "you
+            -- only earn Champion once Hero caps". That is false --
+            -- Champion is on offer all season from M0, low keys and
+            -- delves, and a player 60 short will find those 60 without
+            -- help. The allowance grows at the same rate on every track,
+            -- so the answer has the same shape on all of them.
+            if not (joined:find("The cap allows", 1, true)
+                and joined:find("weeks", 1, true)) then
+                return restore("the shortfall does not resolve to a wait the "
+                    .. "cap explains: " .. joined)
             end
-            if joined:find(" weeks to earn", 1, true) then
-                return restore("the hover dates an outgrown track it cannot see "
-                    .. "the income for")
+            for _, gate in ipairs({ "only earn", "overflow", "trickles" }) do
+                if joined:find(gate, 1, true) then
+                    return restore("the hover claims the crest itself is gated: "
+                        .. "'" .. gate .. "'")
+                end
             end
             -- Six lines of reasoning was a briefing, not a tip.
             if #d > 4 then
@@ -5183,6 +5192,83 @@ def main():
                 end
             end
 
+            -- Quest flags: the third way of knowing, and the one that
+            -- outranks the other two.
+            --
+            -- Driven through a synthetic row rather than a shipped one
+            -- on purpose. The shipped lists are empty until somebody
+            -- confirms ids in game, and a check written against them
+            -- would either test nothing today or break the day they are
+            -- filled in. What IS asserted about the real rows is that
+            -- the field reached the data at all -- plumbing wired to
+            -- nothing is the failure this would otherwise miss.
+            local wired = 0
+            for _, item in ipairs(Wk.ITEMS) do
+                if item.quests then wired = wired + 1 end
+            end
+            if wired == 0 then
+                return "no checklist row carries a quests field; the plumbing is unused"
+            end
+
+            local realFlagged = C_QuestLog.IsQuestFlaggedCompleted
+            local probe = { id = "harnessquest", label = "probe", quests = { 111 } }
+
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 111 end
+            local done, isManual = Wk:IsDone(probe)
+            if not done then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a completed quest did not read as done"
+            end
+            if isManual then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a row answered by the client was still offered as a click"
+            end
+
+            -- Any id in the list counts, because one chore is routinely
+            -- several ids and only one of them gets completed.
+            probe.quests = { 111, 222 }
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 222 end
+            if not (Wk:IsDone(probe)) then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "only the first id in the list was consulted"
+            end
+
+            -- None completed is a real "not yet", not a shrug.
+            C_QuestLog.IsQuestFlaggedCompleted = function() return false end
+            local notYet, stillManual = Wk:IsDone(probe)
+            if notYet then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "an outstanding quest read as done"
+            end
+            if stillManual then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "an outstanding quest fell back to a manual tick"
+            end
+
+            -- An empty list is "nothing to go on", which is what keeps a
+            -- row that has no id yet behaving exactly as it did before.
+            probe.quests = {}
+            local _, emptyManual = Wk:IsDone(probe)
+            if not emptyManual then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a row with no ids stopped falling back to its manual tick"
+            end
+
+            -- And a tick left in the store from before an id existed
+            -- must not go on being the answer once one does.
+            probe.quests = { 111 }
+            Wk:Toggle(manual.item)
+            local storeKey
+            for k in pairs(YippYappHelperDB.weekly) do storeKey = k end
+            YippYappHelperDB.weekly[storeKey].done["harnessquest"] = true
+            local stale = Wk:IsDone(probe)
+            YippYappHelperDB.weekly[storeKey].done["harnessquest"] = nil
+            Wk:Toggle(manual.item)
+            C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+            if stale then
+                return "a stale manual tick outranked the client's quest flag"
+            end
+
             -- And last week's ticks are gone this week. resetAt is set
             -- when the tick is made, so backdating it is exactly what a
             -- reset looks like from the store's point of view.
@@ -5198,8 +5284,8 @@ def main():
         end
     """)(ns)
     if weekly == "ok":
-        print("  ok   weekly: manual ticks stick, expire at reset, and cannot "
-              "override what the client knows")
+        print("  ok   weekly: manual ticks stick, expire at reset, and lose to "
+              "both the client's answer and a quest flag")
     else:
         print("  FAIL weekly: %s" % weekly)
         failures.append(("weekly", str(weekly)))
