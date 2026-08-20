@@ -646,7 +646,15 @@ function GetTime() return 0 end
 -- and at 0 every such guard trips -- so the expiry path was unreachable
 -- and read as covered. Fixed here rather than by loosening the guard.
 function time() return 1786000000 end
-function date() return "2026-08-16" end
+-- date("*t") is a table, and the week list asks for one to work out
+-- whether a run happened today. Every other format keeps the old string.
+function date(fmt)
+    if fmt == "*t" then
+        return { year = 2026, month = 8, day = 16, hour = 20, min = 30,
+                 sec = 0, wday = 1, yday = 228, isdst = false }
+    end
+    return "2026-08-16"
+end
 function print() end
 function geterrorhandler() return function() end end
 function hooksecurefunc() end
@@ -984,16 +992,54 @@ C_MythicPlus = { -- A key in hand, so Group Keystones renders a row and
                  -- all that branch had ever drawn.
                  GetOwnedKeystoneChallengeMapID = function() return 2815 end,
                  GetOwnedKeystoneLevel = function() return 12 end,
-                 -- Ten, against a card that shows eight: the overflow
-                 -- line is a branch too, and a silent truncation is
-                 -- exactly the kind of thing that should not pass.
-                 GetRunHistory = function()
+                 -- Ten runs this week, against a card that shows eight:
+                 -- the overflow line is a branch too, and a silent
+                 -- truncation is exactly the kind of thing that should
+                 -- not pass. Two more from before the reset, which must
+                 -- stay off a card headed "This Week" while still
+                 -- setting the score bar the week's runs are measured
+                 -- against.
+                 --
+                 -- Index 1 is the OLDEST, the client's own order, and
+                 -- levels deliberately do not fall with time -- a list
+                 -- sorted by key level would pass a fixture where the
+                 -- newest run is also the highest.
+                 --
+                 -- Field names read off BigWigs/Tools/Keystones.lua.
+                 -- The timer is 1800 for every map here, so 1080 and
+                 -- 1440 are the 3- and 2-chest thresholds.
+                 GetRunHistory = function(includePreviousWeeks)
+                     local rows = {
+                         -- level, seconds, score, this week, monthDay, map
+                         { 10, 1500, 210, false, 11, 1 },
+                         { 12, 1200, 180, false, 12, 2 },
+                         {  8, 1700, 150, true,  15, 3 },
+                         { 12, 1100, 215, true,  15, 1 },  -- beats the 210
+                         {  9, 1650, 160, true,  15, 4 },
+                         { 11, 1900, 170, true,  16, 5 },  -- over the timer
+                         { 10, 1430, 190, true,  16, 6 },
+                         { 13, 1000, 240, true,  16, 7 },
+                         {  9, 1560, 165, true,  17, 8 },
+                         { 12, 1250, 205, true,  17, 1 },  -- under its own 215
+                         { 10, 1790, 175, true,  17, 2 },
+                         { 11, 1050, 225, true,  17, 3 },
+                     }
                      local out = {}
-                     for i = 1, 10 do
-                         out[i] = { mapChallengeModeID = MPLUS_ORDER[((i - 1) % 8) + 1],
-                                    level = 15 - i,
-                                    completed = (i % 4 ~= 0),
-                                    runWeek = 1, thisWeek = true }
+                     for i, r in ipairs(rows) do
+                         if r[4] or includePreviousWeeks then
+                             out[#out + 1] = {
+                                 mapChallengeModeID = MPLUS_ORDER[r[6]],
+                                 level = r[1],
+                                 durationSec = r[2],
+                                 runScore = r[3],
+                                 completed = r[2] <= 1800,
+                                 thisWeek = r[4],
+                                 completionDate = { year = 2026, month = 8,
+                                                    monthDay = r[5],
+                                                    weekday = ((r[5] - 1) % 7) + 1,
+                                                    hour = 20, minute = (i * 7) % 60 },
+                             }
+                         end
                      end
                      return out
                  end,
@@ -2456,11 +2502,15 @@ def main():
 
             -- slotID, track, rank -- read off the screenshot.
             local SET = {
-                { 16, "Champion", 3 },   -- Main Hand 298, priority 5
-                { 13, "Champion", 1 },   -- Trinket 1 292, priority 4
-                { 14, "Champion", 1 },   -- Trinket 2 292, priority 4
-                {  8, "Champion", 1 },   -- Feet      292, priority 3
-                { 12, "Champion", 1 },   -- Ring 2    292, priority 3
+                -- Hero, not Champion. Hero caps at 321, above the 311
+                -- this character farms in every slot, so its mark
+                -- survives and there is a rebate for the pair rule to
+                -- withhold. On Champion there is nothing to withhold.
+                { 16, "Hero", 3 },   -- Main Hand 311, priority 5
+                {  8, "Hero", 3 },   -- Feet      311, priority 3
+                { 13, "Hero", 1 },   -- Trinket 1 305, priority 4
+                { 14, "Hero", 1 },   -- Trinket 2 305, priority 4
+                { 12, "Hero", 1 },   -- Ring 2    305, priority 3
             }
             local bySlot = {}
             for _, e in ipairs(SET) do
@@ -2475,7 +2525,7 @@ def main():
             ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
             local wallet = 200
             ns.GetCrestCountByTrack = function(self, track)
-                return track == "Champion" and wallet or 0
+                return track == "Hero" and wallet or 0
             end
             ns:InvalidateCrestPlans()
 
@@ -2485,8 +2535,8 @@ def main():
                 return msg
             end
 
-            local p = ns:GetCrestPlan("Champion")
-            if not p then return restore("no Champion plan") end
+            local p = ns:GetCrestPlan("Hero")
+            if not p then return restore("no Hero plan") end
             if p.cost ~= 20 then
                 return restore("fixture cost is " .. p.cost .. ", not the 20 the "
                     .. "screenshot's arithmetic assumes")
@@ -2522,25 +2572,25 @@ def main():
             -- crests for item level on one item and no rebate at all.
             -- Feet is worth less by slot priority and more by outcome,
             -- because Feet is a slot of one.
-            if byName["Main Hand"] ~= 308 then
+            if byName["Main Hand"] ~= 321 then
                 return restore("Main Hand ends at " .. tostring(byName["Main Hand"])
-                    .. ", not the 308 cap")
+                    .. ", not the 321 cap")
             end
-            if byName["Feet"] ~= 308 then
+            if byName["Feet"] ~= 321 then
                 return restore("Feet ends at " .. tostring(byName["Feet"])
-                    .. ", not the 308 cap -- an unpaired slot is the only "
+                    .. ", not the 321 cap -- an unpaired slot is the only "
                     .. "kind that can move a mark on its own here")
             end
             for _, paired in ipairs({ "Trinket 1", "Trinket 2", "Ring 2" }) do
-                if byName[paired] == 308 then
+                if byName[paired] == 321 then
                     return restore(paired .. " was carried to its cap alone, "
                         .. "which moves no mark while its partner is lower")
                 end
             end
             -- And the change still goes somewhere rather than nowhere.
-            if byName["Trinket 1"] ~= 298 then
+            if byName["Trinket 1"] ~= 318 then
                 return restore("Trinket 1 ends at " .. tostring(byName["Trinket 1"])
-                    .. ", not the 298 the last 40 crests reach")
+                    .. ", not the 318 the last 80 crests reach")
             end
 
             -- Given enough for BOTH halves, the pair is worth finishing
@@ -2548,7 +2598,7 @@ def main():
             -- passing by never funding a trinket at all.
             wallet = 600
             ns:InvalidateCrestPlans()
-            local rich = ns:GetCrestPlan("Champion")
+            local rich = ns:GetCrestPlan("Hero")
             local capped = {}
             for _, st in ipairs(rich.steps) do
                 if st.paid and st.rank >= st.maxRank then
@@ -2566,25 +2616,27 @@ def main():
             for _, st in ipairs(p.steps) do
                 if st.paid then bands[st.band] = (bands[st.band] or 0) + 1 end
             end
-            if not (bands.rental and bands.banked) then
+            if not (bands.banked and bands.permanent) then
                 return restore("every paid rank landed in one band, so the drop "
                     .. "band is not separating them")
             end
             -- Champion tops out at 308 under a 311 key drop, so nothing
             -- on this track can ever be permanent. A permanent rank here
             -- would mean the band is being read against the wrong number.
-            if bands.permanent then
-                return restore(bands.permanent .. " Champion rank(s) called "
-                    .. "permanent under a " .. p.bandHigh .. " drop ceiling")
+            -- Hero climbs past the band, so permanent ranks are the
+            -- point. Rental ones would mean the band moved.
+            if not bands.permanent then
+                return restore("no Hero rank came out permanent above a "
+                    .. p.bandHigh .. " drop ceiling")
             end
 
             return restore(string.format("ok:%s+%s:%d",
-                promoted[1], promoted[2], bands.rental + bands.banked))
+                promoted[1], promoted[2], bands.banked + bands.permanent))
         end
     """)(ns)
     if accept and str(accept).startswith("ok:"):
         who, ranks = str(accept)[3:].split(":")
-        print("  ok   promotion planning: 200 Champion carries %s to the track "
+        print("  ok   promotion planning: 200 Hero carries %s to the track "
               "cap over %s ranks, none left idle" % (who, ranks))
     else:
         print("  FAIL promotion planning: %s" % accept)
@@ -2677,14 +2729,23 @@ def main():
             -- pass of this file had the item climbing onto the Hero
             -- track and said so on the panel, which is why the mechanic
             -- is pinned rather than left to read well.
-            for _, slot in ipairs({ 16, 8 }) do
-                if not said[slot]:find("caps the track", 1, true) then
+            -- Champion caps at 308 and this character farms 311 in any
+            -- slot from a +10, so the mark it sets is overtaken
+            -- everywhere sooner or later. The row must not sell a rebate
+            -- it cannot keep -- it used to promise "next Hero free to
+            -- 308" on a mark that never survives.
+            for _, slot in ipairs({ 16 }) do
+                if not said[slot]:find("tops out at 308; you farm 311 in every slot",
+                                       1, true) then
                     return restore("slot " .. slot .. " reaches the Champion cap "
-                        .. "but does not say so: " .. said[slot])
+                        .. "without saying it is farmed past: " .. said[slot])
                 end
-                if not said[slot]:find("next Hero free to 308", 1, true) then
-                    return restore("slot " .. slot .. " caps out but does not say "
-                        .. "what the mark buys: " .. said[slot])
+                for _, sold in ipairs({ "free to 308", "you never spend",
+                                        "starts at 2/6" }) do
+                    if said[slot]:find(sold, 1, true) then
+                        return restore("slot " .. slot .. " sells a mark the "
+                            .. "player farms past: '" .. sold .. "'")
+                    end
                 end
                 for _, wrong in ipairs({ "moves to Hero", "keep climbing",
                                          "promotes to", "moves onto" }) do
@@ -2701,10 +2762,15 @@ def main():
             -- Champion reaches 308, so this is a stopgap the player can
             -- fix. Saying only "a drop replaces it" states the problem
             -- and withholds the answer.
-            if not said[13]:find("stops under the 305 you loot; 308 clears it",
-                                 1, true) then
-                return restore("Trinket 1 stops under the drop floor without "
-                    .. "naming what would clear it: " .. said[13])
+            -- The same fact reaches the rows that stop mid-track, and
+            -- as a statement about the TRACK -- "caps at 308" on a row
+            -- that only reaches 298 claims something the run does not.
+            if not said[14]:find("tops out at 308", 1, true) then
+                return restore("a partial Champion row does not carry the "
+                    .. "track's ceiling: " .. said[14])
+            end
+            if said[14]:find("caps at", 1, true) then
+                return restore("a row reaching 298 claims to cap: " .. said[14])
             end
 
             -- And the case that prompted this. On Veteran, "under your
@@ -2776,16 +2842,13 @@ def main():
             -- RANKS, because that is how the game shows gear and how
             -- players talk about it. "308 instead of 305" is the same
             -- fact in a unit nobody carries in their head.
-            if not (joined:find("starts at 2/6 instead of 1/6", 1, true)
-                and joined:find("Hero you never spend", 1, true)) then
-                return restore("the hover never says what maxing this buys on "
-                    .. "the piece that replaces it: " .. joined)
+            if not joined:find("overtaken", 1, true) then
+                return restore("the hover never says the mark gets farmed "
+                    .. "past: " .. joined)
             end
-            for _, ilvlish in ipairs({ "start at 308", "instead of 305" }) do
-                if joined:find(ilvlish, 1, true) then
-                    return restore("the hover talks ladder positions in item "
-                        .. "levels: '" .. ilvlish .. "'")
-                end
+            if not joined:find("in any slot it likes", 1, true) then
+                return restore("the hover never says end-of-dungeon loot is "
+                    .. "not slot-specific: " .. joined)
             end
             -- Where the player stands on being DONE with the track, and
             -- what that means in weeks or drops -- the shortfall stated
@@ -3095,7 +3158,7 @@ def main():
             local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
             -- Two pieces, both one rank from the Champion cap, and only
             -- enough for one of them. The weapon outranks the ring.
-            local SET = { { 16, "Champion", 5 }, { 12, "Champion", 5 } }
+            local SET = { { 16, "Hero", 5 }, { 12, "Hero", 5 } }
             local bySlot = {}
             for _, e in ipairs(SET) do
                 bySlot[e[1]] = {
@@ -3106,7 +3169,7 @@ def main():
             end
             ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
             ns.GetCrestCountByTrack = function(self, track)
-                return track == "Champion" and 20 or 0
+                return track == "Hero" and 20 or 0
             end
             ns:InvalidateCrestPlans()
             local function restore(msg)
@@ -3116,8 +3179,7 @@ def main():
             end
 
             local _, reason, detail = ns:GetRecommendation(16)
-            if not reason:find("Main Hand", 1, true)
-                and not reason:find("caps the track", 1, true) then
+            if not reason:find("caps it", 1, true) then
                 return restore("the weapon did not take the only affordable "
                     .. "completion: " .. reason)
             end
@@ -3569,6 +3631,140 @@ def main():
     else:
         print("  FAIL affixes: %s" % affix)
         failures.append(("affixes", str(affix)))
+    # The week list: its order, and what a row can say without the
+    # journal.
+    #
+    # The card is read the way a night is remembered -- the run that just
+    # happened at the top -- and the history carries far more than the
+    # "it finished" this addon once believed was all of it. Both are easy
+    # to regress into a level sort that happens to look right.
+    weeklist = L.eval("""
+        function(ns)
+            local runs = ns:GetWeeklyRuns()
+            if #runs ~= 10 then
+                return #runs .. " runs on a week that had 10 (last week leaked in?)"
+            end
+
+            -- Newest first. The fixture's last run is a +11 in 17:30 and
+            -- its highest key is a +13, so a list sorted by level puts
+            -- the wrong one on top.
+            if runs[1].level ~= 11 or runs[1].durationSec ~= 1050 then
+                return "the top row is not the most recent run (+"
+                    .. runs[1].level .. " in " .. tostring(runs[1].durationSec) .. "s)"
+            end
+            if runs[#runs].level ~= 8 then
+                return "the bottom row is not the oldest run"
+            end
+            local descending = true
+            for i = 2, #runs do
+                if runs[i].level > runs[i - 1].level then descending = false end
+            end
+            if descending then return "the list is still sorted by key level" end
+
+            -- Timed, and by how much, off the history's own clock: no
+            -- journal entry exists for any of these.
+            local top = runs[1]
+            if top.detail then return "the fixture's runs should carry no journal detail" end
+            if top.timed ~= true then return "a 17:30 run against a 30:00 timer read as untimed" end
+            if top.chests ~= 3 then
+                return "1050s of 1800 is a 3-chest run, read as " .. tostring(top.chests)
+            end
+
+            local over, twoChest, oneChest
+            for _, r in ipairs(runs) do
+                if r.durationSec == 1900 then over = r end
+                if r.durationSec == 1430 then twoChest = r end
+                if r.durationSec == 1790 then oneChest = r end
+            end
+            if not (over and twoChest and oneChest) then
+                return "the fixture lost a run"
+            end
+            if over.timed ~= false then return "a run over the timer read as timed" end
+            if (over.chests or 0) > 0 then return "a depleted key was credited with chests" end
+            if twoChest.chests ~= 2 then
+                return "1430s of 1800 is a 2-chest run, read as " .. tostring(twoChest.chests)
+            end
+            if oneChest.chests ~= 1 then
+                return "1790s of 1800 is a 1-chest run, read as " .. tostring(oneChest.chests)
+            end
+
+            -- Score gained is what the run beat that dungeon's previous
+            -- best by, and last week's runs set that bar even though
+            -- they are not on the card.
+            local newBest, noBest
+            for _, r in ipairs(runs) do
+                if r.score == 215 then newBest = r end
+                if r.score == 205 then noBest = r end
+            end
+            if not (newBest and noBest) then return "the fixture lost a score" end
+            if newBest.gain ~= 5 then
+                return "215 over last week's 210 is worth 5, read as " .. tostring(newBest.gain)
+            end
+            if noBest.gain ~= 0 then
+                return "a run under your own best for the dungeon gained "
+                    .. tostring(noBest.gain)
+            end
+
+            -- When it happened, which is what the hover leads with.
+            if not (top.date and top.date.hour) then
+                return "the run carries no completion date"
+            end
+
+            -- The hover text. Every line stands on a fact the run
+            -- actually has, so the check is that the facts reach it and
+            -- that a run missing them says less rather than saying
+            -- something invented.
+            local function Joined(r)
+                local parts = {}
+                for _, line in ipairs(ns:DescribeRun(r)) do
+                    parts[#parts + 1] = line.blank and "|" or line.text
+                end
+                return table.concat(parts, " / ")
+            end
+
+            local text = Joined(top)
+            for _, want in ipairs({ "Keystone +11", "at 20:", "Finished in 17:30",
+                                    "timer 30:00", "12:30 under the timer",
+                                    "Key upgraded 3 levels, to +14",
+                                    "Worth 225 score", "75 rating" }) do
+                if not text:find(want, 1, true) then
+                    return 'the hover text is missing ' .. want .. ': ' .. text
+                end
+            end
+
+            local overText = Joined(over)
+            if not overText:find("1:40 over the timer", 1, true) then
+                return "a depleted run does not say how far over: " .. overText
+            end
+            if overText:find("upgraded", 1, true) then
+                return "a depleted run was described as an upgrade: " .. overText
+            end
+            if not Joined(noBest):find("No rating gained", 1, true) then
+                return "a run that beat nothing claimed rating for it"
+            end
+
+            -- A run the client answered "finished" about and nothing
+            -- else -- what everything on this card looked like before
+            -- the history was read properly.
+            local bare = Joined({ name = "Kings' Rest", level = 10, completed = true })
+            if bare:find("timer", 1, true) or bare:find("under", 1, true) then
+                return "a run with no clock was given one: " .. bare
+            end
+            if not bare:find("No time was kept", 1, true) then
+                return "a run with no clock does not say so: " .. bare
+            end
+
+            return "ok"
+        end
+    """)(ns)
+    if weeklist == "ok":
+        print("  ok   week list: newest run first, chests and margin read off the "
+              "history's own clock, score gained measured against the season, "
+              "hover says only what the run knows")
+    else:
+        print("  FAIL week list: %s" % weeklist)
+        failures.append(("week list", str(weeklist)))
+
     # The run journal.
     #
     # GetRunHistory answers only whether a run finished. Everything the
@@ -5264,26 +5460,25 @@ def main():
             -- filled in. What IS asserted about the real rows is that
             -- the field reached the data at all -- plumbing wired to
             -- nothing is the failure this would otherwise miss.
-            local wired, counting = 0, 0
+            local wired, filled = 0, 0
             for _, item in ipairs(Wk.ITEMS) do
-                if item.questsAny then wired = wired + 1 end
-                if item.questsAll then counting = counting + 1 end
-                -- The two fields mean opposite things, so a row setting
-                -- both is a row whose answer depends on which branch
-                -- runs first. That is a bug, not a preference.
-                if item.questsAny and item.questsAll then
-                    return item.id .. " sets both questsAny and questsAll"
+                if item.quests then
+                    wired = wired + 1
+                    if #item.quests > 0 then filled = filled + 1 end
                 end
             end
             if wired == 0 then
-                return "no checklist row carries a questsAny field; the plumbing is unused"
+                return "no checklist row carries a quests field; the plumbing is unused"
             end
-            if counting == 0 then
-                return "no checklist row counts; the questsAll path is unused"
+            -- At least one row has to be answered by real ids, or every
+            -- check below this is about a synthetic row and the shipped
+            -- list is still entirely hand-ticked.
+            if filled == 0 then
+                return "no checklist row has any real quest ids in it"
             end
 
             local realFlagged = C_QuestLog.IsQuestFlaggedCompleted
-            local probe = { id = "harnessquest", label = "probe", questsAny = { 111 } }
+            local probe = { id = "harnessquest", label = "probe", quests = { 111 } }
 
             C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 111 end
             local done, isManual = Wk:IsDone(probe)
@@ -5298,7 +5493,7 @@ def main():
 
             -- Any id in the list counts, because one chore is routinely
             -- several ids and only one of them gets completed.
-            probe.questsAny = { 111, 222 }
+            probe.quests = { 111, 222 }
             C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 222 end
             if not (Wk:IsDone(probe)) then
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
@@ -5319,76 +5514,11 @@ def main():
 
             -- An empty list is "nothing to go on", which is what keeps a
             -- row that has no id yet behaving exactly as it did before.
-            probe.questsAny = {}
+            probe.quests = {}
             local _, emptyManual = Wk:IsDone(probe)
             if not emptyManual then
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
                 return "a row with no ids stopped falling back to its manual tick"
-            end
-
-            -- questsAll is the opposite reading of the same list: several
-            -- separate pickups, so the row counts and is only finished
-            -- when the lot are in. Sparks need it -- four are available
-            -- in a catch-up week and one a week after.
-            local counter = { id = "harnesscount", label = "probe",
-                              questsAll = { 111, 222, 333, 444 } }
-            C_QuestLog.IsQuestFlaggedCompleted = function(id)
-                return id == 111 or id == 222
-            end
-            local cDone, cManual, cHave, cOf = Wk:IsDone(counter)
-            if cDone then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return "two of four sparks read as the row being finished"
-            end
-            if cManual then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return "a counting row was offered as a manual click"
-            end
-            if cHave ~= 2 or cOf ~= 4 then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return ("a counting row reported %s of %s, not 2 of 4")
-                    :format(tostring(cHave), tostring(cOf))
-            end
-
-            C_QuestLog.IsQuestFlaggedCompleted = function() return true end
-            if not (Wk:IsDone(counter)) then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return "all four collected still did not finish the row"
-            end
-
-            -- And the count has to survive the trip to the page, or the
-            -- row renders a tick where it should render a fraction.
-            --
-            -- Driven by lending the real counting row a set of fake ids
-            -- rather than by reading whatever it ships with, which is
-            -- empty until somebody confirms them in game. This way the
-            -- path under test is the real one -- item to GetList to the
-            -- fields ShellHome reads -- without the check depending on
-            -- data that does not exist yet.
-            local counted
-            for _, item in ipairs(Wk.ITEMS) do
-                if item.questsAll then counted = item; break end
-            end
-            local realIds = counted.questsAll
-            counted.questsAll = { 111, 222, 333, 444 }
-            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 111 end
-            local row
-            for _, r in ipairs(Wk:GetList()) do
-                if r.id == counted.id then row = r end
-            end
-            counted.questsAll = realIds
-            if not (row and row.of) then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return "GetList dropped the count, so no row can render one"
-            end
-            if row.have ~= 1 or row.of ~= 4 then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return ("the page would show %s of %s, not 1 of 4")
-                    :format(tostring(row.have), tostring(row.of))
-            end
-            if row.manual then
-                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
-                return "a counting row reached the page as a manual tick"
             end
 
             -- And a tick left in the store from before an id existed
@@ -5397,7 +5527,7 @@ def main():
             -- so inserting a check between the two cannot silently turn
             -- this one into an assertion about the wrong thing.
             C_QuestLog.IsQuestFlaggedCompleted = function() return false end
-            probe.questsAny = { 111 }
+            probe.quests = { 111 }
             Wk:Toggle(manual.item)
             local storeKey
             for k in pairs(YippYappHelperDB.weekly) do storeKey = k end

@@ -342,13 +342,29 @@ end
 --- saved on, and how many of its ranks the mark covers. Zero when the
 --- content already hands out pieces above where the mark would sit --
 --- a 311 key drop starts past a 308 mark and owes it nothing.
-local function MarkRebate(track, bandLow)
+local function MarkRebate(track, bandLow, bandHigh)
     local nextTrack = ns.TRACK_ORDER[(ns.TRACK_RANK[track] or 0) + 1]
     if not nextTrack then return 0, nil, 0 end
 
     local nextLevels = ns.GEAR_TRACKS[nextTrack]
     local markIlvl = ns:GetMaxIlvlForTrack(track)
     if not nextLevels or markIlvl <= 0 then return 0, nextTrack, 0 end
+
+    -- A mark the player can farm past is not a rebate, it is a race.
+    --
+    -- End-of-dungeon loot is not slot-specific: a +10 hands out 311 in
+    -- ANY slot, so a 308 mark is overtaken everywhere sooner or later
+    -- and the crests that set it bought item level until then and
+    -- nothing after. The raid could still drop a 305 into that slot
+    -- first and cash the mark in, but that is a coin toss on which
+    -- source arrives, and advice should not be built on winning it.
+    --
+    -- Which is also why this is measured against the HIGH end of the
+    -- band rather than the low one. The low end says what the mark
+    -- could pay out on; the high end says whether it survives.
+    if bandHigh and bandHigh > 0 and markIlvl <= bandHigh then
+        return 0, nextTrack, 0
+    end
 
     -- Where the mark sits on the next track's ladder, and where the
     -- player's weakest source drops onto it. A drop below the track
@@ -608,7 +624,7 @@ function ns:GetCrestPlan(crestTrack)
     end
 
     local rebate, markTrack, markRanks, markRank, dropRank =
-        MarkRebate(crestTrack, bandLow)
+        MarkRebate(crestTrack, bandLow, bandHigh)
     plan.markTrack  = markTrack
     plan.markRanks  = markRanks
     plan.markRebate = rebate
@@ -1911,6 +1927,16 @@ function ns:GetRecommendation(slotID)
     if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
         label = ns.RECOMMEND.SAFE_TEMP
         outcome = " — " .. track .. " tops out under everything you loot"
+    elseif (plan.bandHigh or 0) > 0 and trackMax <= plan.bandHigh then
+        -- The cap is above the weakest source but under the one the
+        -- player can farm at will, so the mark it sets gets overtaken in
+        -- every slot eventually. Worth saying plainly: this is stats
+        -- until the slot turns over, not something banked.
+        label = ns.RECOMMEND.SAFE_TEMP
+        -- About the TRACK, not this run. "Caps at 308" on a row that
+        -- only reaches 298 reads as a claim the run does not make.
+        outcome = " — tops out at " .. trackMax .. "; you farm " ..
+            plan.bandHigh .. " in every slot"
     elseif mine.promotes and mine.pairSlot then
         -- The pair is the purchase. Capping one half moves nothing, so
         -- the row says what the other half still needs rather than
@@ -1921,8 +1947,16 @@ function ns:GetRecommendation(slotID)
         -- The item stops at the cap. What carries on is the slot: its
         -- mark now sits at this level, so the next piece to land there
         -- is lifted to it for nothing.
-        outcome = " — caps the track, next " .. mine.promotesTo ..
-            " free to " .. mine.paidIlvl
+        -- Conditional, because it is conditional. Raid pieces arrive at
+        -- different levels off different bosses, so a mark helps the
+        -- ones that land under it and owes nothing to the ones above.
+        -- Stating it as "next Hero free to 308" promised a rebate on
+        -- every drop, when a later boss hands out a piece that already
+        -- starts higher.
+        local n = #(ns.GEAR_TRACKS[mine.promotesTo] or {})
+        outcome = " — caps it; a " .. mine.promotesTo .. " " ..
+            plan.dropRank .. "/" .. n .. " drop here then starts at " ..
+            plan.markRank .. "/" .. n
     elseif mine.promotes then
         outcome = " — caps the track"
     elseif mine.stickyRanks > 0 and (plan.bandHigh or 0) > 0 then
@@ -1994,6 +2028,12 @@ function ns:GetRecommendation(slotID)
             ", so every rank on it is a stopgap until the slot turns "
             .. "over — even the last one, which marks the slot at a level "
             .. "no drop will ever arrive below."
+    elseif (plan.bandHigh or 0) > 0 and trackMax <= plan.bandHigh then
+        detail[#detail + 1] = track .. " caps at " .. trackMax ..
+            ", and end-of-dungeon loot hands out " .. plan.bandHigh ..
+            " in any slot it likes — so the mark this sets is overtaken "
+            .. "everywhere sooner or later. These crests buy item level "
+            .. "until that happens and bank nothing after it."
     elseif mine.promotes and mine.pairSlot then
         detail[#detail + 1] = "Rings and trinkets share one mark and it "
             .. "follows the LOWER of the pair, so this moves nothing on its "
@@ -2006,10 +2046,18 @@ function ns:GetRecommendation(slotID)
         -- fact in a unit nobody carries in their head.
         local saved = plan.markRanks * ns:GetCrestCost(mine.promotesTo)
         local ranks = #(ns.GEAR_TRACKS[mine.promotesTo] or {})
-        detail[#detail + 1] = "The next " .. mine.promotesTo ..
-            " piece to land here then starts at " .. plan.markRank .. "/" ..
-            ranks .. " instead of " .. plan.dropRank .. "/" .. ranks ..
-            " — " .. saved .. " " .. mine.promotesTo .. " you never spend."
+        detail[#detail + 1] = "A " .. mine.promotesTo ..
+            " piece landing here at " .. plan.dropRank .. "/" .. ranks ..
+            " would start at " .. plan.markRank .. "/" .. ranks ..
+            " instead — " .. saved .. " " .. mine.promotesTo .. " saved."
+        -- The honest caveat, and the reason the line above says "would".
+        -- Raid item level is per BOSS, not per difficulty: the same slot
+        -- comes off an early boss low and a late one high, so the mark
+        -- pays out on some kills and not others. The advisor cannot see
+        -- which bosses you kill.
+        detail[#detail + 1] = "Raid pieces arrive at different levels "
+            .. "depending on the boss, so the mark only pays on the ones "
+            .. "that land below it."
     elseif mine.stickyRanks > 0 then
         detail[#detail + 1] = "Nothing you run drops above " ..
             plan.bandHigh .. ", so this one is yours to keep."
