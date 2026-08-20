@@ -2770,11 +2770,17 @@ def main():
                     .. "rather than held: " .. said[8])
             end
             local held = table.concat(deep[8] or {}, " ")
-            if not held:find("picks its own slot", 1, true) then
+            if not held:find("you do not choose which slot", 1, true) then
                 return restore("holding is advised without saying why: " .. held)
             end
-            if not held:find("guess at which one", 1, true) then
+            if not held:find("guess at which slot", 1, true) then
                 return restore("the hover never names the odds it is avoiding")
+            end
+            -- The phrasing this replaced read as the drop having a
+            -- preference, when the point is that the player has no say.
+            if held:find("picks its own", 1, true) then
+                return restore("the hover animates the drop instead of saying "
+                    .. "the player has no choice")
             end
 
             -- And the case that prompted this. On Veteran, "under your

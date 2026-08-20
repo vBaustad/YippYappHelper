@@ -1874,7 +1874,8 @@ function ns:GetRecommendation(slotID)
     -- had. The mark has to be set BEFORE the higher piece is upgraded,
     -- and a Hero 1/6 will land in one of these slots without asking --
     -- so the crests are worth most in hand, ready to finish whichever
-    -- Champion piece the drop lands on top of. Finish it, equip it, and
+    -- Champion piece the drop lands on top of. The player does not
+    -- choose that slot; the game does. Finish it, equip it, and
     -- the Hero piece starts at 2/6 instead of 1/6.
     --
     -- Spend the same crests now and you are picking that slot yourself,
@@ -1898,16 +1899,18 @@ function ns:GetRecommendation(slotID)
                 "Finishing this costs " .. full .. " " .. crestTrack ..
                     " and moves the slot's mark to " ..
                     ns:GetMaxIlvlForTrack(track) .. ".",
-                "The mark has to be set before the " ..
-                    (plan.markTrack or "higher") .. " piece is upgraded, and a "
-                    .. (plan.markTrack or "higher") .. " drop picks its own "
-                    .. "slot — so the crests are worth more in hand, ready for "
-                    .. "whichever one it lands in.",
+                -- "a Hero drop picks its own slot" was doing the work of
+                -- "you do not choose where it lands", and doing it badly.
+                "You have to set the mark before you upgrade the " ..
+                    (plan.markTrack or "higher") .. " piece, and you do not "
+                    .. "choose which slot one drops in — so the crests are "
+                    .. "worth more in hand, ready for whichever slot it turns "
+                    .. "out to be.",
                 (finish and finish.needCrest or 0) .. " " .. crestTrack ..
                     " pieces are this deep. Covering them all is " ..
                     (finish and finish.cost or 0) ..
-                    " crests; spending here now is a guess at which one the "
-                    .. "drop will choose.",
+                    " crests; spending here now is a guess at which slot the "
+                    .. "drop will land in.",
             }
     end
 
