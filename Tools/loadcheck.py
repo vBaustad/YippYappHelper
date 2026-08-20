@@ -2911,17 +2911,25 @@ def main():
                     .. "rather than held: " .. said[8])
             end
             local held = table.concat(deep[8] or {}, " ")
-            if not held:find("you do not choose which slot", 1, true) then
+            -- The price, why it is a bad price now, and the two things
+            -- that would change it. Not a lecture on the mechanic.
+            if not held:find("Too expensive to spend on a guess", 1, true) then
                 return restore("holding is advised without saying why: " .. held)
             end
-            if not held:find("guess at which slot", 1, true) then
-                return restore("the hover never names the odds it is avoiding")
+            if not held:find("actually lands here", 1, true) then
+                return restore("the hover never says what to wait for: " .. held)
             end
-            -- The phrasing this replaced read as the drop having a
-            -- preference, when the point is that the player has no say.
-            if held:find("picks its own", 1, true) then
-                return restore("the hover animates the drop instead of saying "
-                    .. "the player has no choice")
+            if not held:find("further up its track", 1, true) then
+                return restore("the hover gives only one way out of holding")
+            end
+            -- "Set the mark" is this file's vocabulary, not the game's and
+            -- not the player's, and it had leaked onto the panel twice.
+            for _, jargon in ipairs({ "the mark", "set the mark", "watermark",
+                                      "high-water", "picks its own" }) do
+                if held:find(jargon, 1, true) then
+                    return restore("the hover uses internal vocabulary: '"
+                        .. jargon .. "'")
+                end
             end
 
             -- And the case that prompted this. On Veteran, "under your
@@ -3516,20 +3524,24 @@ def main():
             local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
             local realSpec, realGuide = ns.PlayerSpecKey, ns.ClassGuideData
 
+            -- One rank from the cap each, which is both the shape where
+            -- the question actually comes up and shallow enough that the
+            -- hold rule does not take the row over: a piece this close is
+            -- cheap enough to just do.
             local function piece(itemID)
                 return {
                     link = "|cffa335ee|Hitem:" .. itemID ..
                         "::::::::80:::::|h[Fixture]|h|r",
-                    ilvl = T.Champion[1], quality = 4, icon = 134400,
-                    track = "Champion", rank = 1, maxRank = 6, crafted = false,
+                    ilvl = T.Champion[5], quality = 4, icon = 134400,
+                    track = "Champion", rank = 5, maxRank = 6, crafted = false,
                 }
             end
             local bySlot = { [13] = piece(111), [14] = piece(222) }
             ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
-            -- Exactly one five-rank run affordable, so the tie decides
-            -- which trinket it goes to.
+            -- Exactly one rank affordable, so the tie decides which
+            -- trinket it goes to.
             ns.GetCrestCountByTrack = function(self, track)
-                return track == "Champion" and 100 or 0
+                return track == "Champion" and 20 or 0
             end
             ns.PlayerSpecKey = function() return "FIXTURE_SPEC" end
 
@@ -3577,6 +3589,43 @@ def main():
             if back ~= "Trinket 1" then
                 return restore("marking the first trinket did not move the "
                     .. "crests back to it; they went to " .. back)
+            end
+
+            -- And the row says why it won, since "why this one" is the
+            -- question a player asks of two identical trinkets.
+            local _, row13, detail = ns:GetRecommendation(13)
+            local joined = table.concat(detail or {}, " ")
+
+            -- "Mark" is this file's word for the high-water level and it
+            -- kept leaking onto the panel -- in the hold hover, then in
+            -- the pair lines after that was fixed. Guarded across the
+            -- row and every hover line at once.
+            if #row13 > 100 then
+                return restore("the row runs to " .. #row13 .. " characters")
+            end
+            if row13:find("all 1 rank", 1, true) then
+                return restore("a single rank is written as a plural count")
+            end
+            for _, jargon in ipairs({ "mark", "watermark", "high-water" }) do
+                if row13:find(jargon, 1, true) or joined:find(jargon, 1, true) then
+                    return restore("internal vocabulary on the panel: '"
+                        .. jargon .. "' in: " .. row13 .. " / " .. joined)
+                end
+            end
+            -- The pair rule still has to be sayable without it.
+            if not joined:find("count as a pair", 1, true) then
+                return restore("the pair rule is not explained: " .. joined)
+            end
+            -- And said once. The stranded warning used to repeat it as a
+            -- separate problem.
+            local _, n = joined:gsub("Trinket 2 ", "")
+            if n > 2 then
+                return restore("the partner is named " .. n .. " times")
+            end
+            if not joined:find("On your best-in-slot list", 1, true)
+                or not joined:find("Trinket 2", 1, true) then
+                return restore("the winning trinket does not say it was "
+                    .. "chosen over the other: " .. joined)
             end
             return restore("ok")
         end

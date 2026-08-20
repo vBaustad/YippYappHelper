@@ -506,6 +506,7 @@ function ns:GetCrestPlan(crestTrack)
             slotID       = c.slotID,
             slotName     = c.slotName,
             priority     = c.priority,
+            bis          = c.bis,
             track        = c.track,
             rank         = c.rank,
             maxRank      = c.maxRank,
@@ -2001,22 +2002,30 @@ function ns:GetRecommendation(slotID)
             "Hold " .. full .. " " .. crestTrack .. " — spend it when a " ..
             (plan.markTrack or "higher") .. " " .. plan.dropRank .. "/" .. n ..
             " lands here",
+            -- Said the way a player would say it.
+            --
+            -- The previous version explained the mechanic -- "you have to
+            -- set the mark before you upgrade the Hero piece" -- which is
+            -- both jargon and a rule nobody asked to be taught. "Set the
+            -- mark" is this file's vocabulary, not the game's and not the
+            -- player's. What they need is the price, why it is a bad
+            -- price right now, and the two things that would change it.
             {
-                "Finishing this costs " .. full .. " " .. crestTrack ..
-                    " and moves the slot's mark to " ..
-                    ns:GetMaxIlvlForTrack(track) .. ".",
-                -- "a Hero drop picks its own slot" was doing the work of
-                -- "you do not choose where it lands", and doing it badly.
-                "You have to set the mark before you upgrade the " ..
-                    (plan.markTrack or "higher") .. " piece, and you do not "
-                    .. "choose which slot one drops in — so the crests are "
-                    .. "worth more in hand, ready for whichever slot it turns "
-                    .. "out to be.",
-                (finish and finish.needCrest or 0) .. " " .. crestTrack ..
-                    " pieces are this deep. Covering them all is " ..
-                    (finish and finish.cost or 0) ..
-                    " crests; spending here now is a guess at which slot the "
-                    .. "drop will land in.",
+                full .. " " .. crestTrack .. " to take this from " ..
+                    rank .. "/" .. maxRank .. " to " ..
+                    ns:GetMaxIlvlForTrack(track) .. ", and " ..
+                    (finish and finish.needCrest or 0) .. " of your pieces are "
+                    .. "this far down — " .. (finish and finish.cost or 0) ..
+                    " to cover them all.",
+                "Too expensive to spend on a guess. Hold until a " ..
+                    (plan.markTrack or "higher") .. " " .. plan.dropRank .. "/" ..
+                    #(ns.GEAR_TRACKS[plan.markTrack] or {}) ..
+                    " actually lands here — finishing this piece then starts it "
+                    .. "at " .. plan.markRank .. "/" ..
+                    #(ns.GEAR_TRACKS[plan.markTrack] or {}) ..
+                    " instead — or until a " .. crestTrack ..
+                    " piece turns up further up its track, where the same "
+                    .. "crests reach the top for less.",
             }
     end
 
@@ -2040,8 +2049,9 @@ function ns:GetRecommendation(slotID)
 
     local buys
     if mine.paidRanks >= mine.wantedRanks then
-        buys = "all " .. mine.wantedRanks ..
-            (mine.wantedRanks == 1 and " rank" or " ranks")
+        -- "all 1 rank" is not something anyone writes.
+        buys = mine.wantedRanks == 1 and "its last rank"
+            or ("all " .. mine.wantedRanks .. " ranks")
     else
         buys = mine.paidRanks .. " of " .. mine.wantedRanks .. " ranks"
     end
@@ -2088,8 +2098,11 @@ function ns:GetRecommendation(slotID)
         -- The pair is the purchase. Capping one half moves nothing, so
         -- the row says what the other half still needs rather than
         -- promising a rebate that cannot land.
-        outcome = " — caps the track; mark needs " .. mine.pairSlot ..
-            " at " .. mine.paidIlvl .. " too"
+        -- No "mark" here either. Rings and trinkets are a pair and the
+        -- lower one is what counts -- which is sayable without naming
+        -- the bookkeeping behind it.
+        outcome = " — caps it, but " .. mine.pairSlot .. " must reach " ..
+            mine.paidIlvl .. " too"
     elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- The item stops at the cap. What carries on is the slot: its
         -- mark now sits at this level, so the next piece to land there
@@ -2175,11 +2188,10 @@ function ns:GetRecommendation(slotID)
             .. "over — even the last one, which marks the slot at a level "
             .. "no drop will ever arrive below."
     elseif mine.promotes and mine.pairSlot then
-        detail[#detail + 1] = "Rings and trinkets share one mark and it "
-            .. "follows the LOWER of the pair, so this moves nothing on its "
-            .. "own — " .. mine.pairSlot .. " is at " .. mine.pairIlvl ..
-            ", and has to reach " .. mine.paidIlvl ..
-            " before either slot starts a replacement higher."
+        detail[#detail + 1] = "Rings and trinkets count as a pair and the "
+            .. "lower of the two is what matters — " .. mine.pairSlot ..
+            " is at " .. mine.pairIlvl .. ", so nothing changes for either "
+            .. "slot until it reaches " .. mine.paidIlvl .. " as well."
     elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- Said in ranks, because that is how the game shows gear and
         -- how players talk about it. "308 instead of 305" is the same
@@ -2296,8 +2308,13 @@ function ns:GetRecommendation(slotID)
     -- rarely -- when a high-priority deep run outbids one. That is
     -- exactly when it is worth saying.
     local stranded, shortBy
+    local partnerID = ns.SLOT_PAIRS and ns.SLOT_PAIRS[slotID]
     for otherID, sum in pairs(plan.slots or {}) do
-        if otherID ~= slotID and sum.paidRanks == 0 and sum.wantedRanks > 0
+        -- Skip this slot's own pair partner. The pair line two lines up
+        -- has already said it is short and by how much, and saying it
+        -- again as a separate warning reads as two different problems.
+        if otherID ~= slotID and otherID ~= partnerID
+            and sum.paidRanks == 0 and sum.wantedRanks > 0
             and sum.wantedRanks <= 2 then
             local need = sum.wantedRanks * crestCost
             if not shortBy or need < shortBy then
@@ -2310,6 +2327,18 @@ function ns:GetRecommendation(slotID)
             " short of its own cap" ..
             (plan.seasonCapped and ", and the season cap is reached — that one "
                 .. "waits for reset." or " — cheap, so do it before anything deeper.")
+    end
+
+    -- Why this one and not its partner. Only worth a line when the pair
+    -- actually split on it -- saying "this is best-in-slot" about a piece
+    -- with nothing to be chosen over is noise.
+    if mine.bis then
+        local partnerID = ns.SLOT_PAIRS and ns.SLOT_PAIRS[slotID]
+        local partner = partnerID and plan.slots and plan.slots[partnerID]
+        if partner and not partner.bis then
+            detail[#detail + 1] = "On your best-in-slot list, so it comes "
+                .. "before " .. (partner.slotName or "the other") .. "."
+        end
     end
 
     return label, lead .. price .. " for " .. runStr .. ", " .. buys .. outcome,
