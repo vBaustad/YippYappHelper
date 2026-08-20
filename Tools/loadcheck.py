@@ -2473,8 +2473,9 @@ def main():
                 }
             end
             ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            local wallet = 200
             ns.GetCrestCountByTrack = function(self, track)
-                return track == "Champion" and 200 or 0
+                return track == "Champion" and wallet or 0
             end
             ns:InvalidateCrestPlans()
 
@@ -2514,22 +2515,49 @@ def main():
                 return restore("carried " .. #promoted .. " piece(s) to the "
                     .. "Champion cap, not the 2 the same crests reach")
             end
-            -- Which two matters: the weapon is the best value per crest
-            -- on the page and the cheapest run to finish, so a plan that
-            -- promotes two trinkets and leaves it short has concentrated
-            -- on the wrong slots.
+            -- WHICH two is the whole point, and it is not the obvious
+            -- pair. Rings and trinkets share one mark taken from the
+            -- lower of the two, so carrying a single trinket to 308
+            -- while its partner sits at 292 moves nothing -- a hundred
+            -- crests for item level on one item and no rebate at all.
+            -- Feet is worth less by slot priority and more by outcome,
+            -- because Feet is a slot of one.
             if byName["Main Hand"] ~= 308 then
                 return restore("Main Hand ends at " .. tostring(byName["Main Hand"])
                     .. ", not the 308 cap")
             end
-            if byName["Trinket 1"] ~= 308 then
-                return restore("Trinket 1 ends at " .. tostring(byName["Trinket 1"])
-                    .. ", not the 308 cap")
+            if byName["Feet"] ~= 308 then
+                return restore("Feet ends at " .. tostring(byName["Feet"])
+                    .. ", not the 308 cap -- an unpaired slot is the only "
+                    .. "kind that can move a mark on its own here")
             end
-            -- And the change goes somewhere rather than nowhere.
-            if byName["Trinket 2"] ~= 298 then
-                return restore("Trinket 2 ends at " .. tostring(byName["Trinket 2"])
+            for _, paired in ipairs({ "Trinket 1", "Trinket 2", "Ring 2" }) do
+                if byName[paired] == 308 then
+                    return restore(paired .. " was carried to its cap alone, "
+                        .. "which moves no mark while its partner is lower")
+                end
+            end
+            -- And the change still goes somewhere rather than nowhere.
+            if byName["Trinket 1"] ~= 298 then
+                return restore("Trinket 1 ends at " .. tostring(byName["Trinket 1"])
                     .. ", not the 298 the last 40 crests reach")
+            end
+
+            -- Given enough for BOTH halves, the pair is worth finishing
+            -- and the plan says so. Without this the rule above could be
+            -- passing by never funding a trinket at all.
+            wallet = 600
+            ns:InvalidateCrestPlans()
+            local rich = ns:GetCrestPlan("Champion")
+            local capped = {}
+            for _, st in ipairs(rich.steps) do
+                if st.paid and st.rank >= st.maxRank then
+                    capped[st.slotName] = true
+                end
+            end
+            if not (capped["Trinket 1"] and capped["Trinket 2"]) then
+                return restore("with 600 in hand the trinkets are still not "
+                    .. "finished together")
             end
 
             -- The band is what drove it. If these collapsed to one
@@ -2649,7 +2677,7 @@ def main():
             -- pass of this file had the item climbing onto the Hero
             -- track and said so on the panel, which is why the mechanic
             -- is pinned rather than left to read well.
-            for _, slot in ipairs({ 16, 13 }) do
+            for _, slot in ipairs({ 16, 8 }) do
                 if not said[slot]:find("caps the track", 1, true) then
                     return restore("slot " .. slot .. " reaches the Champion cap "
                         .. "but does not say so: " .. said[slot])
@@ -2673,10 +2701,10 @@ def main():
             -- Champion reaches 308, so this is a stopgap the player can
             -- fix. Saying only "a drop replaces it" states the problem
             -- and withholds the answer.
-            if not said[14]:find("stops under the 305 you loot; 308 clears it",
+            if not said[13]:find("stops under the 305 you loot; 308 clears it",
                                  1, true) then
-                return restore("Trinket 2 stops under the drop floor without "
-                    .. "naming what would clear it: " .. said[14])
+                return restore("Trinket 1 stops under the drop floor without "
+                    .. "naming what would clear it: " .. said[13])
             end
 
             -- And the case that prompted this. On Veteran, "under your

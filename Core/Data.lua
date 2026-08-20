@@ -442,6 +442,26 @@ ns.CATALYST_NOTE = {
 }
 
 ------------------------------------------------------------
+-- Slots whose high-water mark is shared, and taken from the LOWER
+-- of the two.
+--
+-- Rings and trinkets are one mark between two slots, and it only moves
+-- when BOTH pieces reach the level. Carrying one trinket to 308 while
+-- its partner sits at 292 leaves the mark at 292: the next piece to
+-- land in either slot is lifted to 292 and no further, and the hundred
+-- crests spent bought item level on one item rather than a rebate on
+-- the next.
+--
+-- Which makes a pair a single purchase priced at two. The advisor has
+-- to know that before it recommends finishing one of them, or it
+-- promises a free rank that will not arrive.
+------------------------------------------------------------
+ns.SLOT_PAIRS = {
+    [11] = 12, [12] = 11,   -- Ring 1 / Ring 2
+    [13] = 14, [14] = 13,   -- Trinket 1 / Trinket 2
+}
+
+------------------------------------------------------------
 -- Slot priority (higher = more valuable to upgrade)
 ------------------------------------------------------------
 ns.SLOT_PRIORITY = {

@@ -582,6 +582,31 @@ function ns:GetCrestPlan(crestTrack)
     -- whole but RECORDED rank by rank, so the steps list, the running
     -- total and the paid/unpaid line are all exactly what they were.
     ------------------------------------------------------------
+    ------------------------------------------------------------
+    -- Paired slots share one mark, taken from the lower of the two.
+    --
+    -- So a run that caps a ring or a trinket only earns the rebate if
+    -- its partner is already at that level. Without this the plan hands
+    -- a hundred crests to one trinket and reports a free Hero rank that
+    -- will never arrive, because the mark never moved off the partner.
+    ------------------------------------------------------------
+    local bySlot, slotIlvl, slotName = {}, {}, {}
+    for _, c in ipairs(candidates) do bySlot[c.slotID] = c end
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        local info = ns:GetSlotInfo(si.slot)
+        slotIlvl[si.slot] = info and info.ilvl or 0
+        slotName[si.slot] = si.name
+    end
+
+    --- The partner's CURRENT level, live as the walk buys ranks.
+    --- nil when the slot is not half of a pair.
+    local function PartnerIlvl(slotID)
+        local partner = ns.SLOT_PAIRS and ns.SLOT_PAIRS[slotID]
+        if not partner then return nil end
+        local c = bySlot[partner]
+        return c and c.ilvl or (slotIlvl[partner] or 0), partner
+    end
+
     local rebate, markTrack, markRanks, markRank, dropRank =
         MarkRebate(crestTrack, bandLow)
     plan.markTrack  = markTrack
@@ -609,8 +634,13 @@ function ns:GetCrestPlan(crestTrack)
         -- Only for a run the wallet can actually finish. Crediting a
         -- rebate the player cannot reach is precisely how a plan talks
         -- itself into stranding crests halfway up a track.
+        -- A pair whose partner is not there yet earns nothing: the
+        -- mark is the lower of the two and has not moved.
+        local partner = PartnerIlvl(c.slotID)
+        local pairReady = (partner == nil) or (partner >= landing)
+
         local effective = runCost
-        if c.rank + k >= c.maxRank and runCost <= reachable then
+        if c.rank + k >= c.maxRank and runCost <= reachable and pairReady then
             -- Never below one rank's price. A rebate that swallows the
             -- run would divide by almost nothing and rank it above
             -- everything on the page regardless of what it buys.
@@ -711,6 +741,13 @@ function ns:GetCrestPlan(crestTrack)
                 if step.promotes then
                     summary.promotes   = true
                     summary.promotesTo = step.promotes
+                    local pIlvl, pSlot = PartnerIlvl(best.slotID)
+                    if pIlvl and pIlvl < best.ilvl then
+                        summary.pairSlot = slotName[pSlot] or "its partner"
+                        summary.pairIlvl = pIlvl
+                    else
+                        summary.pairSlot, summary.pairIlvl = nil, nil
+                    end
                 end
             end
         end
@@ -1874,6 +1911,12 @@ function ns:GetRecommendation(slotID)
     if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
         label = ns.RECOMMEND.SAFE_TEMP
         outcome = " — " .. track .. " tops out under everything you loot"
+    elseif mine.promotes and mine.pairSlot then
+        -- The pair is the purchase. Capping one half moves nothing, so
+        -- the row says what the other half still needs rather than
+        -- promising a rebate that cannot land.
+        outcome = " — caps the track; mark needs " .. mine.pairSlot ..
+            " at " .. mine.paidIlvl .. " too"
     elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- The item stops at the cap. What carries on is the slot: its
         -- mark now sits at this level, so the next piece to land there
@@ -1951,6 +1994,12 @@ function ns:GetRecommendation(slotID)
             ", so every rank on it is a stopgap until the slot turns "
             .. "over — even the last one, which marks the slot at a level "
             .. "no drop will ever arrive below."
+    elseif mine.promotes and mine.pairSlot then
+        detail[#detail + 1] = "Rings and trinkets share one mark and it "
+            .. "follows the LOWER of the pair, so this moves nothing on its "
+            .. "own — " .. mine.pairSlot .. " is at " .. mine.pairIlvl ..
+            ", and has to reach " .. mine.paidIlvl ..
+            " before either slot starts a replacement higher."
     elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- Said in ranks, because that is how the game shows gear and
         -- how players talk about it. "308 instead of 305" is the same
