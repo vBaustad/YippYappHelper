@@ -918,6 +918,7 @@ function ns:GetTrackCompletion(crestTrack)
         needDrop  = 0,     -- below the cap and crests cannot get there
         cost      = 0,     -- to finish every needCrest slot
         held      = ns:GetCrestCountByTrack(crestTrack),
+        remaining = {},    -- the pieces still climbing, cheapest first
     }
 
     for _, si in ipairs(ns.SLOT_IDS or {}) do
@@ -934,6 +935,10 @@ function ns:GetTrackCompletion(crestTrack)
                 if left > 0 then
                     out.needCrest = out.needCrest + 1
                     out.cost = out.cost + left * cost
+                    out.remaining[#out.remaining + 1] = {
+                        slotID = si.slot, slotName = si.name,
+                        left = left, cost = left * cost,
+                    }
                 else
                     out.needDrop = out.needDrop + 1
                 end
@@ -950,6 +955,45 @@ function ns:GetTrackCompletion(crestTrack)
     out.surplus   = math.max(out.held - out.cost, 0)
     -- Done means done: no slot left that this crest could still buy.
     out.finished  = out.needCrest == 0
+
+    ------------------------------------------------------------
+    -- The SHAPE of what is left, not just its price.
+    --
+    -- "260 crests" describes two completely different weeks. Three
+    -- pieces each a rank from their cap is an evening and a drop away;
+    -- three pieces at 1/6 is most of a season, and the crests are better
+    -- spent elsewhere while drops do that job for free. Same number.
+    ------------------------------------------------------------
+    table.sort(out.remaining, function(a, b)
+        if a.left ~= b.left then return a.left < b.left end
+        return a.slotID < b.slotID
+    end)
+    out.nearest = out.remaining[1] and out.remaining[1].left or 0
+    out.deepest = out.remaining[#out.remaining]
+        and out.remaining[#out.remaining].left or 0
+
+    ------------------------------------------------------------
+    -- And how long the shortfall actually is.
+    --
+    -- A cap the player has not reached is not a wait -- those crests are
+    -- sitting in content they have not run yet, and the answer is "go
+    -- and earn it", not "come back in a fortnight". Only the part beyond
+    -- this season's allowance needs resets, and the allowance grows by
+    -- CREST_WEEKLY_INCREMENT a week.
+    --
+    -- Which is why this is the first thing in the addon to read that
+    -- constant. It has been defined and unused since it was written.
+    ------------------------------------------------------------
+    out.earnable = ns:GetEarnableCrests(crestTrack)
+    out.outgrown = ns:IsCrestOutgrown(crestTrack)
+    if out.short > 0 then
+        local beyondCap = out.short - out.earnable
+        if beyondCap <= 0 then
+            out.weeks = 0          -- farmable inside this week's allowance
+        else
+            out.weeks = math.ceil(beyondCap / (ns.CREST_WEEKLY_INCREMENT or 100))
+        end
+    end
     return out
 end
 
@@ -1903,43 +1947,101 @@ function ns:GetRecommendation(slotID)
             .. "nowhere better to go."
     end
 
-    -- 3. Where that leaves the track.
+    -- 3. Where that leaves the track, what the rest costs, and how long
+    --    that actually is.
     if finish then
         local after = math.max(finish.needCrest - (mine.promotes and 1 or 0), 0)
-        detail[#detail + 1] = finish.done .. " of your " .. finish.slots ..
+        local progress = finish.done .. " of your " .. finish.slots ..
             " slots are already at " .. finish.capIlvl .. " or better" ..
             (mine.promotes and (", and this makes " .. (finish.done + 1) .. ".")
                 or ".")
+        if finish.needDrop > 0 then
+            progress = progress .. " " .. finish.needDrop ..
+                (finish.needDrop == 1 and " more needs" or " more need") ..
+                " a drop before crests can reach them."
+        end
+        detail[#detail + 1] = progress
 
         if after == 0 then
             detail[#detail + 1] = "That is the last one — after this you never "
                 .. "need a " .. crestTrack .. " crest again."
-        elseif after > 0 then
+        else
             -- Both sides net off what this row already spends. The
             -- crests buy ranks whether or not they finish the piece, so
             -- charging them to the wallet but not to the demand would
             -- report the same spend as pure loss.
             local rest = math.max(finish.cost - mine.paidCost, 0)
             local left = math.max(finish.held - mine.paidCost, 0)
+            local gap  = math.max(rest - left, 0)
             local line = after .. (after == 1 and " piece" or " pieces") ..
-                " left after this, " .. rest .. " crests to finish them, and " ..
+                " left after this, " .. rest .. " crests to finish them, " ..
                 left .. " in hand"
-            if left >= rest then
-                detail[#detail + 1] = line ..
-                    " — enough for all of them. Do that and " .. crestTrack ..
-                    " is done; only " ..
+
+            if gap <= 0 then
+                detail[#detail + 1] = line .. " — enough for all of them. Do "
+                    .. "that and " .. crestTrack .. " is done; only " ..
                     (plan.markTrack or "the higher tracks") ..
                     " and up matter after that."
+            elseif finish.outgrown then
+                -- No week count here on purpose. An outgrown track is
+                -- paid only by whatever spills out of a higher one
+                -- capping, and nothing the addon can see says when that
+                -- lands. A confident "2 resets" would be invented.
+                detail[#detail + 1] = line .. ", so " .. gap ..
+                    " short — and " .. crestTrack .. " only trickles in "
+                    .. "behind a higher track now."
+            elseif (finish.weeks or 0) <= 0 then
+                detail[#detail + 1] = line .. ", so " .. gap ..
+                    " short — but that is still inside this season's "
+                    .. "allowance, so it is content you have not run yet "
+                    .. "rather than a wait."
             else
-                detail[#detail + 1] = line .. ", so " .. (rest - left) ..
-                    " short."
+                detail[#detail + 1] = line .. ", so " .. gap ..
+                    " short — about " .. finish.weeks ..
+                    (finish.weeks == 1 and " more reset." or " more resets.")
             end
         end
-        if finish.needDrop > 0 then
-            detail[#detail + 1] = finish.needDrop ..
-                (finish.needDrop == 1 and " slot is" or " slots are") ..
-                " below " .. finish.capIlvl .. " and need a drop, not crests."
+
+        -- 4. Drops or crests. Both, and which one first.
+        --
+        -- The deciding fact is how far the stragglers have left to
+        -- climb, not what they cost in total: pieces a rank or two from
+        -- their cap are finished by any drop or a single reset, and
+        -- pieces at the bottom of the track are cheaper to replace than
+        -- to carry. Same crest total, opposite advice.
+        if after > 0 and finish.deepest > 0 then
+            if finish.deepest <= 2 then
+                detail[#detail + 1] = "They are all within " ..
+                    finish.deepest .. (finish.deepest == 1
+                        and " rank of the cap" or " ranks of the cap") ..
+                    ", so a drop in any of them — or one reset — closes it."
+            elseif finish.nearest <= 2 then
+                detail[#detail + 1] = "Uneven: " .. finish.remaining[1].slotName
+                    .. " is only " .. finish.remaining[1].cost ..
+                    " crests from done, while the deepest wants " ..
+                    (finish.deepest * crestCost) ..
+                    ". Take the cheap ones and let drops handle the rest."
+            else
+                detail[#detail + 1] = "All of them are " .. finish.deepest ..
+                    "+ ranks down, which a drop does for free. Chase gear "
+                    .. "in those slots before crests."
+            end
         end
+
+        -- 5. The standing warning against saving up.
+        --
+        -- Crests in the bag are power not being worn. A player told to
+        -- hold toward a total they will not reach loses every week
+        -- between now and a drop that would have reset the plan anyway,
+        -- so this fires exactly where hoarding is the tempting mistake:
+        -- a real shortfall with something affordable sitting in front of
+        -- it right now.
+        if after > 0 and mine.paidRanks > 0
+            and math.max(finish.cost - mine.paidCost, 0) > math.max(finish.held - mine.paidCost, 0) then
+            detail[#detail + 1] = "Spend what you have anyway — crests in the "
+                .. "bag are power you are not wearing."
+        end
+
     end
 
     return label, lead .. price .. " for " .. runStr .. ", " .. buys .. outcome,

@@ -2859,6 +2859,117 @@ def main():
         print("  FAIL gear census: %s" % census)
         failures.append(("gear census", str(census)))
 
+    # "120 short" is a number, not a decision.
+    #
+    # The same shortfall is an evening's work or half a season depending
+    # on where the season cap sits, and the panel used to state it and
+    # stop. A cap the player has not reached yet is not a wait at all --
+    # those crests are in content they have not run -- so only the part
+    # beyond this season's allowance costs resets, at
+    # CREST_WEEKLY_INCREMENT a week.
+    timing = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
+            local SET = {
+                { 16, "Champion", 3 }, { 13, "Champion", 1 }, { 14, "Champion", 1 },
+                {  8, "Champion", 1 }, { 12, "Champion", 1 },
+            }
+            local bySlot = {}
+            for _, e in ipairs(SET) do
+                local levels = T[e[2]]
+                bySlot[e[1]] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = levels[e[3]], quality = 4, icon = 134400,
+                    track = e[2], rank = e[3], maxRank = #levels, crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+
+            local wallet = 0
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and wallet or 0
+            end
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+            local function at(n)
+                wallet = n
+                ns:InvalidateCrestPlans()
+                return ns:GetTrackCompletion("Champion")
+            end
+
+            -- Five pieces: one three ranks from its cap, four at the
+            -- bottom of the track. 3 + 4x5 = 23 ranks at 20.
+            local base = at(0)
+            if base.cost ~= 460 then
+                return restore("fixture costs " .. base.cost .. " to finish, not 460")
+            end
+            if base.needCrest ~= 5 then
+                return restore(base.needCrest .. " pieces climbing, not 5")
+            end
+            -- The shape, which is what decides drops against crests.
+            if base.nearest ~= 3 or base.deepest ~= 5 then
+                return restore("shape reads " .. base.nearest .. "-" ..
+                    base.deepest .. " ranks, not 3-5")
+            end
+
+            -- The season allowance the fixture's Champion row leaves:
+            -- 180 earned against a 300 cap.
+            local earnable = ns:GetEarnableCrests("Champion")
+            if earnable ~= 120 then
+                return restore("fixture allowance is " .. earnable .. ", not 120")
+            end
+
+            -- Enough in hand: no shortfall, and nothing to wait for.
+            local rich = at(600)
+            if not rich.canFinish or rich.short ~= 0 or rich.weeks ~= nil then
+                return restore("600 in hand still reports a wait")
+            end
+            if rich.surplus ~= 140 then
+                return restore("600 against 460 leaves " .. rich.surplus)
+            end
+
+            -- Short, but inside the allowance: content not yet run, not
+            -- a wait. This is the distinction the whole branch exists
+            -- for -- telling someone to come back next week when the
+            -- crests are sitting in a dungeon they have not done.
+            local close = at(400)
+            if close.short ~= 60 then
+                return restore("400 against 460 is short " .. close.short)
+            end
+            if close.weeks ~= 0 then
+                return restore("a 60 shortfall inside a 120 allowance wants "
+                    .. tostring(close.weeks) .. " resets")
+            end
+
+            -- Short beyond the allowance: now it is resets, and the
+            -- count is only the part the cap has to grow into.
+            local poor = at(200)
+            if poor.short ~= 260 then
+                return restore("200 against 460 is short " .. poor.short)
+            end
+            local want = math.ceil((260 - 120) / ns.CREST_WEEKLY_INCREMENT)
+            if poor.weeks ~= want then
+                return restore("260 short with 120 allowed reads "
+                    .. tostring(poor.weeks) .. " resets, not " .. want)
+            end
+
+            return restore(string.format("ok:%d:%d:%d",
+                base.cost, close.weeks, poor.weeks))
+        end
+    """)(ns)
+    if timing and str(timing).startswith("ok:"):
+        cost, near, far = str(timing)[3:].split(":")
+        print("  ok   shortfall timing: %s to finish the track — inside the "
+              "allowance it is %s resets, beyond it %s" % (cost, near, far))
+    else:
+        print("  FAIL shortfall timing: %s" % timing)
+        failures.append(("shortfall timing", str(timing)))
+
     # The season name, guarded at the source.
     #
     # Season 1's "of the Dawn" outlived the id table it belonged to and

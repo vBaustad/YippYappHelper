@@ -218,9 +218,12 @@ that never pays Champion. The advice is never "run M0s for Champion" — it is
 
 ### Still missing
 
-- **No model of time.** `ns.CREST_WEEKLY_INCREMENT` is defined and read by
-  nothing. Caps make this a throughput problem, so "you need 380 more
-  Champion" is only actionable as "that is two weeks of overflow".
+- ~~**No model of time.**~~ Built: `GetTrackCompletion` reads
+  `CREST_WEEKLY_INCREMENT` and separates a shortfall inside this season's
+  allowance (content not yet run) from one beyond it (resets). What it still
+  cannot do is date an *outgrown* track, whose income is whatever spills out
+  of a higher one capping — so it says the condition instead of inventing a
+  week count.
 - **The hover is where the reasoning lives; the page has none of it.** The
   row is one line and the tooltip carries the rest, but a player who never
   hovers sees only the verdict. The track's finish line — "3 pieces and you
