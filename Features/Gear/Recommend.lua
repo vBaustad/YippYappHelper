@@ -463,6 +463,11 @@ function ns:GetCrestPlan(crestTrack)
                     rank     = rank,
                     maxRank  = up.maxUpgrade or 0,
                     ilvl     = startIlvl,
+                    -- Read once per candidate rather than per run: the
+                    -- walk scores every run of every slot on every pick,
+                    -- and this reaches a scraped table and the player's
+                    -- saved pins.
+                    bis      = ns.IsBisItem and ns:IsBisItem(si.slot) or false,
                     -- Kept for the reserve, which counts at-risk slots.
                     -- It no longer orders the walk: the drop band does
                     -- that, and against the right number. Risk measures
@@ -674,6 +679,10 @@ function ns:GetCrestPlan(crestTrack)
         if score ~= bestScore then return score > bestScore end
         if c.priority ~= bestC.priority then return c.priority > bestC.priority end
         if c.ilvl ~= bestC.ilvl then return c.ilvl < bestC.ilvl end
+        -- The keeper before the filler. Two trinkets at the same rank
+        -- and level are otherwise identical to the scoring, and slot id
+        -- is a worse answer than "this is the one you are keeping".
+        if c.bis ~= bestC.bis then return c.bis end
         if c.slotID ~= bestC.slotID then return c.slotID < bestC.slotID end
         return k < bestK
     end
@@ -784,6 +793,70 @@ end
 --- Slot names paid for ahead of `slotID` on its own track, best first.
 --- Answers "why not this one yet" with the actual competition rather
 --- than with a single hardcoded "top slots".
+------------------------------------------------------------
+-- Is the piece in this slot one the player means to keep?
+--
+-- Two trinkets at the same rank and item level are the same purchase to
+-- everything above this line, so the walk was breaking the tie on slot
+-- id -- Trinket 1 beat Trinket 2 because 13 is less than 14. When one
+-- of them is the spec's best-in-slot and the other is filler that is
+-- not a tie at all: crests on the keeper stay bought, crests on the
+-- filler go when it does.
+--
+-- The scraped guide and the player's own pins both count, pins first --
+-- someone who has pinned a choice has simed it or decided it, and that
+-- outranks a page scraped in August.
+--
+-- Deliberately only a TIE-BREAK. Best-in-slot says which of two equal
+-- purchases to make, not that a best-in-slot piece is worth more crests
+-- than a bigger upgrade elsewhere; and the guide is one opinion at one
+-- point in time, which ns.GEAR_CAVEAT already says at length.
+------------------------------------------------------------
+local function EquippedItemID(slotID)
+    local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
+    local link = info and info.link
+    return link and tonumber(link:match("item:(%d+)")) or nil
+end
+
+function ns:IsBisItem(slotID)
+    local itemID = EquippedItemID(slotID)
+    if not itemID then return false end
+
+    local specKey = ns.PlayerSpecKey and ns:PlayerSpecKey()
+    if not specKey then return false end
+
+    -- The player's own pins, which override the guide row for that slot.
+    if ns.GetBisPins then
+        local ok, pins = pcall(ns.GetBisPins, ns, specKey)
+        if ok and type(pins) == "table" then
+            for pinnedSlot, pinnedID in pairs(pins) do
+                if pinnedSlot == slotID then return pinnedID == itemID end
+            end
+        end
+    end
+
+    local guide = ns.ClassGuideData and ns.ClassGuideData[specKey]
+    for _, row in ipairs(guide and guide.bis or {}) do
+        if row.itemID == itemID then return true end
+    end
+    return false
+end
+
+--- Is this slot being held rather than funded?
+---
+--- The plan still ALLOCATES to it -- the walk knows nothing about
+--- holding -- so the advice and the plan can disagree unless both ask
+--- the same question. They did disagree: Trinket 1 read "Hold 100
+--- Champion" while Trinket 2 read "Feet and Trinket 1 first", naming as
+--- a prerequisite the very slot the panel had just said not to spend on.
+function ns:IsHeldForDrops(plan, slotID)
+    if not plan or not plan.outgrown then return false end
+    if (plan.markRanks or 0) <= 0 then return false end
+    local mine = plan.slots and plan.slots[slotID]
+    if not mine then return false end
+    return mine.wantedRanks >= 4 and mine.paidRanks > 0
+end
+
 function ns:GetCrestPlanBlockers(plan, slotID, limit)
     if not plan then return {} end
     local mine = plan.slots and plan.slots[slotID]
@@ -792,7 +865,10 @@ function ns:GetCrestPlanBlockers(plan, slotID, limit)
     local names, seen = {}, {}
     for i = 1, mine.firstStep - 1 do
         local step = plan.steps[i]
-        if not seen[step.slotID] then
+        -- A slot the panel is telling the player to hold is not a slot
+        -- to do first. Naming it here is the plan's allocation leaking
+        -- past the advice that overrode it.
+        if not seen[step.slotID] and not ns:IsHeldForDrops(plan, step.slotID) then
             seen[step.slotID] = true
             names[#names + 1] = step.slotName
             if limit and #names >= limit then break end
@@ -1918,8 +1994,7 @@ function ns:GetRecommendation(slotID)
     -- enough to just do, and the anti-hoarding rule stands everywhere
     -- else: crests held with nothing to react to are power not worn.
     ------------------------------------------------------------
-    if plan.outgrown and mine.wantedRanks >= 4 and mine.paidRanks > 0
-        and (plan.markRanks or 0) > 0 then
+    if ns:IsHeldForDrops(plan, slotID) then
         local n = #(ns.GEAR_TRACKS[plan.markTrack] or {})
         local full = mine.wantedRanks * crestCost
         return ns.RECOMMEND.HOLD_CRESTS,

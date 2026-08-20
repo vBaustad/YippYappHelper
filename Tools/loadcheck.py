@@ -1960,6 +1960,23 @@ def main():
             return table.concat(out, ",") .. "|" .. table.concat(notes, ",")
         end
     """)
+    # Bosses whose source never separated the difficulties. Exempt from
+    # the "must differ" half of the check and from nothing else -- they
+    # still have to be monotonic, and the page still has to say out loud
+    # that the answer is unknown rather than nothing.
+    unknown = {}
+    for row in (L.eval("""
+        function(ns)
+            local out = {}
+            for _, b in ipairs(ns.RaidGuide and ns.RaidGuide:Ordered() or {}) do
+                if b.changesUnknown then out[#out + 1] = b.id end
+            end
+            return table.concat(out, ",")
+        end
+    """)(ns) or "").split(","):
+        if row:
+            unknown[row] = True
+
     diff_rows = 0
     for spec in (plan or "").split(","):
         if not spec:
@@ -1978,7 +1995,7 @@ def main():
             print("  FAIL %s" % msg)
             failures.append(("guide difficulty", msg))
             continue
-        if shown[0] == shown[2] and noted[2] == 0:
+        if shown[0] == shown[2] and noted[2] == 0 and not unknown.get(boss_id):
             msg = ("%s is identical on Normal and Mythic (%d mechanics, no "
                    "deltas) -- its difficulty notes were never written"
                    % (boss_id, shown[0]))
@@ -1987,8 +2004,10 @@ def main():
             continue
         diff_rows += 1
     if diff_rows:
-        print("  ok   %d bosses: mechanics never decrease with difficulty, "
-              "and every fight differs between Normal and Mythic" % diff_rows)
+        exempt = sum(1 for v in unknown.values() if v)
+        print("  ok   %d bosses: mechanics never decrease with difficulty, and "
+              "every fight differs between Normal and Mythic (%d exempt, "
+              "marked changesUnknown)" % (diff_rows, exempt))
 
     # The rail's Bloodlust block, and the button that follows it.
     #
@@ -2781,6 +2800,38 @@ def main():
                 deep[e[1]] = detail
             end
 
+            -- Nothing named as a prerequisite may itself be a row the
+            -- panel is telling the player to hold.
+            --
+            -- The plan still ALLOCATES to a held slot -- the walk knows
+            -- nothing about holding -- so the two disagreed on screen:
+            -- Trinket 1 read "Hold 100 Champion" while Trinket 2 read
+            -- "Feet and Trinket 1 first", naming as a prerequisite the
+            -- very slot it had just said not to spend on.
+            local holding = {}
+            for slot, reason in pairs(said) do
+                if reason:find("^Hold ") then
+                    for _, si in ipairs(ns.SLOT_IDS) do
+                        if si.slot == slot then holding[si.name] = true end
+                    end
+                end
+            end
+            if not next(holding) then
+                return restore("no row is held, so the contradiction this "
+                    .. "guards against cannot arise and the check is vacuous")
+            end
+            for slot, reason in pairs(said) do
+                if reason:find(" first", 1, true) then
+                    for name in pairs(holding) do
+                        if reason:find(name, 1, true) then
+                            return restore("slot " .. slot .. " is told to do "
+                                .. name .. " first, which is itself held: "
+                                .. reason)
+                        end
+                    end
+                end
+            end
+
             -- The row is one line in a panel a third of a screen wide,
             -- and it was clipping mid-sentence -- so the advice with
             -- most to say was the advice you could not read. Character
@@ -3450,6 +3501,92 @@ def main():
     else:
         print("  FAIL overlap warning: %s" % overlap)
         failures.append(("overlap warning", str(overlap)))
+
+    # Which of two identical trinkets gets the crests.
+    #
+    # Two pieces at the same rank and item level are the same purchase to
+    # every term in the scoring, so the walk fell through to slot id --
+    # Trinket 1 beat Trinket 2 because 13 is less than 14. When one of
+    # them is the spec's best-in-slot and the other is filler that is not
+    # a tie: crests on the keeper stay bought, crests on the filler leave
+    # when it does.
+    bis = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realCount = ns.GetSlotInfo, ns.GetCrestCountByTrack
+            local realSpec, realGuide = ns.PlayerSpecKey, ns.ClassGuideData
+
+            local function piece(itemID)
+                return {
+                    link = "|cffa335ee|Hitem:" .. itemID ..
+                        "::::::::80:::::|h[Fixture]|h|r",
+                    ilvl = T.Champion[1], quality = 4, icon = 134400,
+                    track = "Champion", rank = 1, maxRank = 6, crafted = false,
+                }
+            end
+            local bySlot = { [13] = piece(111), [14] = piece(222) }
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            -- Exactly one five-rank run affordable, so the tie decides
+            -- which trinket it goes to.
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and 100 or 0
+            end
+            ns.PlayerSpecKey = function() return "FIXTURE_SPEC" end
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns.PlayerSpecKey, ns.ClassGuideData = realSpec, realGuide
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+            local function fundedTrinket(bisItemID)
+                ns.ClassGuideData = { FIXTURE_SPEC = { bis = bisItemID
+                    and { { slot = "Trinket 2", itemID = bisItemID } } or {} } }
+                ns:InvalidateCrestPlans()
+                local p = ns:GetCrestPlan("Champion")
+                for _, st in ipairs(p and p.steps or {}) do
+                    if st.paid then return st.slotName end
+                end
+                return "nothing"
+            end
+
+            -- No guide at all: the old behaviour, and the baseline that
+            -- proves the flag is what moves it.
+            local plain = fundedTrinket(nil)
+            if plain ~= "Trinket 1" then
+                return restore("with no best-in-slot data the tie does not "
+                    .. "fall to slot order; it funded " .. plain)
+            end
+
+            -- Now the SECOND trinket is the keeper, against slot order.
+            local keeper = fundedTrinket(222)
+            if keeper ~= "Trinket 2" then
+                return restore("best-in-slot did not outrank slot order; the "
+                    .. "crests went to " .. keeper)
+            end
+
+            -- And it is the item, not the slot: mark the first one and
+            -- it goes back.
+            ns.ClassGuideData = { FIXTURE_SPEC =
+                { bis = { { slot = "Trinket 1", itemID = 111 } } } }
+            ns:InvalidateCrestPlans()
+            local back = "nothing"
+            for _, st in ipairs((ns:GetCrestPlan("Champion") or {}).steps or {}) do
+                if st.paid then back = st.slotName break end
+            end
+            if back ~= "Trinket 1" then
+                return restore("marking the first trinket did not move the "
+                    .. "crests back to it; they went to " .. back)
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if bis == "ok":
+        print("  ok   best-in-slot tiebreak: between two identical trinkets the "
+              "crests follow the keeper, not the lower slot number")
+    else:
+        print("  FAIL best-in-slot tiebreak: %s" % bis)
+        failures.append(("best-in-slot tiebreak", str(bis)))
 
     # The season name, guarded at the source.
     #
