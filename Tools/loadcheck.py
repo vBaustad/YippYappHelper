@@ -2710,11 +2710,20 @@ def main():
                 return restore("the hover never names the slot it is about")
             end
             -- The free ranks on the next piece, which is the whole
-            -- reason to carry a lower track to its cap.
-            if not (joined:find("free rank", 1, true)
+            -- reason to carry a lower track to its cap -- and said in
+            -- RANKS, because that is how the game shows gear and how
+            -- players talk about it. "308 instead of 305" is the same
+            -- fact in a unit nobody carries in their head.
+            if not (joined:find("starts at 2/6 instead of 1/6", 1, true)
                 and joined:find("Hero you never spend", 1, true)) then
                 return restore("the hover never says what maxing this buys on "
                     .. "the piece that replaces it: " .. joined)
+            end
+            for _, ilvlish in ipairs({ "start at 308", "instead of 305" }) do
+                if joined:find(ilvlish, 1, true) then
+                    return restore("the hover talks ladder positions in item "
+                        .. "levels: '" .. ilvlish .. "'")
+                end
             end
             -- Where the player stands on being DONE with the track, and
             -- what that means in weeks or drops -- the shortfall stated
@@ -2724,18 +2733,20 @@ def main():
             -- as filler at best and absurd at worst: on a character with
             -- none of the track finished it announced "0 of your 16, and
             -- this makes 1".
-            if not joined:find("crests left against", 1, true) then
+            if not (joined:find("more Champion pieces to max would cost", 1, true)
+                and joined:find("and you have", 1, true)) then
                 return restore("the hover never says what the rest of the track "
                     .. "costs against what is in hand")
             end
             -- Outgrown, so no week count is claimed -- the income is
             -- whatever spills out of a higher track capping and nothing
             -- here can date that. It has to point at drops instead.
-            if not joined:find("faster route", 1, true) then
+            if not joined:find("drops will fix those slots before crests do",
+                               1, true) then
                 return restore("the hover leaves an outgrown shortfall without "
                     .. "a route: " .. joined)
             end
-            if joined:find(" weeks to finish", 1, true) then
+            if joined:find(" weeks to earn", 1, true) then
                 return restore("the hover dates an outgrown track it cannot see "
                     .. "the income for")
             end

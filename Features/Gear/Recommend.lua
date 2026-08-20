@@ -360,7 +360,10 @@ local function MarkRebate(track, bandLow)
     end
 
     local ranks = markRank - dropRank
-    if ranks <= 0 then return 0, nextTrack, 0 end
+    -- The two positions come back as well as the difference. A player
+    -- reads their gear as "Hero 1/6", not as 305, so the sentence that
+    -- explains this has to be able to say which rank it means.
+    if ranks <= 0 then return 0, nextTrack, 0, markRank, dropRank end
 
     -- Priced across currencies. A Hero crest is worth more than the
     -- Champion one that saved it, and on a wallet the content has
@@ -368,7 +371,7 @@ local function MarkRebate(track, bandLow)
     local here  = ns.CREST_VALUE[track] or 1
     local there = ns.CREST_VALUE[nextTrack] or here
     local saved = ranks * ns:GetCrestCost(ns.TRACK_CREST[nextTrack] or nextTrack)
-    return saved * (there / here), nextTrack, ranks
+    return saved * (there / here), nextTrack, ranks, markRank, dropRank
 end
 
 local planCache = {}
@@ -579,10 +582,13 @@ function ns:GetCrestPlan(crestTrack)
     -- whole but RECORDED rank by rank, so the steps list, the running
     -- total and the paid/unpaid line are all exactly what they were.
     ------------------------------------------------------------
-    local rebate, markTrack, markRanks = MarkRebate(crestTrack, bandLow)
-    plan.markTrack = markTrack
-    plan.markRanks = markRanks
+    local rebate, markTrack, markRanks, markRank, dropRank =
+        MarkRebate(crestTrack, bandLow)
+    plan.markTrack  = markTrack
+    plan.markRanks  = markRanks
     plan.markRebate = rebate
+    plan.markRank   = markRank    -- where the mark lands on that ladder
+    plan.dropRank   = dropRank    -- where the drop would have started
 
     --- Value kept per crest spent, for buying k more ranks on c.
     --- reachable is what the wallet can still finish with right now.
@@ -1932,12 +1938,15 @@ function ns:GetRecommendation(slotID)
 
     -- 2. What it buys on the piece that replaces it.
     if mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
+        -- Said in ranks, because that is how the game shows gear and
+        -- how players talk about it. "308 instead of 305" is the same
+        -- fact in a unit nobody carries in their head.
         local saved = plan.markRanks * ns:GetCrestCost(mine.promotesTo)
-        detail[#detail + 1] = "A " .. mine.promotesTo ..
-            " piece dropping here would start at " .. mine.paidIlvl ..
-            " instead of " .. plan.bandLow .. " — " .. plan.markRanks ..
-            (plan.markRanks == 1 and " free rank, " or " free ranks, ") ..
-            saved .. " " .. mine.promotesTo .. " you never spend."
+        local ranks = #(ns.GEAR_TRACKS[mine.promotesTo] or {})
+        detail[#detail + 1] = "The next " .. mine.promotesTo ..
+            " piece to land here then starts at " .. plan.markRank .. "/" ..
+            ranks .. " instead of " .. plan.dropRank .. "/" .. ranks ..
+            " — " .. saved .. " " .. mine.promotesTo .. " you never spend."
     elseif mine.stickyRanks > 0 then
         detail[#detail + 1] = "Nothing you run drops above " ..
             plan.bandHigh .. ", so this one is yours to keep."
@@ -1962,31 +1971,34 @@ function ns:GetRecommendation(slotID)
         local rest  = math.max(finish.cost - mine.paidCost, 0)
         local left  = math.max(finish.held - mine.paidCost, 0)
 
+        -- Two short sentences, not one with three clauses hung off it.
+        -- The compressed version -- "4 pieces and 400 crests left against
+        -- 140 in hand, and it only comes in behind Hero now, so a drop in
+        -- those slots is the faster route" -- packs the state, the
+        -- income model and the verdict into a single breath, and none of
+        -- the three survives it.
+        local state = after .. " more " .. crestTrack ..
+            (after == 1 and " piece" or " pieces") .. " to max would cost " ..
+            rest .. ", and you have " .. left .. "."
+
         if after == 0 then
             detail[#detail + 1] = "That is the last " .. crestTrack ..
                 " piece — after this you never need one again."
         elseif rest <= left then
-            detail[#detail + 1] = crestTrack .. ": " .. after ..
-                " pieces and " .. rest .. " crests left, and you have it. " ..
-                "Finish them and you are done with " .. crestTrack .. " for good."
+            detail[#detail + 1] = state .. " Enough for all of them, and "
+                .. "then you are done with " .. crestTrack .. " for good."
+        elseif finish.outgrown then
+            -- No week count. An outgrown track is paid by whatever spills
+            -- out of a higher one capping, and nothing here can date that.
+            detail[#detail + 1] = state .. " You only earn " .. crestTrack ..
+                " once " .. (plan.markTrack or "the track above") ..
+                " caps, so drops will fix those slots before crests do."
+        elseif finish.withinAllowance then
+            detail[#detail + 1] = state .. " The rest is still inside this "
+                .. "season's cap, so it is content to run, not a wait."
         else
-            local tail
-            if finish.outgrown then
-                -- No week count. An outgrown track is paid by whatever
-                -- spills out of a higher one capping, and nothing here
-                -- can see when that lands.
-                tail = "and it only comes in behind " ..
-                    (plan.markTrack or "a higher track") ..
-                    " now, so a drop in those slots is the faster route."
-            elseif finish.withinAllowance then
-                tail = "all still inside this season's cap, so it is content "
-                    .. "to run rather than a wait."
-            else
-                tail = "about " .. finish.weeks .. " weeks to finish the track, "
-                    .. "or a drop in any of them."
-            end
-            detail[#detail + 1] = crestTrack .. ": " .. after .. " pieces and "
-                .. rest .. " crests left against " .. left .. " in hand, " .. tail
+            detail[#detail + 1] = state .. " About " .. finish.weeks ..
+                " weeks to earn the rest, or a drop finishes any of them sooner."
         end
     end
 
