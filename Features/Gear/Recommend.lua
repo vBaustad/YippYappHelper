@@ -1875,8 +1875,10 @@ function ns:GetRecommendation(slotID)
     -- and a Hero 1/6 will land in one of these slots without asking --
     -- so the crests are worth most in hand, ready to finish whichever
     -- Champion piece the drop lands on top of. The player does not
-    -- choose that slot; the game does. Finish it, equip it, and
-    -- the Hero piece starts at 2/6 instead of 1/6.
+    -- choose that slot; the game does. Finishing the Champion piece is
+    -- enough on its own -- the mark applies retroactively and the piece
+    -- does not have to be worn -- and the Hero piece in that slot then
+    -- starts at 2/6 instead of 1/6.
     --
     -- Spend the same crests now and you are picking that slot yourself,
     -- from six, before the drop has told you which one it is. Same 100
