@@ -93,24 +93,7 @@ local ACCENT_HEX = "ff73ff8c"
 -- The character-panel arrangement, matching the Gear sheet: left column
 -- top-down, right column top-down, weapons centred beneath. Slot IDs are
 -- the game's own so the equipped check needs no second mapping.
-local DOLL = {
-    { slot = 1,  side = "L", row = 1, name = "Head"      },
-    { slot = 2,  side = "L", row = 2, name = "Neck"      },
-    { slot = 3,  side = "L", row = 3, name = "Shoulders" },
-    { slot = 15, side = "L", row = 4, name = "Back"      },
-    { slot = 5,  side = "L", row = 5, name = "Chest"     },
-    { slot = 9,  side = "L", row = 6, name = "Wrist"     },
-    { slot = 13, side = "L", row = 7, name = "Trinket 1" },
-    { slot = 10, side = "R", row = 1, name = "Hands"     },
-    { slot = 6,  side = "R", row = 2, name = "Waist"     },
-    { slot = 7,  side = "R", row = 3, name = "Legs"      },
-    { slot = 8,  side = "R", row = 4, name = "Feet"      },
-    { slot = 11, side = "R", row = 5, name = "Ring 1"    },
-    { slot = 12, side = "R", row = 6, name = "Ring 2"    },
-    { slot = 14, side = "R", row = 7, name = "Trinket 2" },
-    { slot = 16, side = "W", row = 8, name = "Main Hand" },
-    { slot = 17, side = "W", row = 8, name = "Off Hand"  },
-}
+local DOLL = ns.DOLL_LAYOUT
 
 -- Which inventory slots a guide's slot wording can land in, in order.
 -- The guides say "Ring" twice rather than "Ring 1" and "Ring 2", so the

@@ -3637,6 +3637,60 @@ def main():
         print("  FAIL best-in-slot tiebreak: %s" % bis)
         failures.append(("best-in-slot tiebreak", str(bis)))
 
+    # Both dolls in the same order, and that order the character sheet's.
+    #
+    # The gear page and the best-in-slot page each drew a paper doll from
+    # their own hardcoded list, and the lists had drifted: Hands and
+    # Waist finished the left column on one and started the right column
+    # on the other, so the same character read differently depending on
+    # which page was open.
+    doll = L.eval("""
+        function(ns)
+            local left, right = ns:GetDollColumns()
+            local function names(ids)
+                local out = {}
+                for _, id in ipairs(ids) do
+                    for _, e in ipairs(ns.DOLL_LAYOUT) do
+                        if e.slot == id then out[#out + 1] = e.name break end
+                    end
+                end
+                return table.concat(out, ",")
+            end
+            local wantL = "Head,Neck,Shoulders,Back,Chest,Wrist,Trinket 1,Main Hand"
+            local wantR = "Hands,Waist,Legs,Feet,Ring 1,Ring 2,Trinket 2,Off Hand"
+            if names(left) ~= wantL then
+                return "left column is " .. names(left)
+            end
+            if names(right) ~= wantR then
+                return "right column is " .. names(right)
+            end
+
+            -- Every slot the addon advises on has a place on the doll,
+            -- exactly once. A slot in neither column is one the page
+            -- silently cannot show.
+            local seen = {}
+            for _, ids in ipairs({ left, right }) do
+                for _, id in ipairs(ids) do
+                    if seen[id] then return "slot " .. id .. " is on the doll twice" end
+                    seen[id] = true
+                end
+            end
+            for _, si in ipairs(ns.SLOT_IDS or {}) do
+                if not seen[si.slot] then
+                    return si.name .. " has no place on the doll"
+                end
+            end
+            return string.format("ok:%d:%d", #left, #right)
+        end
+    """)(ns)
+    if doll and str(doll).startswith("ok:"):
+        l, r = str(doll)[3:].split(":")
+        print("  ok   doll layout: %s left and %s right, character-sheet order, "
+              "one table behind both pages" % (l, r))
+    else:
+        print("  FAIL doll layout: %s" % doll)
+        failures.append(("doll layout", str(doll)))
+
     # The season name, guarded at the source.
     #
     # Season 1's "of the Dawn" outlived the id table it belonged to and

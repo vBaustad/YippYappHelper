@@ -442,6 +442,59 @@ ns.CATALYST_NOTE = {
 }
 
 ------------------------------------------------------------
+-- Where each slot sits on a paper doll.
+--
+-- The character sheet's order, not the inventory index order: head down
+-- the left, hands down the right, weapons across the bottom. Reading a
+-- doll by slot id puts Wrist between Feet and Ring 1 and nobody can
+-- find anything.
+--
+-- Here rather than in either page because BOTH draw a doll, and they had
+-- drifted: the best-in-slot page used this order while the gear page
+-- used its own, so the same character read differently depending on
+-- which page you were on.
+--
+-- `side` is "L", "R", or "W" for the weapon row that spans both.
+------------------------------------------------------------
+ns.DOLL_LAYOUT = {
+    { slot = 1,  side = "L", row = 1, name = "Head"      },
+    { slot = 2,  side = "L", row = 2, name = "Neck"      },
+    { slot = 3,  side = "L", row = 3, name = "Shoulders" },
+    { slot = 15, side = "L", row = 4, name = "Back"      },
+    { slot = 5,  side = "L", row = 5, name = "Chest"     },
+    { slot = 9,  side = "L", row = 6, name = "Wrist"     },
+    { slot = 13, side = "L", row = 7, name = "Trinket 1" },
+    { slot = 10, side = "R", row = 1, name = "Hands"     },
+    { slot = 6,  side = "R", row = 2, name = "Waist"     },
+    { slot = 7,  side = "R", row = 3, name = "Legs"      },
+    { slot = 8,  side = "R", row = 4, name = "Feet"      },
+    { slot = 11, side = "R", row = 5, name = "Ring 1"    },
+    { slot = 12, side = "R", row = 6, name = "Ring 2"    },
+    { slot = 14, side = "R", row = 7, name = "Trinket 2" },
+    { slot = 16, side = "W", row = 8, name = "Main Hand" },
+    { slot = 17, side = "W", row = 8, name = "Off Hand"  },
+}
+
+--- The layout as two columns, for pages that draw it that way.
+--- The weapon row splits: main hand under the left column, off hand
+--- under the right, which lands them side by side on the same row.
+function ns:GetDollColumns()
+    local left, right = {}, {}
+    for _, e in ipairs(ns.DOLL_LAYOUT) do
+        if e.side == "L" then left[#left + 1] = e.slot
+        elseif e.side == "R" then right[#right + 1] = e.slot
+        end
+    end
+    for _, e in ipairs(ns.DOLL_LAYOUT) do
+        if e.side == "W" then
+            if #left <= #right then left[#left + 1] = e.slot
+            else right[#right + 1] = e.slot end
+        end
+    end
+    return left, right
+end
+
+------------------------------------------------------------
 -- Slots whose high-water mark is shared, and taken from the LOWER
 -- of the two.
 --

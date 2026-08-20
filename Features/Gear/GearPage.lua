@@ -51,11 +51,14 @@ local IMPROVE_MIN = 240
 local IMPROVE_SHARE = 0.38
 local IMPROVE_TITLE_H = 26
 
--- Left column, then right. Ordered head-down rather than by slot id so
--- the two columns read like a character sheet rather than like the
--- inventory indices behind them.
-local LEFT_SLOTS  = { 1, 2, 3, 15, 5, 9, 10, 6 }
-local RIGHT_SLOTS = { 7, 8, 11, 12, 13, 14, 16, 17 }
+-- Left column, then right, from the shared doll layout.
+--
+-- These were written out here as well, and had drifted from the
+-- best-in-slot page's copy: Hands and Waist sat at the bottom of the
+-- left column here and at the top of the right column there, so the
+-- same character read differently depending on which page you opened.
+-- ns.DOLL_LAYOUT is the one order now and this derives from it.
+local LEFT_SLOTS, RIGHT_SLOTS = ns:GetDollColumns()
 
 local TRACK_COLORS = {
     Adventurer = "ff1eff00",
