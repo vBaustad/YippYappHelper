@@ -174,7 +174,12 @@ Three bands follow, and they are the whole scoring model:
 
 `GetDropCeiling` already computes both numbers and throws the low one away.
 
-**Rank 6 is a breakpoint, not a rank.** *(built: runs, `ns.PLAN_VALUE`)* Completing a track promotes the piece
+**Rank 6 is a breakpoint, not a rank.** *(built: runs, `ns.PLAN_VALUE`,
+`MarkRebate`)* — and the payoff is on the SLOT, not the item. An item does
+not move onto the next track: a Champion piece at 6/6 is 308 and is
+finished. What carries on is the slot's high-water mark, so the next Hero
+piece to land there is lifted to 308 for free. The crests saved are Hero
+crests, on an item the player does not own yet. Completing a track promotes the piece
 onto the next track at rank 2 (`ns.TRACK_FREE_RANKS`, 2 ranks on every track
 in Season 2), so finishing a track pre-pays 40 crests of the tier above. This
 is the only crest conversion in the game — Vaskarn does not trade upward.
@@ -216,6 +221,11 @@ that never pays Champion. The advice is never "run M0s for Champion" — it is
 - **No model of time.** `ns.CREST_WEEKLY_INCREMENT` is defined and read by
   nothing. Caps make this a throughput problem, so "you need 380 more
   Champion" is only actionable as "that is two weeks of overflow".
+- **The whole-set view is only half wired.** `ns:GetGearCensus`,
+  `ns:GetTrackPolicy` and `ns:GetTrackPolicyLine` exist and the hover prints
+  the policy line, but nothing above the list says it. A track budget is a
+  fact about sixteen slots and one wallet, and it belongs at the top of the
+  page, not inside a tooltip on one row.
 - **No per-slot drop likelihood.** The strongest rule in every community
   guide is *solve the slots your content will not* — a slot your keys fill
   weekly is a poor crest target; one nothing has offered in three weeks is

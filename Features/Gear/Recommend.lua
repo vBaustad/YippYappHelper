@@ -291,17 +291,27 @@ end
 --                          which is real but small -- and is the only
 --                          reason this is not zero.
 --
--- `promotion` values the OTHER thing reaching a track's cap does: the
--- piece moves onto the next track, so the slot stops being capped at
--- this track's ceiling. That headroom is potential rather than power --
--- realising it costs crests of the higher track -- so it counts for
--- half of the item levels it opens up.
+-- Reaching a track's cap does something else, and it is NOT what an
+-- earlier pass of this file claimed. An item does not move onto the
+-- next track. A Champion piece at 6/6 is 308 and is finished forever.
 --
--- Unless the content already hands out that next track, in which case
--- the promotion mostly duplicates a drop that was coming anyway, and it
--- drops to `promotionCovered`. That is the honest verdict for a Heroic
--- raider's Champion wallet: finishing a Champion piece does manufacture
--- a Hero-track item, but the raid was going to hand them one.
+-- What carries over is the SLOT. Its high-water mark is now 308, so the
+-- next Hero piece to land there -- arriving at 305, Hero 1/6 -- is
+-- upgraded to 308 for nothing. The crests saved are HERO crests, on an
+-- item the player does not own yet.
+--
+-- That makes finishing a track the one thing a spent-out lower crest
+-- can do for a higher one: it is the only exchange in the game, and it
+-- runs through the slot rather than through a vendor. Which is why the
+-- rebate is applied to the run's COST rather than its value -- 20 Hero
+-- saved is worth more than the 20 Champion it cost, and CREST_VALUE is
+-- what prices that difference.
+--
+-- The size of the rebate is not fixed at the two ranks TRACK_FREE_RANKS
+-- names. It is the gap between where the mark sits and where the drop
+-- arrives: a 305 raid piece is lifted one rank, a 311 key piece already
+-- starts above the mark and is lifted none. So it is read off the drop
+-- band like everything else here.
 --
 -- These are weights, not measurements. They are set where the ordering
 -- they produce matches what the drop band already says in words, and
@@ -310,11 +320,9 @@ end
 -- coin toss.
 ------------------------------------------------------------
 ns.PLAN_VALUE = {
-    permanent        = 1.00,
-    banked           = 0.50,
-    rental           = 0.20,
-    promotion        = 0.50,
-    promotionCovered = 0.15,
+    permanent = 1.00,
+    banked    = 0.50,
+    rental    = 0.20,
 }
 
 --- How much of a rank's item level the player actually keeps.
@@ -328,20 +336,39 @@ local function RankDurability(ilvl, bandLow, bandHigh)
     return V.rental
 end
 
---- What reaching a track's cap opens up, in item levels of headroom.
---- Returns the weighted value and the track promoted onto.
-local function PromotionValue(track, bandLow)
-    local V = ns.PLAN_VALUE
+--- What finishing this track saves on the NEXT piece to land in the slot.
+---
+--- Returns the rebate priced in THIS track's crests, the track it is
+--- saved on, and how many of its ranks the mark covers. Zero when the
+--- content already hands out pieces above where the mark would sit --
+--- a 311 key drop starts past a 308 mark and owes it nothing.
+local function MarkRebate(track, bandLow)
     local nextTrack = ns.TRACK_ORDER[(ns.TRACK_RANK[track] or 0) + 1]
-    if not nextTrack then return 0, nil end
-
-    local headroom = ns:GetMaxIlvlForTrack(nextTrack) - ns:GetMaxIlvlForTrack(track)
-    if headroom <= 0 then return 0, nextTrack end
+    if not nextTrack then return 0, nil, 0 end
 
     local nextLevels = ns.GEAR_TRACKS[nextTrack]
-    local covered = bandLow and bandLow > 0 and nextLevels and nextLevels[1]
-        and bandLow >= nextLevels[1]
-    return headroom * (covered and V.promotionCovered or V.promotion), nextTrack
+    local markIlvl = ns:GetMaxIlvlForTrack(track)
+    if not nextLevels or markIlvl <= 0 then return 0, nextTrack, 0 end
+
+    -- Where the mark sits on the next track's ladder, and where the
+    -- player's weakest source drops onto it. A drop below the track
+    -- starts at its first rank; one above the mark is already past it.
+    local markRank, dropRank = 0, 1
+    for i, lvl in ipairs(nextLevels) do
+        if lvl <= markIlvl then markRank = i end
+        if bandLow and bandLow > 0 and lvl <= bandLow then dropRank = i end
+    end
+
+    local ranks = markRank - dropRank
+    if ranks <= 0 then return 0, nextTrack, 0 end
+
+    -- Priced across currencies. A Hero crest is worth more than the
+    -- Champion one that saved it, and on a wallet the content has
+    -- outgrown the Champion side of that trade is nearly free.
+    local here  = ns.CREST_VALUE[track] or 1
+    local there = ns.CREST_VALUE[nextTrack] or here
+    local saved = ranks * ns:GetCrestCost(ns.TRACK_CREST[nextTrack] or nextTrack)
+    return saved * (there / here), nextTrack, ranks
 end
 
 local planCache = {}
@@ -552,8 +579,10 @@ function ns:GetCrestPlan(crestTrack)
     -- whole but RECORDED rank by rank, so the steps list, the running
     -- total and the paid/unpaid line are all exactly what they were.
     ------------------------------------------------------------
-    local promoValue, promoTrack = PromotionValue(crestTrack, bandLow)
-    plan.promotesTo = promoTrack
+    local rebate, markTrack, markRanks = MarkRebate(crestTrack, bandLow)
+    plan.markTrack = markTrack
+    plan.markRanks = markRanks
+    plan.markRebate = rebate
 
     --- Value kept per crest spent, for buying k more ranks on c.
     --- reachable is what the wallet can still finish with right now.
@@ -567,13 +596,21 @@ function ns:GetCrestPlan(crestTrack)
         end
 
         local runCost = k * cost
-        -- A promotion only counts if the wallet can actually finish the
-        -- run. Crediting one the player cannot reach is precisely how a
-        -- plan talks itself into stranding crests halfway up a track.
+        -- Finishing the track discounts the run rather than inflating
+        -- it: the crests come back on a future piece, in a currency
+        -- worth more than the one being spent here.
+        --
+        -- Only for a run the wallet can actually finish. Crediting a
+        -- rebate the player cannot reach is precisely how a plan talks
+        -- itself into stranding crests halfway up a track.
+        local effective = runCost
         if c.rank + k >= c.maxRank and runCost <= reachable then
-            gain = gain + promoValue
+            -- Never below one rank's price. A rebate that swallows the
+            -- run would divide by almost nothing and rank it above
+            -- everything on the page regardless of what it buys.
+            effective = math.max(runCost - rebate, cost)
         end
-        return gain * (c.priority or 2) / runCost
+        return gain * (c.priority or 2) / effective
     end
 
     -- Ties break on priority, then item level, then slot id, then the
@@ -640,8 +677,9 @@ function ns:GetCrestPlan(crestTrack)
                 -- directly: a rank the content cannot reach is banked by
                 -- the slot's mark whatever else is true of it.
                 sticks     = band == "permanent",
-                -- The rank that lifts the slot off this track's ceiling.
-                promotes   = (best.rank >= best.maxRank) and promoTrack or nil,
+                -- The rank that tops the track out and sets the slot's
+                -- mark. The item stops here; the next one benefits.
+                promotes   = (best.rank >= best.maxRank) and markTrack or nil,
             }
             plan.steps[#plan.steps + 1] = step
 
@@ -702,6 +740,190 @@ function ns:GetCrestPlanBlockers(plan, slotID, limit)
         end
     end
     return names
+end
+
+------------------------------------------------------------
+-- The whole set, counted once.
+--
+-- Every question above this line is asked one slot at a time, and the
+-- most useful question about a crest track cannot be: "can I finish
+-- this track at all" is a fact about sixteen slots and one wallet, and
+-- no per-slot rule can reach it. Without it the panel will happily open
+-- a 100-crest climb on the fifth Champion piece while the player has
+-- 200 crests and four other pieces in the same state -- each row true,
+-- the set of them describing a plan that cannot happen.
+--
+-- Old-season and untracked pieces are counted too, and deliberately not
+-- hidden. They are slots whose demand has not arrived yet: whatever
+-- replaces one lands on some track and starts wanting crests, so a
+-- track budget that ignores them is optimistic by however many there
+-- are.
+------------------------------------------------------------
+function ns:GetGearCensus()
+    local census = {
+        tracks    = {},
+        untracked = {},   -- an item, but not on this season's ladder
+        empty     = {},   -- nothing equipped
+        maxed     = {},   -- on a track, already at its cap
+        slots     = 0,
+    }
+
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        census.slots = census.slots + 1
+        local info = ns:GetSlotInfo(si.slot)
+        if not info or (info.ilvl or 0) == 0 then
+            census.empty[#census.empty + 1] = si.name
+        else
+            local canUp, up = ns:CanUpgradeItem(si.slot)
+            local track = up and up.track
+            if not track then
+                census.untracked[#census.untracked + 1] = si.name
+            else
+                local t = census.tracks[track]
+                if not t then
+                    t = { track = track, pieces = {}, count = 0,
+                          ranksLeft = 0, demand = 0 }
+                    census.tracks[track] = t
+                end
+                local rank    = up.currUpgrade or 0
+                local maxRank = up.maxUpgrade or 0
+                local left    = math.max(maxRank - rank, 0)
+                t.count     = t.count + 1
+                t.ranksLeft = t.ranksLeft + left
+                t.pieces[#t.pieces + 1] = {
+                    slotID   = si.slot,
+                    slotName = si.name,
+                    rank     = rank,
+                    maxRank  = maxRank,
+                    left     = left,
+                    ilvl     = up.currIlvl or info.ilvl,
+                    priority = ns.SLOT_PRIORITY[si.slot] or 2,
+                }
+                if not canUp or left == 0 then
+                    census.maxed[#census.maxed + 1] = si.name
+                end
+            end
+        end
+    end
+
+    for track, t in pairs(census.tracks) do
+        t.demand = t.ranksLeft * ns:GetCrestCost(ns.TRACK_CREST[track] or track)
+    end
+    return census
+end
+
+------------------------------------------------------------
+-- What to do with a whole track, in one verdict.
+--
+-- Finishing a piece is worth the same on every slot -- it tops the
+-- track out and sets the slot's mark -- but it costs whatever that
+-- piece has left to climb. So when the wallet cannot finish everything,
+-- the cheapest completions buy the most marks per crest, and a plan
+-- that spreads evenly across five pieces finishes none of them.
+--
+-- That is the shape of the advice players actually want: not sixteen
+-- opinions but "you cannot finish all five, here are the two you can,
+-- the rest want drops".
+------------------------------------------------------------
+function ns:GetTrackPolicy(crestTrack)
+    if not crestTrack then return nil end
+    local census = ns:GetGearCensus()
+    local t = census.tracks[crestTrack]
+    if not t or t.count == 0 then return nil end
+
+    local plan   = ns:GetCrestPlan(crestTrack)
+    local held   = ns:GetCrestCountByTrack(crestTrack)
+    local budget = plan and plan.budget or held
+    local cost   = ns:GetCrestCost(crestTrack)
+
+    -- Cheapest completions first: the pieces nearest their cap.
+    local order = {}
+    for _, piece in ipairs(t.pieces) do
+        if piece.left > 0 then order[#order + 1] = piece end
+    end
+    table.sort(order, function(a, b)
+        if a.left ~= b.left then return a.left < b.left end
+        if a.priority ~= b.priority then return a.priority > b.priority end
+        return a.slotID < b.slotID
+    end)
+
+    local canFinish, spend, deepest = {}, 0, nil
+    for _, piece in ipairs(order) do
+        local runCost = piece.left * cost
+        if spend + runCost <= held then
+            spend = spend + runCost
+            canFinish[#canFinish + 1] = piece
+            deepest = piece.left
+        end
+    end
+
+    local policy = {
+        track       = crestTrack,
+        count       = t.count,
+        pieces      = t.pieces,
+        wanting     = #order,
+        demand      = t.demand,
+        held        = held,
+        budget      = budget,
+        outgrown    = ns:IsCrestOutgrown(crestTrack),
+        canFinish   = canFinish,
+        finishCost  = spend,
+        -- The deepest piece the wallet can still afford to carry home,
+        -- which is the threshold a player can actually apply to a drop:
+        -- "anything at 4/6 or better is worth finishing".
+        worstRankWorthFinishing = deepest
+            and (order[1].maxRank - deepest) or nil,
+        untracked   = #census.untracked,
+    }
+
+    if #order == 0 then
+        policy.verdict = "done"
+    elseif budget >= t.demand then
+        policy.verdict = "max_all"
+    elseif #canFinish > 0 then
+        policy.verdict = "finish_close"
+    else
+        policy.verdict = "nothing_reachable"
+    end
+
+    return policy
+end
+
+--- One line a player can act on, for a whole track.
+function ns:GetTrackPolicyLine(crestTrack)
+    local p = ns:GetTrackPolicy(crestTrack)
+    if not p then return nil end
+
+    local pieces = p.count .. (p.count == 1 and " piece" or " pieces")
+
+    if p.verdict == "done" then
+        return crestTrack .. ": " .. pieces .. ", all at the cap."
+    end
+    if p.verdict == "max_all" then
+        return crestTrack .. ": " .. pieces .. ", " .. p.demand ..
+            " to finish them all and " .. p.budget ..
+            " coming. Max everything on this track."
+    end
+    if p.verdict == "nothing_reachable" then
+        return crestTrack .. ": " .. pieces .. ", " .. p.demand ..
+            " to finish them all, you hold " .. p.held ..
+            ". Not enough to carry even one home — hold, or take a drop."
+    end
+
+    local names = {}
+    for i, piece in ipairs(p.canFinish) do
+        if i > 3 then names[#names + 1] = "+" .. (#p.canFinish - 3) .. " more" break end
+        names[#names + 1] = piece.slotName
+    end
+    local rest = p.wanting - #p.canFinish
+    local line = crestTrack .. ": " .. pieces .. ", " .. p.demand ..
+        " to finish them all, you hold " .. p.held .. ". Enough for " ..
+        #p.canFinish .. " — " .. table.concat(names, ", ") .. "."
+    if rest > 0 then
+        line = line .. " The other " .. rest ..
+            (p.outgrown and " want drops, not crests." or " will have to wait.")
+    end
+    return line
 end
 
 --- Every crest track with something to spend on, highest track first.
@@ -1431,13 +1653,13 @@ function ns:GetRecommendation(slotID)
             "Next rank costs " .. crestCost .. " " .. crestTrack
     end
 
-    -- "Main Hand and Chest come first" / "Head comes first". Worth the
-    -- three lines: the panel prints this on most of its rows, and a list
-    -- that disagrees with its own verb reads as a bug in the advice.
+    -- "Main Hand and Chest first" / "Head first". No verb: it had to
+    -- agree with the number of slots named, and dropping it buys back
+    -- five characters on a line the panel was already truncating.
     local function JoinSlots(names)
-        if #names == 0 then return "better slots", "come" end
-        if #names == 1 then return names[1], "comes" end
-        return names[1] .. " and " .. names[2], "come"
+        if #names == 0 then return "better slots" end
+        if #names == 1 then return names[1] end
+        return names[1] .. " and " .. names[2]
     end
 
     ------------------------------------------------------------
@@ -1445,7 +1667,7 @@ function ns:GetRecommendation(slotID)
     -- in the plan spends the crests first.
     ------------------------------------------------------------
     if mine.paidRanks == 0 then
-        local who, verb = JoinSlots(ns:GetCrestPlanBlockers(plan, slotID, 2))
+        local who = JoinSlots(ns:GetCrestPlanBlockers(plan, slotID, 2))
         -- Against spendable, not held. With a reserve in play the crests
         -- sitting in the wallet are deliberately not on the table, and
         -- measuring the gap against them produced "0 more Adventurer
@@ -1461,10 +1683,7 @@ function ns:GetRecommendation(slotID)
         -- arrives -- capping a higher track spills its income down a
         -- tier -- but as a by-product of content that pays something
         -- else, which is a different plan for the week.
-        local how = ""
-        if plan.outgrown then
-            how = " (" .. crestTrack .. " only arrives as overflow now)"
-        end
+        local how = plan.outgrown and " (overflow only)" or ""
 
         if plan.spendable >= crestCost then
             -- Affordable on its own, but only by taking the crests off a
@@ -1472,12 +1691,12 @@ function ns:GetRecommendation(slotID)
             -- fired on; it now names which slot, and what closing the
             -- gap would cost.
             return ns.RECOMMEND.HOLD_CRESTS,
-                who .. " " .. verb .. " first — " .. short .. " more " ..
-                crestTrack .. " covers this one too" .. how
+                who .. " first — " .. short .. " more " .. crestTrack ..
+                " covers this" .. how
         end
         return ns.RECOMMEND.UPGRADE_LATER,
             "Need " .. short .. " more " .. crestTrack .. " — " ..
-            who .. " " .. verb .. " first" .. how
+            who .. " first" .. how
     end
 
     ------------------------------------------------------------
@@ -1505,10 +1724,6 @@ function ns:GetRecommendation(slotID)
         buys = mine.paidRanks .. " of " .. mine.wantedRanks .. " ranks"
     end
 
-    local spendStr = mine.paidCost .. " of your " .. plan.spendable ..
-        " " .. crestTrack
-    if plan.reserve > 0 then spendStr = spendStr .. " to spend" end
-
     ------------------------------------------------------------
     -- What survives the next drop, in one clause.
     --
@@ -1535,36 +1750,100 @@ function ns:GetRecommendation(slotID)
     -- questions and both are printed now.
     ------------------------------------------------------------
     local label, outcome = ns.RECOMMEND.UPGRADE_NOW, ""
-    if mine.promotes and mine.promotesTo then
-        outcome = " — finishes the track, so the piece moves to " ..
-            mine.promotesTo .. " and can keep climbing"
+    if mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
+        -- The item stops at the cap. What carries on is the slot: its
+        -- mark now sits at this level, so the next piece to land there
+        -- is lifted to it for nothing.
+        outcome = " — caps the track, next " .. mine.promotesTo ..
+            " free to " .. mine.paidIlvl
+    elseif mine.promotes then
+        outcome = " — caps the track"
     elseif mine.stickyRanks > 0 and (plan.bandHigh or 0) > 0 then
-        outcome = " — clears the " .. plan.bandHigh ..
-            " your content drops, so the slot keeps it"
+        outcome = " — clears your " .. plan.bandHigh .. " drops, so it sticks"
     elseif mine.bankedRanks > 0 and (plan.bandLow or 0) > 0 then
-        outcome = " — over " .. plan.bandLow .. ", so the slot's mark pays "
-            .. "it back on the next " .. plan.bandLow .. " that drops"
+        outcome = " — over " .. plan.bandLow .. ", refunded when a " ..
+            plan.bandLow .. " drops"
     elseif (plan.bandLow or 0) > 0 then
         -- Nothing bought here outlives a drop. Still worth doing when
         -- the crests have nowhere better to be -- which on an outgrown
         -- wallet is always -- but the player should know they are
         -- renting it.
         label = ns.RECOMMEND.SAFE_TEMP
-        outcome = " — lands under the " .. plan.bandLow ..
-            " your content drops, so a piece overtakes it"
+        outcome = " — under your " .. plan.bandLow ..
+            " floor, so a drop replaces it"
     end
 
     -- Which wallet this is the best use of, not which row is the most
-    -- important on the page. Crests are track-locked, so every track
-    -- has a best spend and the shipped string claimed each of them was
-    -- THE first -- two rows under "Spend here first" on one panel.
-    local lead = ""
+    -- important on the page. Crests are track-locked, so every track has
+    -- a best spend, and the shipped string claimed each of them was THE
+    -- first -- two rows under "Spend here first" on one panel.
+    --
+    -- The lead names the currency, so the price after it does not have
+    -- to. Every character here is one the panel was cutting off.
+    local price, lead = mine.paidCost .. " " .. crestTrack, ""
     if mine.firstStep and mine.firstStep <= 1 then
-        lead = "Best " .. crestTrack .. " spend: "
+        lead  = "Best " .. crestTrack .. ": "
+        price = tostring(mine.paidCost)
     end
 
-    return label, lead .. runStr .. ", " .. buys .. outcome ..
-        " (" .. spendStr .. ")"
+    ------------------------------------------------------------
+    -- The long version, for the hover.
+    --
+    -- The row has to fit one line in a panel a third of the screen
+    -- wide, and the reasoning behind it does not. Everything the short
+    -- line had to drop lives here: the arithmetic, both ends of the
+    -- drop band, what the mark actually does, and where this track's
+    -- whole budget stands.
+    --
+    -- Written as separate lines rather than a paragraph because a
+    -- tooltip wraps each one on its own, and a player scanning for the
+    -- number they care about should not have to read prose to find it.
+    ------------------------------------------------------------
+    local detail = {
+        mine.paidRanks .. " x " .. crestCost .. " " .. crestTrack ..
+            " = " .. mine.paidCost .. ", taking " .. ilvl .. " to " ..
+            mine.paidIlvl .. " (" .. (rank + mine.paidRanks) .. "/" ..
+            maxRank .. ")",
+    }
+    if (plan.bandLow or 0) > 0 and (plan.bandHigh or 0) > 0 then
+        detail[#detail + 1] = "Your content hands out " .. plan.bandLow ..
+            " to " .. plan.bandHigh .. ". A rank above " .. plan.bandHigh ..
+            " is yours for good; one under " .. plan.bandLow ..
+            " is replaced by the next drop in this slot."
+    end
+    if mine.promotes and mine.promotesTo then
+        -- The mechanic itself, spelled out, because it is the one people
+        -- get wrong -- including an earlier pass of this file.
+        detail[#detail + 1] = crestTrack .. " tops out at " ..
+            ns:GetMaxIlvlForTrack(track) .. " and the item stops there; it "
+            .. "does not move onto the " .. mine.promotesTo .. " track."
+        if (plan.markRanks or 0) > 0 then
+            detail[#detail + 1] = "What carries on is the slot. Its mark sits "
+                .. "at " .. mine.paidIlvl .. ", so the next " ..
+                mine.promotesTo .. " piece to land here is lifted to " ..
+                mine.paidIlvl .. " free — worth " ..
+                (plan.markRanks * ns:GetCrestCost(mine.promotesTo)) .. " " ..
+                mine.promotesTo .. "."
+        end
+    end
+    if plan.outgrown then
+        -- The point is which TRACK a drop lands on, not which item
+        -- level. Champion caps at 308 and the band starts at 305, so
+        -- comparing the two numbers reads as nonsense -- what matters is
+        -- that a 305 piece is Hero, and Champion crests cannot touch it.
+        local _, _, dropTrack = ns:GetDropBand()
+        detail[#detail + 1] = "Everything you are handed arrives on the " ..
+            (dropTrack or "next") .. " track (" .. plan.bandLow ..
+            " and up), which " .. crestTrack .. " crests cannot upgrade."
+        detail[#detail + 1] = "So nothing you run pays " .. crestTrack ..
+            " directly any more — it arrives when a higher track caps and "
+            .. "spills down."
+    end
+    local policy = ns.GetTrackPolicyLine and ns:GetTrackPolicyLine(crestTrack)
+    if policy then detail[#detail + 1] = policy end
+
+    return label, lead .. price .. " for " .. runStr .. ", " .. buys .. outcome,
+        detail
 end
 
 ------------------------------------------------------------
@@ -1692,10 +1971,14 @@ end
 function ns:GetAllRecommendations()
     local results = {}
     for _, slotInfo in ipairs(ns.SLOT_IDS) do
-        local rec, reason = ns:GetRecommendation(slotInfo.slot)
+        -- The third return is the hover. Rules that have nothing more to
+        -- say than their one line simply do not return one, and the
+        -- panel shows the line alone.
+        local rec, reason, detail = ns:GetRecommendation(slotInfo.slot)
         results[slotInfo.slot] = {
             recommendation = rec,
             reason = reason,
+            detail = detail,
             slotName = slotInfo.name,
             slotID = slotInfo.slot,
         }

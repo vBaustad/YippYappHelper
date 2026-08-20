@@ -27,6 +27,14 @@ local _, ns = ...
 local Shell, W = ns.Shell, ns.Widgets
 if not (Shell and W) then return end
 
+-- Row metrics. The height used to be a flat 42 with a 46 stride, which
+-- is correct for exactly one line of reason text and clips every other.
+-- TITLE_H covers the slot name and the gap under it; ROW_PAD is the
+-- breathing room below the sentence.
+local TITLE_H = 25
+local ROW_PAD = 11
+local ROW_GAP = 4
+
 local PAD, GAP = Shell.PAD, Shell.GAP
 
 -- Floor and ceiling. Cards size themselves to the column between
@@ -246,6 +254,7 @@ local function AcquireImproveRow(index)
     if not row then
         row = W:Panel(ui.improveScroll.content, "row")
         row:SetHeight(42)
+        row:EnableMouse(true)
 
         row.edge = row:CreateTexture(nil, "OVERLAY")
         row.edge:SetPoint("TOPLEFT", 2, -2)
@@ -260,9 +269,36 @@ local function AcquireImproveRow(index)
 
         row.reason = W:Label(row, "GameFontNormalSmall")
         row.reason:SetPoint("TOPLEFT", row.slot, "BOTTOMLEFT", 0, -3)
-        row.reason:SetPoint("RIGHT", row, "RIGHT", -10, 0)
-        row.reason:SetWordWrap(false)
+        -- Wrapped, not clipped. The width is set on refresh so the
+        -- string can be measured; anchoring RIGHT as well would leave
+        -- GetStringHeight reporting one line however much text there is,
+        -- and the row would size itself to the wrong answer.
+        --
+        -- This was SetWordWrap(false), which silently cut every sentence
+        -- long enough to need the space -- the advice that had most to
+        -- say was the advice you could not read. The other renderer of
+        -- this same list (Core/UI.lua) has wrapped all along.
+        row.reason:SetWordWrap(true)
+        row.reason:SetJustifyH("LEFT")
         row.reason:SetTextColor(W:Color("muted"))
+
+        -- The row is one line; the reasoning behind it is not. Hover
+        -- carries the arithmetic, the drop band and the state of the
+        -- whole track, none of which fits a third of a screen.
+        row:SetScript("OnEnter", function(self)
+            if not self.detail or #self.detail == 0 then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self.slotLabel or "", 1, 1, 1)
+            if self.tagLabel then
+                GameTooltip:AddLine(self.tagLabel, nil, nil, nil, true)
+            end
+            GameTooltip:AddLine(" ")
+            for _, line in ipairs(self.detail) do
+                GameTooltip:AddLine(line, 0.82, 0.82, 0.82, true)
+            end
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
         ui.improveRows[index] = row
     end
@@ -366,7 +402,21 @@ local function Refresh(ctx)
         local hex = rec.color or "ff888888"
         row.slot:SetText(r.slotName or "")
         row.tag:SetText(("|c%s%s|r"):format(hex, rec.label or ""))
+
+        -- Measured, not assumed. The label starts 12 in and the tag
+        -- column takes 10 off the right, so that is the room a sentence
+        -- has; give it exactly that and the height it reports is the
+        -- height the row needs.
+        row.reason:SetWidth(math.max((avail - 18) - 22, 40))
         row.reason:SetText(r.reason or "")
+
+        row.detail = r.detail
+        row.slotLabel = r.slotName
+        row.tagLabel = rec.label
+
+        local textH = math.max(row.reason:GetStringHeight() or 0, 10)
+        local rowH = math.max(TITLE_H + textH + ROW_PAD, 42)
+        row:SetHeight(rowH)
 
         local cr = tonumber(hex:sub(3, 4), 16)
         local cg = tonumber(hex:sub(5, 6), 16)
@@ -376,7 +426,7 @@ local function Refresh(ctx)
         else
             row.edge:SetColorTexture(W:Color("faint"))
         end
-        y = y + 46
+        y = y + rowH + ROW_GAP
     end
     for i = #list + 1, #ui.improveRows do ui.improveRows[i]:Hide() end
     ui.improveScroll:SetContentHeight(y)

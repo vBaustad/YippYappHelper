@@ -2599,16 +2599,29 @@ def main():
                 return msg
             end
 
-            local said = {}
+            local said, deep = {}, {}
             for _, e in ipairs(SET) do
-                local _, reason = ns:GetRecommendation(e[1])
+                local _, reason, detail = ns:GetRecommendation(e[1])
                 said[e[1]] = reason or ""
+                deep[e[1]] = detail
+            end
+
+            -- The row is one line in a panel a third of a screen wide,
+            -- and it was clipping mid-sentence -- so the advice with
+            -- most to say was the advice you could not read. Character
+            -- count is a proxy for pixels, but a loose one is worth
+            -- more than none: it catches a sentence growing by half.
+            for slot, reason in pairs(said) do
+                if #reason > 100 then
+                    return restore("slot " .. slot .. " writes " .. #reason
+                        .. " characters onto one row: " .. reason)
+                end
             end
 
             -- One wallet, one best spend, and it says which wallet.
             local leads = 0
             for _, reason in pairs(said) do
-                if reason:find("Best Champion spend", 1, true) then
+                if reason:find("Best Champion:", 1, true) then
                     leads = leads + 1
                 end
                 if reason:find("Spend here first", 1, true) then
@@ -2620,37 +2633,72 @@ def main():
                 return restore(leads .. " rows lead the Champion wallet")
             end
 
-            -- The two runs that reach the cap say so, and name where the
-            -- piece lands. This is the fact the shipped panel could not
-            -- express in any wording at all.
+            -- The two runs that reach the cap say so, and say what it
+            -- buys -- which is a rebate on a piece the player does not
+            -- own yet, in a currency they do not spend here.
+            --
+            -- An item does NOT move onto the next track. A Champion
+            -- piece at 6/6 is 308 and is finished. What carries on is
+            -- the SLOT: its mark now sits at 308, so the next Hero piece
+            -- to land there is lifted to 308 for nothing. An earlier
+            -- pass of this file had the item climbing onto the Hero
+            -- track and said so on the panel, which is why the mechanic
+            -- is pinned rather than left to read well.
             for _, slot in ipairs({ 16, 13 }) do
-                if not said[slot]:find("finishes the track", 1, true) then
+                if not said[slot]:find("caps the track", 1, true) then
                     return restore("slot " .. slot .. " reaches the Champion cap "
                         .. "but does not say so: " .. said[slot])
                 end
-                if not said[slot]:find("Hero", 1, true) then
-                    return restore("slot " .. slot .. " promotes but does not name "
-                        .. "the track it promotes onto")
+                if not said[slot]:find("next Hero free to 308", 1, true) then
+                    return restore("slot " .. slot .. " caps out but does not say "
+                        .. "what the mark buys: " .. said[slot])
+                end
+                for _, wrong in ipairs({ "moves to Hero", "keep climbing",
+                                         "promotes to", "moves onto" }) do
+                    if said[slot]:find(wrong, 1, true) then
+                        return restore("slot " .. slot .. " claims the item itself "
+                            .. "changes track: " .. said[slot])
+                    end
                 end
             end
 
             -- And the run that stops short is warned about rather than
             -- quietly listed as an upgrade like any other.
-            if not said[14]:find("overtakes it", 1, true) then
+            if not said[14]:find("a drop replaces it", 1, true) then
                 return restore("Trinket 2 stops under the drop floor without "
                     .. "saying so: " .. said[14])
             end
-            if said[14]:find("finishes the track", 1, true) then
-                return restore("Trinket 2 claims a promotion it does not reach")
+            if said[14]:find("caps the track", 1, true) then
+                return restore("Trinket 2 claims a cap it does not reach")
             end
 
-            -- Every funded row prices itself against the real wallet.
+            -- Every funded row prices itself, in crests.
             for slot, reason in pairs(said) do
-                if reason:find("of your", 1, true)
-                    and not reason:find("of your 200 Champion", 1, true) then
-                    return restore("slot " .. slot .. " prices against a wallet "
-                        .. "that is not the 200 held: " .. reason)
+                if reason:find(" for ", 1, true)
+                    and not reason:find("Champion", 1, true) then
+                    return restore("slot " .. slot .. " spends without naming the "
+                        .. "currency: " .. reason)
                 end
+            end
+
+            -- What the short line had to drop has to land somewhere, or
+            -- shortening it just destroyed the reasoning.
+            local d = deep[16]
+            if not d or #d < 3 then
+                return restore("the lead row carries "
+                    .. (d and #d or 0) .. " lines of detail")
+            end
+            local joined = table.concat(d, " ")
+            for _, want in ipairs({ "305", "311", "does not move onto",
+                                    "mark sits at" }) do
+                if not joined:find(want, 1, true) then
+                    return restore("the hover never mentions '" .. want .. "'")
+                end
+            end
+            -- The whole-set view: a track budget is a fact about sixteen
+            -- slots and one wallet, and no per-slot rule can reach it.
+            if not joined:find("to finish them all", 1, true) then
+                return restore("the hover never says what the whole track costs")
             end
 
             return restore("ok:" .. said[16])
@@ -2661,6 +2709,101 @@ def main():
     else:
         print("  FAIL improvement wording: %s" % wording)
         failures.append(("improvement wording", str(wording)))
+
+    # The whole set, counted once.
+    #
+    # "Can I finish this track at all" is a fact about sixteen slots and
+    # one wallet, and no per-slot rule can reach it -- so the panel would
+    # happily open a 100-crest climb on the fifth Champion piece while
+    # four others sat in the same state and the wallet held 200. Every
+    # row true; the set of them describing a plan that cannot happen.
+    census = L.eval("""
+        function(ns)
+            local c = ns:GetGearCensus()
+            if not c then return "no census" end
+            if c.slots ~= #ns.SLOT_IDS then
+                return "counted " .. c.slots .. " of " .. #ns.SLOT_IDS .. " slots"
+            end
+
+            -- Every slot is accounted for exactly once: on a track, or
+            -- empty, or carrying something off this season's ladder. A
+            -- slot that fell out of all three is demand the budget will
+            -- never see coming.
+            local onTrack = 0
+            for _, t in pairs(c.tracks) do
+                onTrack = onTrack + t.count
+                if #t.pieces ~= t.count then
+                    return t.track .. " counts " .. t.count .. " pieces but "
+                        .. "lists " .. #t.pieces
+                end
+                local ranks = 0
+                for _, piece in ipairs(t.pieces) do ranks = ranks + piece.left end
+                if ranks ~= t.ranksLeft then
+                    return t.track .. " totals " .. t.ranksLeft
+                        .. " ranks left against " .. ranks .. " on its pieces"
+                end
+                local cost = ns:GetCrestCost(ns.TRACK_CREST[t.track] or t.track)
+                if t.demand ~= ranks * cost then
+                    return t.track .. " prices " .. ranks .. " ranks at " .. t.demand
+                end
+            end
+            if onTrack + #c.empty + #c.untracked ~= c.slots then
+                return onTrack .. " tracked + " .. #c.empty .. " empty + "
+                    .. #c.untracked .. " untracked does not reach " .. c.slots
+            end
+            -- The fixture deliberately leaves most of the doll bare, so
+            -- a zero here means the empty case is going unclassified.
+            if #c.empty == 0 then
+                return "no slot read as empty, so that branch is untested"
+            end
+
+            -- The policy is what the hover prints. Its arithmetic has to
+            -- hold against the census it came from.
+            local checked = 0
+            for _, crest in ipairs(ns.CRESTS or {}) do
+                local pol = ns:GetTrackPolicy(crest.track)
+                if pol then
+                    checked = checked + 1
+                    if pol.demand ~= c.tracks[crest.track].demand then
+                        return crest.track .. ": policy and census disagree on demand"
+                    end
+                    if #pol.canFinish > pol.wanting then
+                        return crest.track .. ": claims to finish more pieces "
+                            .. "than want ranks"
+                    end
+                    -- Completions are only offered while the crests in
+                    -- hand cover them; "enough for 2" that needs 300 is
+                    -- the exact promise this whole layer exists to stop.
+                    if pol.finishCost > pol.held then
+                        return crest.track .. ": offers " .. pol.finishCost
+                            .. " of completions against " .. pol.held .. " held"
+                    end
+                    -- Cheapest first, or the count is not the most the
+                    -- wallet can actually carry home.
+                    local prev = 0
+                    for _, piece in ipairs(pol.canFinish) do
+                        if piece.left < prev then
+                            return crest.track .. ": finishes a "
+                                .. piece.left .. "-rank piece after a " .. prev
+                        end
+                        prev = piece.left
+                    end
+                    if not ns:GetTrackPolicyLine(crest.track) then
+                        return crest.track .. ": policy with nothing to say"
+                    end
+                end
+            end
+            if checked == 0 then return "no track produced a policy" end
+            return string.format("ok:%d:%d:%d", onTrack, #c.empty, checked)
+        end
+    """)(ns)
+    if census and str(census).startswith("ok:"):
+        tracked, empty, checked = str(census)[3:].split(":")
+        print("  ok   gear census: %s pieces across %s tracks and %s bare slots, "
+              "every one accounted for" % (tracked, checked, empty))
+    else:
+        print("  FAIL gear census: %s" % census)
+        failures.append(("gear census", str(census)))
 
     # The season name, guarded at the source.
     #
