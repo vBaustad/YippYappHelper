@@ -350,21 +350,17 @@ local function MarkRebate(track, bandLow, bandHigh)
     local markIlvl = ns:GetMaxIlvlForTrack(track)
     if not nextLevels or markIlvl <= 0 then return 0, nextTrack, 0 end
 
-    -- A mark the player can farm past is not a rebate, it is a race.
+    -- The mark is insurance, and the previous pass threw it away.
     --
-    -- End-of-dungeon loot is not slot-specific: a +10 hands out 311 in
-    -- ANY slot, so a 308 mark is overtaken everywhere sooner or later
-    -- and the crests that set it bought item level until then and
-    -- nothing after. The raid could still drop a 305 into that slot
-    -- first and cash the mark in, but that is a coin toss on which
-    -- source arrives, and advice should not be built on winning it.
+    -- Gating this on the HIGH end of the band -- "you farm 311 in every
+    -- slot, so a 308 mark is always overtaken" -- is true and useless.
+    -- Of course better gear exists; the whole season is the trip to it.
+    -- The question is what to do on the way, and the answer is that some
+    -- Hero pieces arrive at 1/6, and a slot marked at 308 starts those
+    -- at 2/6 instead.
     --
-    -- Which is also why this is measured against the HIGH end of the
-    -- band rather than the low one. The low end says what the mark
-    -- could pay out on; the high end says whether it survives.
-    if bandHigh and bandHigh > 0 and markIlvl <= bandHigh then
-        return 0, nextTrack, 0
-    end
+    -- So it pays out against the LOW end: the weakest source that can
+    -- fill the slot is the one the mark rescues.
 
     -- Where the mark sits on the next track's ladder, and where the
     -- player's weakest source drops onto it. A drop below the track
@@ -381,13 +377,19 @@ local function MarkRebate(track, bandLow, bandHigh)
     -- explains this has to be able to say which rank it means.
     if ranks <= 0 then return 0, nextTrack, 0, markRank, dropRank end
 
-    -- Priced across currencies. A Hero crest is worth more than the
-    -- Champion one that saved it, and on a wallet the content has
-    -- outgrown the Champion side of that trade is nearly free.
-    local here  = ns.CREST_VALUE[track] or 1
-    local there = ns.CREST_VALUE[nextTrack] or here
-    local saved = ranks * ns:GetCrestCost(ns.TRACK_CREST[nextTrack] or nextTrack)
-    return saved * (there / here), nextTrack, ranks, markRank, dropRank
+    -- Priced as item level rather than as crests, so it can be added to
+    -- what the run buys instead of discounting what it costs.
+    --
+    -- That distinction is the whole fix. As a cost discount the rebate
+    -- helped the EXPENSIVE runs most -- a hundred crests knocked down to
+    -- seventy-three still looked like a bargain -- which is exactly
+    -- backwards. The insurance is the same size whether the piece was
+    -- one rank from its cap or five; only the price of it changes. As a
+    -- fixed term over a varying cost, the cheap mark wins by the margin
+    -- it should.
+    local nextLadder = ns:GetMaxIlvlForTrack(nextTrack) - nextLevels[1]
+    local perRank = nextLadder / math.max(#nextLevels - 1, 1)
+    return ranks * perRank, nextTrack, ranks, markRank, dropRank
 end
 
 local planCache = {}
@@ -643,26 +645,24 @@ function ns:GetCrestPlan(crestTrack)
         end
 
         local runCost = k * cost
-        -- Finishing the track discounts the run rather than inflating
-        -- it: the crests come back on a future piece, in a currency
-        -- worth more than the one being spent here.
-        --
-        -- Only for a run the wallet can actually finish. Crediting a
-        -- rebate the player cannot reach is precisely how a plan talks
-        -- itself into stranding crests halfway up a track.
-        -- A pair whose partner is not there yet earns nothing: the
-        -- mark is the lower of the two and has not moved.
+
+        -- A pair whose partner is not there yet earns nothing: the mark
+        -- is the lower of the two and has not moved.
         local partner = PartnerIlvl(c.slotID)
         local pairReady = (partner == nil) or (partner >= landing)
 
-        local effective = runCost
+        -- The insurance carries the slot's weight too. The mark sits on
+        -- THIS slot, so the crests it saves are saved on the piece that
+        -- lands HERE -- a free rank on a weapon is worth what a weapon
+        -- rank is worth. Left unweighted it was competing against a
+        -- number four or five times its scale and never won: a trinket
+        -- took a hundred crests to reach a cap whose mark could not move,
+        -- beating a slot that would actually have banked something.
+        local value = gain
         if c.rank + k >= c.maxRank and runCost <= reachable and pairReady then
-            -- Never below one rank's price. A rebate that swallows the
-            -- run would divide by almost nothing and rank it above
-            -- everything on the page regardless of what it buys.
-            effective = math.max(runCost - rebate, cost)
+            value = value + rebate
         end
-        return gain * (c.priority or 2) / effective
+        return value * (c.priority or 2) / runCost
     end
 
     -- Ties break on priority, then item level, then slot id, then the
@@ -1864,6 +1864,53 @@ function ns:GetRecommendation(slotID)
             who .. " first"
     end
 
+    local finish = ns.GetTrackCompletion and ns:GetTrackCompletion(crestTrack)
+
+    ------------------------------------------------------------
+    -- Deep run on a track the content has moved past: hold, and let a
+    -- drop choose the slot.
+    --
+    -- This is the reserve, back, and in the form it should always have
+    -- had. The mark has to be set BEFORE the higher piece is upgraded,
+    -- and a Hero 1/6 will land in one of these slots without asking --
+    -- so the crests are worth most in hand, ready to finish whichever
+    -- Champion piece the drop lands on top of. Finish it, equip it, and
+    -- the Hero piece starts at 2/6 instead of 1/6.
+    --
+    -- Spend the same crests now and you are picking that slot yourself,
+    -- from six, before the drop has told you which one it is. Same 100
+    -- crests, one-in-six odds of them mattering.
+    --
+    -- Only on a track the player has outgrown, and only for runs deep
+    -- enough to be a real bet. A piece two ranks from its cap is cheap
+    -- enough to just do, and the anti-hoarding rule stands everywhere
+    -- else: crests held with nothing to react to are power not worn.
+    ------------------------------------------------------------
+    if plan.outgrown and mine.wantedRanks >= 4 and mine.paidRanks > 0
+        and (plan.markRanks or 0) > 0 then
+        local n = #(ns.GEAR_TRACKS[plan.markTrack] or {})
+        local full = mine.wantedRanks * crestCost
+        return ns.RECOMMEND.HOLD_CRESTS,
+            "Hold " .. full .. " " .. crestTrack .. " — spend it when a " ..
+            (plan.markTrack or "higher") .. " " .. plan.dropRank .. "/" .. n ..
+            " lands here",
+            {
+                "Finishing this costs " .. full .. " " .. crestTrack ..
+                    " and moves the slot's mark to " ..
+                    ns:GetMaxIlvlForTrack(track) .. ".",
+                "The mark has to be set before the " ..
+                    (plan.markTrack or "higher") .. " piece is upgraded, and a "
+                    .. (plan.markTrack or "higher") .. " drop picks its own "
+                    .. "slot — so the crests are worth more in hand, ready for "
+                    .. "whichever one it lands in.",
+                (finish and finish.needCrest or 0) .. " " .. crestTrack ..
+                    " pieces are this deep. Covering them all is " ..
+                    (finish and finish.cost or 0) ..
+                    " crests; spending here now is a guess at which one the "
+                    .. "drop will choose.",
+            }
+    end
+
     ------------------------------------------------------------
     -- Funded. Say what the crests buy, and what the player keeps.
     --
@@ -1878,6 +1925,7 @@ function ns:GetRecommendation(slotID)
     -- different number of them in the same breath.
     ------------------------------------------------------------
     local reach = mine.paidIlvl or ilvl
+
     local runStr = (reach > ilvl) and (ilvl .. " to " .. reach)
         or ("rank " .. (rank + 1))
 
@@ -1927,16 +1975,6 @@ function ns:GetRecommendation(slotID)
     if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
         label = ns.RECOMMEND.SAFE_TEMP
         outcome = " — " .. track .. " tops out under everything you loot"
-    elseif (plan.bandHigh or 0) > 0 and trackMax <= plan.bandHigh then
-        -- The cap is above the weakest source but under the one the
-        -- player can farm at will, so the mark it sets gets overtaken in
-        -- every slot eventually. Worth saying plainly: this is stats
-        -- until the slot turns over, not something banked.
-        label = ns.RECOMMEND.SAFE_TEMP
-        -- About the TRACK, not this run. "Caps at 308" on a row that
-        -- only reaches 298 reads as a claim the run does not make.
-        outcome = " — tops out at " .. trackMax .. "; you farm " ..
-            plan.bandHigh .. " in every slot"
     elseif mine.promotes and mine.pairSlot then
         -- The pair is the purchase. Capping one half moves nothing, so
         -- the row says what the other half still needs rather than
@@ -2005,7 +2043,6 @@ function ns:GetRecommendation(slotID)
     -- about the player's own weapon.
     ------------------------------------------------------------
     local detail = {}
-    local finish = ns.GetTrackCompletion and ns:GetTrackCompletion(crestTrack)
 
     -- 1. What it does to this slot.
     if mine.promotes then
@@ -2028,12 +2065,6 @@ function ns:GetRecommendation(slotID)
             ", so every rank on it is a stopgap until the slot turns "
             .. "over — even the last one, which marks the slot at a level "
             .. "no drop will ever arrive below."
-    elseif (plan.bandHigh or 0) > 0 and trackMax <= plan.bandHigh then
-        detail[#detail + 1] = track .. " caps at " .. trackMax ..
-            ", and end-of-dungeon loot hands out " .. plan.bandHigh ..
-            " in any slot it likes — so the mark this sets is overtaken "
-            .. "everywhere sooner or later. These crests buy item level "
-            .. "until that happens and bank nothing after it."
     elseif mine.promotes and mine.pairSlot then
         detail[#detail + 1] = "Rings and trinkets share one mark and it "
             .. "follows the LOWER of the pair, so this moves nothing on its "
@@ -2111,9 +2142,25 @@ function ns:GetRecommendation(slotID)
         -- against banked -- and it has no business making claims about
         -- income.
         ------------------------------------------------------------
+        -- What the track is worth spending on at all.
+        --
+        -- Every piece left near the bottom is the case where crests are
+        -- the wrong tool: five ranks buys one slot's insurance, and
+        -- doing that across a set is weeks of farming for something a
+        -- single drop hands over. Keep the crests for pieces already
+        -- close to their cap and let the rest turn over.
+        local allDeep = finish.nearest and finish.nearest >= 4
+
         if after == 0 then
             detail[#detail + 1] = "That is the last " .. crestTrack ..
                 " piece — after this you never need one again."
+        elseif allDeep then
+            detail[#detail + 1] = after .. " " .. crestTrack ..
+                (after == 1 and " piece" or " pieces") .. " left, none closer "
+                .. "than " .. finish.nearest .. " ranks from the cap, " ..
+                rest .. " crests to finish. A drop in any of those slots does "
+                .. "the same job for nothing — keep " .. crestTrack ..
+                " for pieces already near the top."
         elseif rest <= left then
             detail[#detail + 1] = state .. " Enough for all of them, and "
                 .. "then you are done with " .. crestTrack .. " for good."

@@ -2734,18 +2734,14 @@ def main():
             -- everywhere sooner or later. The row must not sell a rebate
             -- it cannot keep -- it used to promise "next Hero free to
             -- 308" on a mark that never survives.
+            -- A piece three ranks from its cap is cheap enough to just
+            -- do, and the mark it sets is the point: a Hero piece
+            -- landing here would start a rank up.
             for _, slot in ipairs({ 16 }) do
-                if not said[slot]:find("tops out at 308; you farm 311 in every slot",
+                if not said[slot]:find("caps it; a Hero 1/6 drop here then starts at 2/6",
                                        1, true) then
-                    return restore("slot " .. slot .. " reaches the Champion cap "
-                        .. "without saying it is farmed past: " .. said[slot])
-                end
-                for _, sold in ipairs({ "free to 308", "you never spend",
-                                        "starts at 2/6" }) do
-                    if said[slot]:find(sold, 1, true) then
-                        return restore("slot " .. slot .. " sells a mark the "
-                            .. "player farms past: '" .. sold .. "'")
-                    end
+                    return restore("slot " .. slot .. " reaches the cap without "
+                        .. "saying what the mark buys: " .. said[slot])
                 end
                 for _, wrong in ipairs({ "moves to Hero", "keep climbing",
                                          "promotes to", "moves onto" }) do
@@ -2762,15 +2758,23 @@ def main():
             -- Champion reaches 308, so this is a stopgap the player can
             -- fix. Saying only "a drop replaces it" states the problem
             -- and withholds the answer.
-            -- The same fact reaches the rows that stop mid-track, and
-            -- as a statement about the TRACK -- "caps at 308" on a row
-            -- that only reaches 298 claims something the run does not.
-            if not said[14]:find("tops out at 308", 1, true) then
-                return restore("a partial Champion row does not carry the "
-                    .. "track's ceiling: " .. said[14])
+            -- Six pieces at the bottom of an outgrown track is the case
+            -- where crests are the wrong tool. A Hero 1/6 will pick one
+            -- of those slots without asking, and the mark has to be set
+            -- BEFORE that piece is upgraded -- so the crests are worth
+            -- more in hand, ready for whichever slot it lands in.
+            -- Spending now is a one-in-N guess at the same outcome.
+            if not said[8]:find("Hold 100 Champion", 1, true)
+                or not said[8]:find("when a Hero 1/6 lands here", 1, true) then
+                return restore("a deep run on an outgrown track is funded "
+                    .. "rather than held: " .. said[8])
             end
-            if said[14]:find("caps at", 1, true) then
-                return restore("a row reaching 298 claims to cap: " .. said[14])
+            local held = table.concat(deep[8] or {}, " ")
+            if not held:find("picks its own slot", 1, true) then
+                return restore("holding is advised without saying why: " .. held)
+            end
+            if not held:find("guess at which one", 1, true) then
+                return restore("the hover never names the odds it is avoiding")
             end
 
             -- And the case that prompted this. On Veteran, "under your
@@ -2842,13 +2846,15 @@ def main():
             -- RANKS, because that is how the game shows gear and how
             -- players talk about it. "308 instead of 305" is the same
             -- fact in a unit nobody carries in their head.
-            if not joined:find("overtaken", 1, true) then
-                return restore("the hover never says the mark gets farmed "
-                    .. "past: " .. joined)
+            if not joined:find("would start at 2/6 instead", 1, true) then
+                return restore("the hover never says what the mark buys on the "
+                    .. "piece that replaces this one: " .. joined)
             end
-            if not joined:find("in any slot it likes", 1, true) then
-                return restore("the hover never says end-of-dungeon loot is "
-                    .. "not slot-specific: " .. joined)
+            -- Conditional, because raid item level is per BOSS: the same
+            -- slot comes off an early boss low and a late one high, so
+            -- the mark pays on some kills and not others.
+            if not joined:find("depending on the boss", 1, true) then
+                return restore("the hover states the mark payout as certain")
             end
             -- Where the player stands on being DONE with the track, and
             -- what that means in weeks or drops -- the shortfall stated
