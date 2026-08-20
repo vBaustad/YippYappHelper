@@ -829,7 +829,10 @@ C_Timer = { After = function() end, NewTimer = function() return NewRegion() end
 -- Answers only for something that looks like an item; a stub that hands
 -- back an icon for nil or "" would let "every slot drew a reward" pass
 -- on nine slots that have no reward.
-C_Item = { GetItemIconByID = function(item)
+C_Item = {
+                   DoesItemExist = function(loc)
+                       return loc ~= nil and loc.slot ~= nil
+                   end, GetItemIconByID = function(item)
                if item == nil or item == "" then return nil end
                return 134400
            end,
@@ -851,6 +854,23 @@ C_Item = { GetItemIconByID = function(item)
                return n, false, n
            end,
            DoesItemExistByID = function() return true end }
+-- The high-water mark API, which nothing stubbed until now -- so RULE 0,
+-- the free-upgrade rule that outranks every other row on the page, was
+-- unreachable in every check ever written against this advisor.
+--
+-- Marks are keyed by equipment slot and fed from Lua, so a check can put
+-- one above the equipped item and watch the advice change.
+YYH_WATERMARKS = {}
+-- Called with a colon, so the table arrives as the first argument.
+ItemLocation = { CreateFromEquipmentSlot = function(self, slot)
+                     return { slot = slot or self }
+                 end }
+C_ItemUpgrade = {
+    GetHighWatermarkForItem = function(loc)
+        local m = loc and loc.slot and YYH_WATERMARKS[loc.slot]
+        return m or 0, 0
+    end,
+}
 C_Container = { GetContainerNumSlots = function() return 0 end,
                 GetContainerItemID = function() return nil end,
                 GetContainerItemLink = function() return nil end }
@@ -1818,16 +1838,21 @@ def main():
     # last page must be reachable, one past it must clamp back to it, and
     # the Heroic page must exist exactly when the boss has heroic lines
     # or is marked as unrecorded.
-    print("\nboss guide pages (every boss, both difficulties, every page):")
+    # Three difficulties since 2026-08-20, and no Heroic page: the page
+    # count is now exactly the phase count at every difficulty, and what
+    # difficulty changes is which MECHANICS are drawn inside a page.
+    # Both claims are checked -- the count against the data, and the
+    # mechanic filter against a per-difficulty tally.
+    print("\nboss guide pages (every boss, all difficulties, every page):")
     guide_pool = L.eval("function(ns) return (ns.RaidGuideUI and ns.RaidGuideUI._cards) or {} end")(ns)
     pick = L.eval("""
-        function(ns, bossId, heroic, page)
+        function(ns, bossId, diff, page)
             local UI = ns.RaidGuideUI
             if not (UI and UI.SetPage) then return "absent" end
             YippYappHelperDB = YippYappHelperDB or {}
             YippYappHelperDB.raidGuide = YippYappHelperDB.raidGuide or {}
             YippYappHelperDB.raidGuide.boss = bossId
-            YippYappHelperDB.raidGuide.heroic = heroic
+            YippYappHelperDB.raidGuide.diff = diff
             -- Refresh first: the page resets to 1 when the boss changes,
             -- and SetPage on the boss we are LEAVING would be measured
             -- against the wrong data.
@@ -1842,12 +1867,7 @@ def main():
         function(ns)
             local out = {}
             for _, b in ipairs(ns.RaidGuide and ns.RaidGuide:Ordered() or {}) do
-                local phases = b.phases and #b.phases or 0
-                local heroicLines = b.heroic and #b.heroic or 0
-                out[#out + 1] = table.concat({
-                    b.id, phases, heroicLines,
-                    b.heroicUnknown and 1 or 0,
-                }, ":")
+                out[#out + 1] = b.id .. ":" .. (b.phases and #b.phases or 0)
             end
             return table.concat(out, ",")
         end
@@ -1855,15 +1875,15 @@ def main():
     for spec in (plan or "").split(","):
         if not spec:
             continue
-        boss_id, phases, heroic_lines, unknown = spec.split(":")
-        phases, heroic_lines, unknown = int(phases), int(heroic_lines), int(unknown)
-        for heroic in (False, True):
-            want = phases + (1 if heroic and (heroic_lines or unknown) else 0)
-            label = "%s/%s" % (boss_id, "heroic" if heroic else "normal")
+        boss_id, phases = spec.split(":")
+        phases = int(phases)
+        for diff in ("normal", "heroic", "mythic"):
+            want = phases
+            label = "%s/%s" % (boss_id, diff)
             # One past the end on purpose: the clamp is the thing that
             # stops Next walking off a shorter boss's page list.
             for page in range(1, want + 2):
-                got = pick(ns, boss_id, heroic, page)
+                got = pick(ns, boss_id, diff, page)
                 if not isinstance(got, str) or "," not in got:
                     print("  FAIL %s page %d: %s" % (label, page, got))
                     failures.append((label, str(got)))
@@ -1899,6 +1919,76 @@ def main():
                        boxes, None)
                 if len(failures) > bad_before:
                     break
+
+    # Difficulty has to CHANGE something, and only ever upward.
+    #
+    # The page count is now identical at all three difficulties, so the
+    # old count assertion no longer proves the difficulty filter works
+    # at all -- it would pass just as happily if the selector did
+    # nothing. What it changes is which mechanics are drawn, so that is
+    # what gets counted.
+    #
+    # Monotonic, not merely different: a heroic mechanic is also a
+    # mythic one, so a boss can never show FEWER mechanics as you go up.
+    # A `diff` typo'd to a key nothing recognises is exactly the bug
+    # that would break that and nothing else would notice.
+    #
+    # Every boss must also differ somewhere between Normal and Mythic:
+    # both sources say every fight in this raid changes, so a boss whose
+    # three difficulties are identical means its deltas never got
+    # written rather than that the fight has none.
+    print("\nguide difficulty filter (mechanics shown per difficulty):")
+    counts = L.eval("""
+        function(ns, bossId)
+            local G = ns.RaidGuide
+            if not (G and G.MechanicsAt) then return "absent" end
+            local boss = G:Get(bossId)
+            if not boss then return "no boss" end
+            local out, notes = {}, {}
+            for _, key in ipairs({ "normal", "heroic", "mythic" }) do
+                local mechs = G:MechanicsAt(boss, key)
+                out[#out + 1] = #mechs
+                -- Deltas are the other half of what a difficulty adds:
+                -- a fight can gain no new mechanics and still change
+                -- four of the ones it already had.
+                local n = 0
+                for _, m in ipairs(mechs) do
+                    n = n + #G:MechanicNotes(m, key)
+                end
+                notes[#notes + 1] = n
+            end
+            return table.concat(out, ",") .. "|" .. table.concat(notes, ",")
+        end
+    """)
+    diff_rows = 0
+    for spec in (plan or "").split(","):
+        if not spec:
+            continue
+        boss_id = spec.split(":")[0]
+        got = counts(ns, boss_id)
+        if not isinstance(got, str) or "|" not in got:
+            print("  FAIL %s: %s" % (boss_id, got))
+            failures.append(("guide difficulty", str(got)))
+            continue
+        shown, noted = (part.split(",") for part in got.split("|"))
+        shown = [int(v) for v in shown]
+        noted = [int(v) for v in noted]
+        if not (shown[0] <= shown[1] <= shown[2]):
+            msg = "%s shows %s mechanics -- not monotonic" % (boss_id, shown)
+            print("  FAIL %s" % msg)
+            failures.append(("guide difficulty", msg))
+            continue
+        if shown[0] == shown[2] and noted[2] == 0:
+            msg = ("%s is identical on Normal and Mythic (%d mechanics, no "
+                   "deltas) -- its difficulty notes were never written"
+                   % (boss_id, shown[0]))
+            print("  FAIL %s" % msg)
+            failures.append(("guide difficulty", msg))
+            continue
+        diff_rows += 1
+    if diff_rows:
+        print("  ok   %d bosses: mechanics never decrease with difficulty, "
+              "and every fight differs between Normal and Mythic" % diff_rows)
 
     # The rail's Bloodlust block, and the button that follows it.
     #
@@ -3216,6 +3306,95 @@ def main():
     else:
         print("  FAIL stranded completion: %s" % strand)
         failures.append(("stranded completion", str(strand)))
+
+    # Ranks the player already owns, for nothing.
+    #
+    # The slot keeps a high-water mark, so a piece equipped below one the
+    # slot has already reached upgrades free to it. RULE 0 says so and it
+    # outranks every other row -- and it had never been exercised, because
+    # nothing stubbed C_ItemUpgrade and the mark always read zero.
+    #
+    # Which was also true in game for most of the addon's runtime:
+    # RefreshWatermarks ran only while the upgrade vendor was open and the
+    # cache did not survive a reload, so on any fresh login away from a
+    # vendor every mark was zero and free upgrades went unmentioned.
+    freebies = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot = ns.GetSlotInfo
+            -- A Champion piece at 2/6 in a slot that has already seen
+            -- 305: ranks 3, 4 and 5 are paid for and the player has not
+            -- collected them.
+            local piece = {
+                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                ilvl = T.Champion[2], quality = 4, icon = 134400,
+                track = "Champion", rank = 2, maxRank = 6, crafted = false,
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 16 and piece or nil
+            end
+            YYH_WATERMARKS[16] = T.Champion[5]
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo = realSlot
+                YYH_WATERMARKS[16] = nil
+                wipe(ns.watermarkCache)
+                -- Clear the stored mark too. Leaving it behind would put
+                -- a 305 watermark on slot 16 for every check that runs
+                -- after this one, and slot 16 is the weapon every other
+                -- gear fixture uses -- they would start reporting free
+                -- upgrades and pass or fail for reasons of ours.
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[16] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            if ns:GetFreeUpgradeIlvl(16) ~= T.Champion[5] then
+                return restore("the mark reads " .. ns:GetFreeUpgradeIlvl(16)
+                    .. ", not the " .. T.Champion[5] .. " the slot has seen")
+            end
+
+            local rec, reason = ns:GetRecommendation(16)
+            if rec ~= ns.RECOMMEND.FREE_UPGRADE then
+                return restore("a slot below its own mark is not offered as a "
+                    .. "free upgrade: " .. tostring(reason))
+            end
+            if not reason:find("free", 1, true) then
+                return restore("the free-upgrade row does not say so: " .. reason)
+            end
+            -- Free beats everything, or it sorts under advice that costs
+            -- crests to do the same job.
+            if ns.RECOMMEND_ORDER[ns.RECOMMEND.FREE_UPGRADE]
+                ~= 1 then
+                return restore("free upgrades do not sort first")
+            end
+
+            -- And the mark survives a session. Marks only ever go up, so
+            -- a remembered one is at worst behind -- but a forgotten one
+            -- makes the rule unreachable, which is what shipped.
+            YippYappHelperDB = YippYappHelperDB or {}
+            local stored = (YippYappHelperDB.watermarks or {})[16]
+            if stored ~= T.Champion[5] then
+                return restore("the mark was not written to SavedVariables")
+            end
+            wipe(ns.watermarkCache)
+            YYH_WATERMARKS[16] = nil          -- the live query goes dark
+            if ns:LoadWatermarks() < 1 or ns:GetFreeUpgradeIlvl(16) ~= T.Champion[5] then
+                return restore("a reload away from the vendor loses the mark")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if freebies == "ok":
+        print("  ok   free upgrades: a slot below its own high-water mark is "
+              "offered first, and the mark survives a reload")
+    else:
+        print("  FAIL free upgrades: %s" % freebies)
+        failures.append(("free upgrades", str(freebies)))
 
     # The season name, guarded at the source.
     #

@@ -277,6 +277,16 @@ end
 -- The API may only work when the upgrade vendor is open,
 -- so we cache results for use when the vendor is closed.
 ------------------------------------------------------------
+-- Kept across sessions, in SavedVariables.
+--
+-- It was a plain table, and RefreshWatermarks only ran while the
+-- upgrade vendor was open -- so on any fresh login away from a vendor
+-- every mark read zero, GetFreeUpgradeIlvl returned zero, and RULE 0
+-- could not fire. That rule is the highest-priority advice the addon
+-- has: ranks the player already owns, for no crests at all. It was
+-- silently unreachable for most of the time the addon is open.
+--
+-- Restored in ADDON_LOADED, written through on every successful query.
 ns.watermarkCache = {}
 
 local function QueryWatermark(slotID)
@@ -308,12 +318,40 @@ local function QueryWatermark(slotID)
     return 0
 end
 
--- Refresh all watermarks (call when upgrade vendor opens)
+--- Persist a mark, so a later session can still see it.
+---
+--- Marks only ever go up, so a remembered one is never wrong -- at
+--- worst it is behind, and the live query corrects it the moment it
+--- answers. That asymmetry is what makes caching safe here.
+local function RememberWatermark(slotID, mark)
+    ns.watermarkCache[slotID] = mark
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.watermarks = YippYappHelperDB.watermarks or {}
+    YippYappHelperDB.watermarks[slotID] = mark
+end
+
+--- Read the stored marks back at login.
+function ns:LoadWatermarks()
+    local stored = YippYappHelperDB and YippYappHelperDB.watermarks
+    if type(stored) ~= "table" then return 0 end
+    local n = 0
+    for slotID, mark in pairs(stored) do
+        if type(slotID) == "number" and type(mark) == "number" and mark > 0 then
+            ns.watermarkCache[slotID] = mark
+            n = n + 1
+        end
+    end
+    return n
+end
+
+-- Refresh all watermarks. Worth trying wherever gear changes, not only
+-- at the vendor: if the API answers away from one the cache fills on its
+-- own, and if it does not, nothing is lost by asking.
 function ns:RefreshWatermarks()
     for _, slotInfo in ipairs(ns.SLOT_IDS) do
         local mark = QueryWatermark(slotInfo.slot)
         if mark > 0 then
-            ns.watermarkCache[slotInfo.slot] = mark
+            RememberWatermark(slotInfo.slot, mark)
         end
     end
 end
@@ -322,7 +360,7 @@ function ns:GetFreeUpgradeIlvl(slotID)
     -- Try live query first
     local mark = QueryWatermark(slotID)
     if mark > 0 then
-        ns.watermarkCache[slotID] = mark
+        RememberWatermark(slotID, mark)
         return mark
     end
     -- Fall back to cached value
@@ -376,6 +414,10 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         if type(YippYappHelperDB.raidInspect) == "table" then
             ns.RaidInspectData = YippYappHelperDB.raidInspect
         end
+
+        -- Free upgrades are only visible if the marks are, and the live
+        -- query may want the upgrade vendor open.
+        if ns.LoadWatermarks then ns:LoadWatermarks() end
 
         -- Validate discounts table
         if YippYappHelperDB.discounts and type(YippYappHelperDB.discounts) ~= "table" then
@@ -462,9 +504,10 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         -- redraw rather than before it.
         C_Timer.After(0.3, function()
             ns:InvalidateScanCache()
-            if ns.upgradeVendorOpen and ns.RefreshWatermarks then
-                ns:RefreshWatermarks()
-            end
+            -- Not gated on the vendor any more. A mark that only
+            -- refreshes in front of an NPC is a mark the advice cannot
+            -- use for the rest of the session.
+            if ns.RefreshWatermarks then ns:RefreshWatermarks() end
             -- Was gated on MainFrame being shown, so equipping a piece
             -- while on the app's Gear Upgrades page changed nothing.
             ns:RefreshGearViews()
