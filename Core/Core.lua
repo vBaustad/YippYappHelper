@@ -33,6 +33,53 @@ function ns:InvalidateScanCache()
     wipe(scanCache)
 end
 
+--- Read the upgrade line off whatever was last put in the scan tooltip.
+---
+--- Split out of ScanUpgradeTrack because the same three numbers have to
+--- be read off items that are NOT equipped. Every rule in this addon
+--- reasoned about sixteen worn pieces, and the one move that spends a
+--- cheap crest where an expensive one was wanted is made with a piece
+--- sitting in a bag -- see ns:GetBagSpares below.
+---
+--- nil means the tooltip had no lines at all, which is item data that
+--- has not arrived yet rather than an item with no track.
+local function ParseUpgradeTooltip()
+    -- A tooltip with no lines means the item data was not ready, not that
+    -- the item has no upgrade track. Caching that would be permanent
+    -- (the cache only clears on inventory change), and now that
+    -- CanUpgradeItem refuses to guess a track, a cached blank would hide
+    -- a genuinely upgradeable item until the player swapped gear.
+    local numLines = upgradeScanTooltip:NumLines()
+    if numLines == 0 then
+        return nil
+    end
+
+    local found = { crafted = false }
+
+    for i = 1, numLines do
+        local line = _G["YYHUpgradeScanTooltipTextLeft" .. i]
+        if line then
+            local text = line:GetText() or ""
+            -- Match "Upgrade Level: Champion 3/5" or similar
+            if not found.track then
+                local trackName, currRank, maxRank = text:match("Upgrade Level:%s+(%S+)%s+(%d+)/(%d+)")
+                if trackName then
+                    found.track   = trackName
+                    found.rank    = tonumber(currRank)
+                    found.maxRank = tonumber(maxRank)
+                end
+            end
+            -- Detect crafted items: quality tier atlas icons (Professions-Icon-Quality-*)
+            -- or crafted-by line
+            if text:find("Professions%-Icon%-Quality") or text:find("Professions%-ChatIcon%-Quality") then
+                found.crafted = true
+            end
+        end
+    end
+
+    return found
+end
+
 local function ScanUpgradeTrack(slotID)
     -- Return cached result if available
     if scanCache[slotID] then
@@ -42,42 +89,146 @@ local function ScanUpgradeTrack(slotID)
     local ok = pcall(upgradeScanTooltip.SetInventoryItem, upgradeScanTooltip, "player", slotID)
     if not ok then return nil, nil, nil, false end
 
-    local foundTrack, foundRank, foundMax
-    local isCrafted = false
+    local found = ParseUpgradeTooltip()
+    if not found then return nil, nil, nil, false end
 
-    -- A tooltip with no lines means the item data was not ready, not that
-    -- the item has no upgrade track. Caching that would be permanent
-    -- (the cache only clears on inventory change), and now that
-    -- CanUpgradeItem refuses to guess a track, a cached blank would hide
-    -- a genuinely upgradeable item until the player swapped gear.
-    local numLines = upgradeScanTooltip:NumLines()
-    if numLines == 0 then
-        return nil, nil, nil, false
-    end
+    scanCache[slotID] = found
+    return found.track, found.rank, found.maxRank, found.crafted
+end
 
-    for i = 1, numLines do
-        local line = _G["YYHUpgradeScanTooltipTextLeft" .. i]
-        if line then
-            local text = line:GetText() or ""
-            -- Match "Upgrade Level: Champion 3/5" or similar
-            if not foundTrack then
-                local trackName, currRank, maxRank = text:match("Upgrade Level:%s+(%S+)%s+(%d+)/(%d+)")
-                if trackName then
-                    foundTrack = trackName
-                    foundRank = tonumber(currRank)
-                    foundMax = tonumber(maxRank)
-                end
+------------------------------------------------------------
+-- Spare pieces in the bags, by the slot they would go in.
+--
+-- A slot remembers the highest item level it has ever held, and any
+-- upgrade up to that level costs no crests. That makes a lower-track
+-- piece for a slot the only exchange rate between two crest tiers there
+-- is:
+--
+--   The slot is wearing a Hero 1/6, so it has already reached 305. A
+--   Champion piece for that same slot walks from 292 all the way to 305
+--   for nothing -- every one of those ranks is under what the slot has
+--   already seen -- and only its last rank, 305 to 308, costs anything.
+--   Twenty Champion. The slot has now reached 308, so the Hero piece
+--   goes 305 to 308 free. Twenty Champion bought a rank that was going
+--   to cost twenty Hero.
+--
+-- That Champion piece is never equipped: the Hero drop is in the slot
+-- and the Champion one is in a bag. So it was invisible to every rule
+-- here, and the one move that spends the crest a player has too many of
+-- could not be advised at all.
+--
+-- Only pieces with a live upgrade track and a rank left to buy come
+-- back. A finished piece has nothing left to give a slot it is not in.
+------------------------------------------------------------
+
+--- Which equipment slots an item's inventory type can be worn in.
+---
+--- Rings, trinkets and one-handers belong to two slots each and both are
+--- listed: a spare ring is a spare for whichever of the two the question
+--- happens to be about.
+local INVTYPE_SLOTS = {
+    INVTYPE_HEAD           = { 1 },
+    INVTYPE_NECK           = { 2 },
+    INVTYPE_SHOULDER       = { 3 },
+    INVTYPE_CLOAK          = { 15 },
+    INVTYPE_CHEST          = { 5 },
+    INVTYPE_ROBE           = { 5 },
+    INVTYPE_WRIST          = { 9 },
+    INVTYPE_HAND           = { 10 },
+    INVTYPE_WAIST          = { 6 },
+    INVTYPE_LEGS           = { 7 },
+    INVTYPE_FEET           = { 8 },
+    INVTYPE_FINGER         = { 11, 12 },
+    INVTYPE_TRINKET        = { 13, 14 },
+    INVTYPE_WEAPON         = { 16, 17 },
+    INVTYPE_2HWEAPON       = { 16 },
+    INVTYPE_WEAPONMAINHAND = { 16 },
+    INVTYPE_RANGED         = { 16 },
+    INVTYPE_RANGEDRIGHT    = { 16 },
+    INVTYPE_WEAPONOFFHAND  = { 17 },
+    INVTYPE_SHIELD         = { 17 },
+    INVTYPE_HOLDABLE       = { 17 },
+}
+
+-- Built on demand and dropped whenever the bags move. Walking every bag
+-- slot and building a tooltip for each is not work to repeat once per
+-- gear row.
+local bagSpareCache = nil
+
+function ns:InvalidateBagSpares()
+    bagSpareCache = nil
+end
+
+local function ScanBagUpgradeTrack(bag, slot)
+    upgradeScanTooltip:ClearLines()
+    local ok = pcall(upgradeScanTooltip.SetBagItem, upgradeScanTooltip, bag, slot)
+    if not ok then return nil end
+    return ParseUpgradeTooltip()
+end
+
+local function ScanBagSpares()
+    local out = {}
+    local C = C_Container
+    if not (C and C.GetContainerNumSlots and C.GetContainerItemID) then return out end
+    if not GetItemInfoInstant then return out end
+
+    local last = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
+    for bag = 0, last do
+        for slot = 1, (C.GetContainerNumSlots(bag) or 0) do
+            local itemID = C.GetContainerItemID(bag, slot)
+            local slots
+            if itemID then
+                local ok, _, _, _, equipLoc = pcall(GetItemInfoInstant, itemID)
+                if ok and equipLoc then slots = INVTYPE_SLOTS[equipLoc] end
             end
-            -- Detect crafted items: quality tier atlas icons (Professions-Icon-Quality-*)
-            -- or crafted-by line
-            if text:find("Professions%-Icon%-Quality") or text:find("Professions%-ChatIcon%-Quality") then
-                isCrafted = true
+            if slots then
+                local found = ScanBagUpgradeTrack(bag, slot)
+                local levels = found and found.track and ns.GEAR_TRACKS[found.track]
+                local rank = found and found.rank
+                local maxRank = found and found.maxRank
+                if levels and rank and maxRank and rank < maxRank then
+                    local link = C.GetContainerItemLink and C.GetContainerItemLink(bag, slot)
+                    local ilvl
+                    if link and GetDetailedItemLevelInfo then
+                        local okLvl, lvl = pcall(GetDetailedItemLevelInfo, link)
+                        if okLvl then ilvl = lvl end
+                    end
+                    -- The same cross-check CanUpgradeItem makes on worn
+                    -- gear, for the same reason: track names repeat every
+                    -- season, so a piece whose track was stripped at the
+                    -- patch can still carry a line that parses. If the
+                    -- item level is not what this track's rank should be,
+                    -- it is not this season's gear and no crest moves it.
+                    if ilvl and levels[rank] == ilvl then
+                        local spare = {
+                            itemID  = itemID,
+                            link    = link,
+                            track   = found.track,
+                            rank    = rank,
+                            maxRank = maxRank,
+                            ilvl    = ilvl,
+                            crafted = found.crafted,
+                        }
+                        for _, slotID in ipairs(slots) do
+                            out[slotID] = out[slotID] or {}
+                            table.insert(out[slotID], spare)
+                        end
+                    end
+                end
             end
         end
     end
+    return out
+end
 
-    scanCache[slotID] = { track = foundTrack, rank = foundRank, maxRank = foundMax, crafted = isCrafted }
-    return foundTrack, foundRank, foundMax, isCrafted
+--- Upgradeable pieces in the bags that belong in this slot.
+---
+--- Always a table, never nil: every caller wants to iterate it.
+function ns:GetBagSpares(slotID)
+    if not bagSpareCache then
+        bagSpareCache = ScanBagSpares()
+    end
+    return bagSpareCache[slotID] or {}
 end
 
 -- Returns item info for an equipment slot
@@ -427,12 +578,20 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         -- Drop settings belonging to features removed in 2.9.0 so they
         -- don't linger in the SavedVariables file forever.
         for _, dead in ipairs({
-            -- lastSeenVersion is NOT in this list: the old welcome notice
-            -- was removed in 2.9.0 and its key purged, but 2.13.0 brought
-            -- the notice back. Purging it here would reset the "already
-            -- seen" flag on every login and show the popup every time.
             "xaltoes", "lura", "nexusKingInterrupt", "piAssignments",
             "raidSplit", "releaseBlocker",
+            -- The "what's new" notice, which has now been removed twice.
+            -- It went in 2.9.0, came back in 2.13.0 -- which is why this
+            -- key used to carry a comment explaining it must NOT be
+            -- purged -- and is gone again for good. An update notice
+            -- that interrupts a reload to recite a changelog is a thing
+            -- nobody has ever wanted to read twice, and the changelog is
+            -- in CHANGELOG.md where it can be read on purpose.
+            "lastSeenVersion",
+            -- Stamped by the Advisor to time how long Omnium Folio
+            -- progress had been stalled. The Folio came out entirely,
+            -- so nothing writes or reads this any more.
+            "folio",
         }) do
             YippYappHelperDB[dead] = nil
         end
@@ -444,11 +603,9 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             ns:EnsureLauncherMacro()
         end)
 
-        -- Read from the TOC rather than hardcoded. It was duplicated
-        -- here and in WhatsNew, which is two strings that have to be
-        -- bumped together and only ever get bumped once -- and Yeeper's
-        -- introduction keys off this value, so a stale copy quietly
-        -- replays or suppresses the intro at the wrong moment.
+        -- Read from the TOC rather than hardcoded. Yeeper's introduction
+        -- keys off this value, so a hand-maintained copy would quietly
+        -- replay or suppress the intro at the wrong moment.
         ns.ADDON_VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata
             and C_AddOns.GetAddOnMetadata("YippYappHelper", "Version")) or "3.0.0"
 
@@ -517,6 +674,10 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         or event == "BAG_UPDATE_DELAYED"
         or event == "WEEKLY_REWARDS_UPDATE"
         or event == "CHALLENGE_MODE_COMPLETED" then
+        -- A bagged spare is a drop that has not been equipped yet, so
+        -- the advice that reads one is exactly the advice that goes
+        -- stale the moment the bags move.
+        if event == "BAG_UPDATE_DELAYED" then ns:InvalidateBagSpares() end
         ns:RefreshGearViews()
     end
 end)
@@ -615,6 +776,87 @@ function ns:OpenTo(id)
         return true
     end
     return false
+end
+
+
+------------------------------------------------------------
+-- Opening by itself when the game loads
+--
+-- The window's first page is the Great Vault, and what somebody wants to
+-- know at the start of an evening is what the vault still owes them. For
+-- a player who opens the addon every session anyway, having it already
+-- open is one fewer keypress and the same information sooner.
+--
+-- Off unless asked for. An addon that puts itself on screen uninvited is
+-- the kind that gets uninstalled, so nothing here happens until the box
+-- in the options is ticked.
+------------------------------------------------------------
+
+--- Whether the window opens itself when the game loads.
+function ns.GetOpenOnLogin()
+    YippYappHelperDB = YippYappHelperDB or {}
+    return YippYappHelperDB.openOnLogin and true or false
+end
+
+function ns.SetOpenOnLogin(v)
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.openOnLogin = v and true or false
+end
+
+-- A beat after the loading screen. The vault's own data arrives from the
+-- server a moment after login, so opening immediately shows slots that
+-- fill in a second later.
+--
+-- It used to be five seconds rather than a shorter wait because the
+-- What's New notice took the screen at four. That notice is gone, so the
+-- delay is now only about the vault -- worth knowing before anyone tunes
+-- it, since the number no longer has a second constraint on it.
+local OPEN_ON_LOGIN_DELAY = 5
+
+--- Opens the window if this loading screen is one that warrants it.
+---
+--- A named function rather than the body of the handler below so the
+--- load harness can put every case through it -- setting off, zone
+--- change, window already open -- without having to fake an event that
+--- by design only ever fires once. That is also why the two flags are
+--- re-tested here rather than trusted from the caller.
+---
+--- Returns whether an open was scheduled, which is the only thing about
+--- it that can be observed synchronously.
+function ns.OpenOnLoginIfWanted(isInitialLogin, isReloadingUi)
+    if not (isInitialLogin or isReloadingUi) then return false end
+    if not ns.GetOpenOnLogin() then return false end
+
+    C_Timer.After(OPEN_ON_LOGIN_DELAY, function()
+        if mainIsOpen() then return end
+        -- Deliberately not through ns:OpenMain. Nobody pressed anything,
+        -- so its "can't open in combat" line would be the addon
+        -- complaining in chat about a key the player never touched.
+        -- Logging straight into a fight is rare, and it is exactly when
+        -- that notice is least welcome.
+        if InCombatLockdown() then return end
+        if ns.OpenTo then ns:OpenTo("home") end
+    end)
+    return true
+end
+
+-- PLAYER_ENTERING_WORLD rather than PLAYER_LOGIN, for its two arguments.
+-- The event itself fires on every loading screen: every zone change,
+-- every instance door, every hearthstone. A window that reopened on all
+-- of those would be unusable, and isInitialLogin / isReloadingUi are the
+-- only way to tell "the game loaded" from "you walked through a door".
+--
+-- Wrapped in a do block so the frame does not add a file-scope local to
+-- a chunk that is already carrying a lot of them.
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    f:SetScript("OnEvent", function(self, _, isInitialLogin, isReloadingUi)
+        if not (isInitialLogin or isReloadingUi) then return end
+        -- Every later one is a doorway, and this only wanted the first.
+        self:UnregisterAllEvents()
+        ns.OpenOnLoginIfWanted(isInitialLogin, isReloadingUi)
+    end)
 end
 
 
@@ -755,7 +997,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh settings — open the options panel")
         print("  /yh skin [id] — list or choose a skin")
         print("  /yh advisor — what Mr. Yeeper makes of your character")
-        print("  /yh whatsnew — what changed this patch")
         print("  /yh fun — fun stat counters (/yh fun reset to clear)")
         print("  /yh introreset — replay Mr. Yeeper's introduction")
         print("  /yh edit — move YippYapp frames via Edit Mode")
@@ -824,12 +1065,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         if ns.OpenSettings then ns.OpenSettings()
         elseif ns.OpenBlizzardSettings then ns.OpenBlizzardSettings()
         else print("|cffff5555YippYapp:|r settings are not loaded.") end
-        return
-    end
-
-    -- /yh whatsnew — reopen the update notice
-    if cmd == "whatsnew" then
-        if ns.WhatsNew then ns.WhatsNew:Show() end
         return
     end
 
@@ -985,6 +1220,24 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
             -- `/yh ejdump abilities` walks every section of every
             -- encounter and names the ones our guide never mentions.
             ns.RaidGuide:DumpJournal(arg and strlower(strtrim(arg)) or nil)
+        end
+        return
+    end
+
+    -- /yh questdump [id or words] -- this character's quest log, with ids.
+    --
+    -- Absent from /yh help for the same reason as ejdump above: it
+    -- exists to get a fact out of the client that only the client can
+    -- settle, which is a thing a developer needs and a player does not.
+    -- Here it is the quest ids behind the weekly checklist's rows.
+    --
+    -- The argument narrows it to one quest and prints that quest's
+    -- objectives as well. Bare, this would be a hundred lines of chat
+    -- for four lines you wanted; and the objectives are only interesting
+    -- once you know which quest you are asking about.
+    if cmd == "questdump" or cmd == "questid" then
+        if ns.Weekly and ns.Weekly.DumpQuestLog then
+            ns.Weekly:DumpQuestLog(arg)
         end
         return
     end

@@ -645,7 +645,20 @@ function GetTime() return 0 end
 -- against `now` has to guard against a client that cannot tell the time,
 -- and at 0 every such guard trips -- so the expiry path was unreachable
 -- and read as covered. Fixed here rather than by loosening the guard.
-function time() return 1786000000 end
+-- time() with a table is os.time's date-to-epoch conversion, which the
+-- week list uses to order runs by when they finished. A stub that
+-- ignored the argument made every run share a timestamp, and a list
+-- ordered by one is in no order at all.
+function time(t)
+    if type(t) == "table" then
+        local days = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 }
+        local y = (t.year or 1970) - 1970
+        local leaps = math.floor((y + 1) / 4)
+        local day = y * 365 + leaps + days[t.month or 1] + ((t.day or 1) - 1)
+        return day * 86400 + (t.hour or 12) * 3600 + (t.min or 0) * 60 + (t.sec or 0)
+    end
+    return 1787100000  -- 2026-08-18: after every run in the fixture
+end
 -- date("*t") is a table, and the week list asks for one to work out
 -- whether a run happened today. Every other format keeps the old string.
 function date(fmt)
@@ -807,7 +820,29 @@ C_UIWidgetManager = {}
 C_Reputation = { GetFactionDataByID = function(id)
                      return { factionID = id, name = "Valeera Sanguinar" }
                  end }
-C_QuestLog = { IsQuestFlaggedCompleted = function() return false end }
+-- Deliberately answers about ONE id and nil for everything else, so a
+-- check has to say which quest it means. A stub that named every quest
+-- would let a row draw a title it had no business knowing.
+QUEST_STUB_ID = 0
+QUEST_STUB_TITLE = "Purging the Vaults"
+QUEST_STUB_ACTIVE = false
+QUEST_STUB_HAVE, QUEST_STUB_NEED = 0, 0
+C_QuestLog = {
+    IsQuestFlaggedCompleted = function() return false end,
+    GetLogIndexForQuestID = function(id)
+        if QUEST_STUB_ACTIVE and id == QUEST_STUB_ID then return 1 end
+        return nil
+    end,
+    GetTitleForQuestID = function(id)
+        if id == QUEST_STUB_ID then return QUEST_STUB_TITLE end
+        return nil
+    end,
+    RequestLoadQuestByID = function() end,
+    GetQuestObjectives = function(id)
+        if id ~= QUEST_STUB_ID or QUEST_STUB_NEED == 0 then return nil end
+        return { { numFulfilled = QUEST_STUB_HAVE, numRequired = QUEST_STUB_NEED } }
+    end,
+}
 C_Calendar = {}
 COMPLETION_INFO = nil
 
@@ -1012,43 +1047,48 @@ C_MythicPlus = { -- A key in hand, so Group Keystones renders a row and
                  -- all that branch had ever drawn.
                  GetOwnedKeystoneChallengeMapID = function() return 2815 end,
                  GetOwnedKeystoneLevel = function() return 12 end,
-                 -- Ten runs this week, against a card that shows eight:
-                 -- the overflow line is a branch too, and a silent
-                 -- truncation is exactly the kind of thing that should
-                 -- not pass. Two more from before the reset, which must
-                 -- stay off a card headed "This Week" while still
-                 -- setting the score bar the week's runs are measured
-                 -- against.
+                 -- Eleven runs this week, against a card that shows
+                 -- eight: the overflow line is a branch too, and a
+                 -- silent truncation is exactly the kind of thing that
+                 -- should not pass. Three more from before the reset,
+                 -- which must stay off a card headed "This Week" while
+                 -- still setting the score bar the week's runs are
+                 -- measured against.
                  --
-                 -- Index 1 is the OLDEST, the client's own order, and
-                 -- levels deliberately do not fall with time -- a list
-                 -- sorted by key level would pass a fixture where the
-                 -- newest run is also the highest.
+                 -- The arrival order is deliberately NOT the order the
+                 -- runs happened in -- the newest is second from last,
+                 -- and one dungeon's two runs arrive back to front.
+                 -- That is what the live client does, and a list that
+                 -- just walks this array backwards has to fail here.
+                 -- Levels do not fall with time either, so a sort by
+                 -- key level cannot pass by luck.
                  --
                  -- Field names read off BigWigs/Tools/Keystones.lua.
                  -- The timer is 1800 for every map here, so 1080 and
                  -- 1440 are the 3- and 2-chest thresholds.
                  GetRunHistory = function(includePreviousWeeks)
                      local rows = {
-                         -- level, seconds, score, this week, monthDay, map
-                         { 10, 1500, 210, false, 11, 1 },
-                         { 12, 1200, 180, false, 12, 2 },
-                         {  8, 1700, 150, true,  15, 3 },
-                         { 12, 1100, 215, true,  15, 1 },  -- beats the 210
-                         {  9, 1650, 160, true,  15, 4 },
-                         { 11, 1900, 170, true,  16, 5 },  -- over the timer
-                         { 10, 1430, 190, true,  16, 6 },
-                         { 13, 1000, 240, true,  16, 7 },
-                         {  9, 1560, 165, true,  17, 8 },
-                         { 12, 1250, 205, true,  17, 1 },  -- under its own 215
-                         { 10, 1790, 175, true,  17, 2 },
-                         { 11, 1050, 225, true,  17, 3 },
+                         -- level, seconds, score, this week, day, h, m, map
+                         { 10, 1500, 210, false, 11, 18,  0, 1 },
+                         { 12, 1200, 180, false, 12, 19,  0, 2 },
+                         { 11, 1300, 150, false, 12, 20,  0, 6 },
+                         {  8, 1700, 150, true,  15,  9,  5, 3 },
+                         { 10, 1460, 190, true,  15, 11, 30, 6 },
+                         {  9, 1650, 160, true,  15, 10, 20, 4 },
+                         { 10, 1430, 200, true,  15,  9, 40, 6 },
+                         { 11, 1900, 170, true,  16, 22, 15, 5 },
+                         {  9, 1560, 165, true,  16, 20, 40, 8 },
+                         { 13, 1000, 240, true,  17, 20,  5, 7 },
+                         { 12, 1100, 215, true,  17, 21, 40, 1 },
+                         { 10, 1790, 175, true,  16, 21,  5, 2 },
+                         { 11, 1050, 225, true,  17, 23, 30, 3 },
+                         { 12, 1250, 205, true,  17, 22, 10, 1 },
                      }
                      local out = {}
                      for i, r in ipairs(rows) do
                          if r[4] or includePreviousWeeks then
                              out[#out + 1] = {
-                                 mapChallengeModeID = MPLUS_ORDER[r[6]],
+                                 mapChallengeModeID = MPLUS_ORDER[r[8]],
                                  level = r[1],
                                  durationSec = r[2],
                                  runScore = r[3],
@@ -1057,7 +1097,7 @@ C_MythicPlus = { -- A key in hand, so Group Keystones renders a row and
                                  completionDate = { year = 2026, month = 8,
                                                     monthDay = r[5],
                                                     weekday = ((r[5] - 1) % 7) + 1,
-                                                    hour = 20, minute = (i * 7) % 60 },
+                                                    hour = r[6], minute = r[7] },
                              }
                          end
                      end
@@ -3455,6 +3495,206 @@ def main():
         print("  FAIL free upgrades: %s" % freebies)
         failures.append(("free upgrades", str(freebies)))
 
+    # The spare piece in the bags, and what it actually costs.
+    #
+    # A Champion 1/6 looks like five ranks and a hundred crests. In a slot
+    # that has already reached 305 it is one rank and twenty, because the
+    # other four land under what the slot has held -- and finishing it
+    # then hands the worn Hero piece its own 305 -> 308 rank for nothing.
+    #
+    # The check is on the arithmetic AND on the sentence: the number the
+    # player reads is the whole point of the rule, and a version of it
+    # that quotes the un-marked hundred is worse than saying nothing.
+    launder = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            -- Worn: the Hero drop that just landed. Bagged: the Champion
+            -- piece it went in on top of.
+            local worn = {
+                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Drop]|h|r",
+                ilvl = T.Hero[1], quality = 4, icon = 134400,
+                track = "Hero", rank = 1, maxRank = 6, crafted = false,
+            }
+            local spare = {
+                itemID = 2, link = "|cffa335ee|Hitem:2::::::::80:::::|h[Spare]|h|r",
+                track = "Champion", rank = 1, maxRank = 6, ilvl = T.Champion[1],
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 16 and worn or nil
+            end
+            ns.GetBagSpares = function(self, slotID)
+                return slotID == 16 and { spare } or {}
+            end
+            YYH_WATERMARKS[16] = T.Hero[1]        -- the slot has seen 305
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                YYH_WATERMARKS[16] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[16] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local l = ns:GetMarkLaunder(16)
+            if not l then
+                return restore("no trade found for a slot holding a Hero 1/6 "
+                    .. "with a Champion 1/6 in the bags")
+            end
+            -- Four of the five ranks are under the 305 the slot has seen.
+            if l.freeRanks ~= 4 or l.paidRanks ~= 1 then
+                return restore("the spare is priced at " .. l.paidRanks ..
+                    " paid and " .. l.freeRanks .. " free ranks, not 1 and 4")
+            end
+            if l.cost ~= ns:GetCrestCost("Champion") then
+                return restore("capping the spare is costed at " .. l.cost ..
+                    ", not one Champion rank")
+            end
+            if l.top ~= T.Champion[6] then
+                return restore("the spare is said to reach " .. l.top ..
+                    ", not " .. T.Champion[6])
+            end
+            -- And it buys exactly the one Hero rank that lands on 308.
+            if l.savedRanks ~= 1 or l.savedTo ~= T.Hero[2] then
+                return restore("it is said to save " .. l.savedRanks ..
+                    " rank(s) to " .. tostring(l.savedTo))
+            end
+
+            local rec, reason, detail = ns:GetRecommendation(16)
+            if rec ~= ns.RECOMMEND.USE_LOWER_TRACK then
+                return restore("the row does not send the player to the "
+                    .. "cheaper crest: " .. tostring(reason))
+            end
+            -- The price the player reads is the one priced against what
+            -- the slot has already held. The naive five-rank number is
+            -- the mistake this rule exists to stop the player making.
+            local said = reason .. " " .. table.concat(detail or {}, " ")
+            local naive = 5 * ns:GetCrestCost("Champion")
+            if said:find(tostring(naive), 1, true) then
+                return restore("the advice quotes the unmarked price " ..
+                    naive .. ": " .. said)
+            end
+            if not said:find(tostring(l.cost) .. " Champion", 1, true) then
+                return restore("the advice never says what it costs: " .. said)
+            end
+            if not said:find(tostring(T.Hero[1]) .. " to " .. tostring(T.Hero[2]),
+                1, true) then
+                return restore("the advice never says what the worn piece "
+                    .. "gets out of it: " .. said)
+            end
+            -- "Mark" is this file's word for it, not the game's and not
+            -- the player's. Every other string in the advisor was taken
+            -- off it; this one does not get to bring it back.
+            if said:lower():find("high%-water") or said:lower():find("the mark") then
+                return restore("the advice teaches the mechanic instead of "
+                    .. "the consequence: " .. said)
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if launder == "ok":
+        print("  ok   spare piece: a bagged Champion 1/6 is priced at the one "
+              "rank above what the slot has held, not at five")
+    else:
+        print("  FAIL spare piece: %s" % launder)
+        failures.append(("spare piece", str(launder)))
+
+    # The same spare in a slot that has NOT been anywhere.
+    #
+    # Rings and trinkets share one mark and it follows the lower of the
+    # pair, so a Hero drop can sit in a slot whose mark is still down at
+    # 292 -- and there the Champion piece really is five ranks and a
+    # hundred crests to save twenty Hero. That is the one case where
+    # waiting for a better spare is the right call, and it has to be
+    # advice the player can decline: the crests buy the item level today,
+    # which is worth something the addon cannot price.
+    dear = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realPrecious = ns.IsCrestFree
+            local worn = {
+                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Drop]|h|r",
+                ilvl = T.Hero[1], quality = 4, icon = 134400,
+                track = "Hero", rank = 1, maxRank = 6, crafted = false,
+            }
+            local spare = {
+                itemID = 2, link = "|cffa335ee|Hitem:2::::::::80:::::|h[Spare]|h|r",
+                track = "Champion", rank = 1, maxRank = 6, ilvl = T.Champion[1],
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 16 and worn or nil
+            end
+            ns.GetBagSpares = function(self, slotID)
+                return slotID == 16 and { spare } or {}
+            end
+            -- Champion is worth something to this character, or waiting
+            -- would not be the question.
+            ns.IsCrestFree = function() return false end
+            YYH_WATERMARKS[16] = T.Champion[1]    -- the slot has seen 292
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                ns.IsCrestFree = realPrecious
+                YYH_WATERMARKS[16] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[16] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local l = ns:GetMarkLaunder(16)
+            if not l then return restore("no trade found at all") end
+            if l.paidRanks ~= 5 or l.cost ~= 5 * ns:GetCrestCost("Champion") then
+                return restore("a slot that has only seen 292 prices the "
+                    .. "spare at " .. l.cost .. " over " .. l.paidRanks
+                    .. " rank(s)")
+            end
+
+            local _, reason, detail = ns:GetRecommendation(16)
+            local said = reason .. " " .. table.concat(detail or {}, " ")
+            if not said:find("further up its track", 1, true) then
+                return restore("nothing suggests the cheaper spare: " .. said)
+            end
+            -- And it is a suggestion, not a lock. The player who would
+            -- rather wear the item level this week is not wrong, and the
+            -- price for doing it has to be there in the same breath.
+            if not said:find("rather have the item level now", 1, true) then
+                return restore("waiting is stated as the only option: " .. said)
+            end
+            if not said:find(tostring(l.cost) .. " Champion", 1, true) then
+                return restore("the price of not waiting is not given: " .. said)
+            end
+
+            -- And with no mark read at all, it says nothing rather than
+            -- quoting a price built out of a zero.
+            YYH_WATERMARKS[16] = nil
+            wipe(ns.watermarkCache)
+            if YippYappHelperDB and YippYappHelperDB.watermarks then
+                YippYappHelperDB.watermarks[16] = nil
+            end
+            if ns:GetMarkLaunder(16) ~= nil then
+                return restore("a slot with no mark read still gets priced")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if dear == "ok":
+        print("  ok   spare piece: where the trade really does cost a hundred, "
+              "the cheaper spare is offered and declining it is priced")
+    else:
+        print("  FAIL spare piece (expensive): %s" % dear)
+        failures.append(("spare piece (expensive)", str(dear)))
+
     # A row is about the slot it is headed with.
     #
     # The overlap warning used to spend most of its width sending crests
@@ -4126,14 +4366,18 @@ def main():
     # to regress into a level sort that happens to look right.
     weeklist = L.eval("""
         function(ns)
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.runJournal = nil
             local runs = ns:GetWeeklyRuns()
-            if #runs ~= 10 then
-                return #runs .. " runs on a week that had 10 (last week leaked in?)"
+            if #runs ~= 11 then
+                return #runs .. " runs on a week that had 11 (last week leaked in?)"
             end
 
-            -- Newest first. The fixture's last run is a +11 in 17:30 and
-            -- its highest key is a +13, so a list sorted by level puts
-            -- the wrong one on top.
+            -- Newest first, by the clock. The newest run is a +11 in
+            -- 17:30 that arrives SECOND from last, so a list that walks
+            -- the history backwards puts the +12 on top; the highest
+            -- key of the week is a +13, so a list sorted by level puts
+            -- that one on top instead.
             if runs[1].level ~= 11 or runs[1].durationSec ~= 1050 then
                 return "the top row is not the most recent run (+"
                     .. runs[1].level .. " in " .. tostring(runs[1].durationSec) .. "s)"
@@ -4191,6 +4435,24 @@ def main():
                     .. tostring(noBest.gain)
             end
 
+            -- Two runs of one dungeon that arrive back to front. The
+            -- 200 happened first and beat last week's 150; the 190 came
+            -- later and beat nothing. Measured in arrival order instead
+            -- of clock order, both answers change.
+            local first, second
+            for _, r in ipairs(runs) do
+                if r.score == 200 then first = r end
+                if r.score == 190 then second = r end
+            end
+            if not (first and second) then return "the fixture lost a repeat run" end
+            if first.gain ~= 50 then
+                return "200 over last week's 150 is worth 50, read as " .. tostring(first.gain)
+            end
+            if second.gain ~= 0 then
+                return "the later, weaker run of the same dungeon gained "
+                    .. tostring(second.gain) .. " -- gains are being read in arrival order"
+            end
+
             -- When it happened, which is what the hover leads with.
             if not (top.date and top.date.hour) then
                 return "the run carries no completion date"
@@ -4209,7 +4471,7 @@ def main():
             end
 
             local text = Joined(top)
-            for _, want in ipairs({ "Keystone +11", "at 20:", "Finished in 17:30",
+            for _, want in ipairs({ "Keystone +11", "at 23:30", "Finished in 17:30",
                                     "timer 30:00", "12:30 under the timer",
                                     "Key upgraded 3 levels, to +14",
                                     "Worth 225 score", "75 rating" }) do
@@ -4229,6 +4491,39 @@ def main():
                 return "a run that beat nothing claimed rating for it"
             end
 
+            -- The run that just finished, which the history does not
+            -- carry for a while yet. Without the journal merge the card
+            -- says nothing about the key you are still standing in.
+            COMPLETION_INFO = {
+                mapID = 2813, level = 20, ms = 1200 * 1000,
+                onTime = true, chests = 2, practice = false,
+                oldScore = 300, newScore = 330, deaths = 1,
+            }
+            ns:RecordCompletedRun()
+            COMPLETION_INFO = nil
+            runs = ns:GetWeeklyRuns()
+            if #runs ~= 12 then
+                return "the run just finished is not on the card (" .. #runs .. " rows)"
+            end
+            if runs[1].level ~= 20 then
+                return "the run just finished is not at the top of the card"
+            end
+            if runs[1].chests ~= 2 or runs[1].gain ~= 30 then
+                return "the merged run lost the detail the journal recorded"
+            end
+
+            -- An alt's run is in the same account-wide journal and is
+            -- not this character's week.
+            local j = ns:GetRunJournal()
+            j[#j + 1] = { mapID = 2814, level = 21, ms = 1000 * 1000,
+                          onTime = true, chests = 1, at = 1787100100,
+                          who = "Player-1-99999999" }
+            runs = ns:GetWeeklyRuns()
+            for _, r in ipairs(runs) do
+                if r.level == 21 then return "an alt's run was merged into this week" end
+            end
+            YippYappHelperDB.runJournal = nil
+
             -- A run the client answered "finished" about and nothing
             -- else -- what everything on this card looked like before
             -- the history was read properly.
@@ -4244,8 +4539,9 @@ def main():
         end
     """)(ns)
     if weeklist == "ok":
-        print("  ok   week list: newest run first, chests and margin read off the "
-              "history's own clock, score gained measured against the season, "
+        print("  ok   week list: newest run first by the clock and not by "
+              "arrival, the run just finished merged in ahead of the history, "
+              "chests and margin off the clock, gains measured in order, "
               "hover says only what the run knows")
     else:
         print("  FAIL week list: %s" % weeklist)
@@ -4280,7 +4576,11 @@ def main():
 
             COMPLETION_INFO = {
                 mapID = target.mapID, level = target.level,
-                ms = 1500 * 1000, onTime = true, chests = 2, practice = false,
+                -- The run's own duration. Detail is matched on it, so a
+                -- staged run that claims a different one is a different
+                -- run -- which is checked separately below.
+                ms = target.durationSec * 1000,
+                onTime = true, chests = 2, practice = false,
                 oldScore = 2000, newScore = 2018, deaths = 3,
             }
             ns:RecordCompletedRun()
@@ -4328,6 +4628,31 @@ def main():
             end
             if hit.detail.chests ~= 2 then return "the wrong entry was attached" end
 
+            -- The same key at the same level, run twice: the entry
+            -- belongs to the run whose clock it matches, and the other
+            -- run must not swallow it. This is the shape that hid a
+            -- freshly finished key -- an Altar +10 blown in the morning
+            -- and timed in the evening.
+            YippYappHelperDB.runJournal = nil
+            COMPLETION_INFO.ms = (target.durationSec - 300) * 1000
+            COMPLETION_INFO.chests = 3
+            ns:RecordCompletedRun()
+            runs = ns:GetWeeklyRuns()
+            local wrong, own = nil, nil
+            for _, r in ipairs(runs) do
+                if r.durationSec == target.durationSec and r.detail then wrong = r end
+                if r.durationSec == target.durationSec - 300 then own = r end
+            end
+            if wrong then
+                return "a run took the detail of a different run of the same key"
+            end
+            if not own then
+                return "the run the history has not published yet is not on the card"
+            end
+            if own.chests ~= 3 then return "the merged run lost its own detail" end
+            COMPLETION_INFO.ms = target.durationSec * 1000
+            COMPLETION_INFO.chests = 2
+
             -- Two runs of the same key must not both show the first
             -- one's time. Entries are consumed as they match.
             YippYappHelperDB.runJournal = nil
@@ -4357,7 +4682,8 @@ def main():
     """)(ns)
     if journal == "ok":
         print("  ok   run journal: completion detail recorded, practice runs "
-              "skipped, merged to the right run, pruned at the reset")
+              "skipped, merged to the run whose clock it matches, pruned "
+              "at the reset")
     else:
         print("  FAIL run journal: %s" % journal)
         failures.append(("run journal", str(journal)))
@@ -6005,6 +6331,77 @@ def main():
             if not emptyManual then
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
                 return "a row with no ids stopped falling back to its manual tick"
+            end
+
+            -- Naming the quest.
+            --
+            -- The row is supposed to stop describing a bar and start
+            -- naming the thing -- "Complete Purging the Vaults" -- with
+            -- the name coming from the client rather than from us. Driven
+            -- through the real vaultweekly row, because the point is that
+            -- a SHIPPED row picks its id out of its own list and asks for
+            -- that title, not that a helper works in isolation.
+            local vault
+            for _, item in ipairs(Wk.ITEMS) do
+                if item.id == "vaultweekly" then vault = item end
+            end
+            if not vault then return "the vaults row is gone" end
+            QUEST_STUB_ID = vault.quests[1]
+
+            -- On the quest, three objectives of five done.
+            QUEST_STUB_ACTIVE = true
+            QUEST_STUB_HAVE, QUEST_STUB_NEED = 3, 5
+            C_QuestLog.IsQuestFlaggedCompleted = function() return false end
+            local named
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == "vaultweekly" then named = r end
+            end
+            if named.questTitle ~= QUEST_STUB_TITLE then
+                QUEST_STUB_ACTIVE = false
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "the row did not pick up the client's quest title"
+            end
+            if named.questState ~= "active" then
+                QUEST_STUB_ACTIVE = false
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a quest in the log did not read as active"
+            end
+            if named.questProgress ~= "3/5" then
+                QUEST_STUB_ACTIVE = false
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "objective progress read as " .. tostring(named.questProgress)
+            end
+
+            -- Handed in: still named, no longer an instruction.
+            QUEST_STUB_ACTIVE = false
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == QUEST_STUB_ID end
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == "vaultweekly" then named = r end
+            end
+            if named.questState ~= "done" or named.questTitle ~= QUEST_STUB_TITLE then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a completed quest stopped naming itself"
+            end
+            if named.questProgress then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a finished quest still reported progress"
+            end
+
+            -- A title the client has not handed over yet must leave the
+            -- row on its own label rather than blanking it. This is the
+            -- normal state for the first draw after login.
+            QUEST_STUB_ID = -1
+            C_QuestLog.IsQuestFlaggedCompleted = function() return false end
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == "vaultweekly" then named = r end
+            end
+            if named.questTitle ~= nil then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a title appeared for a quest the client does not know"
+            end
+            if not (named.label and named.label ~= "") then
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "an unnamed row had no label to fall back on"
             end
 
             -- And a tick left in the store from before an id existed

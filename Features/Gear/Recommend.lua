@@ -1309,6 +1309,155 @@ function ns:GetCrestWaste(slotID)
     }
 end
 
+------------------------------------------------------------
+-- Paying for the overlap with the cheaper crest, using a spare piece.
+--
+-- GetCrestWaste above says the first ranks of a track are a bad use of
+-- its crests, because the track underneath reaches the same item level
+-- for the same price. True, and it stops one step short of the move,
+-- because the cheaper crest cannot be spent on the worn piece: a Hero
+-- 1/6 takes Hero crests and nothing else.
+--
+-- What takes the cheaper crest is a SECOND piece for the same slot, and
+-- the slot's own memory does the rest. It remembers the highest item
+-- level it has ever held, and upgrades up to that level cost no crests
+-- at all -- so a Champion piece for a slot already wearing a Hero 1/6
+-- is not the 100 Champion its five remaining ranks look like:
+--
+--   Champion 1/6   292  -- the slot has seen 305, so free
+--   Champion 2/6   295  -- free
+--   Champion 3/6   298  -- free
+--   Champion 4/6   302  -- free
+--   Champion 5/6   305  -- free
+--   Champion 6/6   308  -- 20 Champion, the first rank above 305
+--
+-- and once the slot has reached 308 the worn Hero piece goes 305 to 308
+-- for nothing. Twenty Champion instead of twenty Hero, for the same
+-- item level, which is the only trade between two crest tiers the game
+-- offers.
+--
+-- The price is therefore not "how far down the track the spare is" --
+-- which is what makes this worth computing rather than guessing. It is
+-- how many of its ranks land ABOVE what the slot has already seen, and
+-- on a geared character that is usually one. A spare deep down a track
+-- in a slot that has never held anything good is the case where it is
+-- genuinely five, and the advice has to say so rather than pretend both
+-- are the same move.
+--
+-- nil when there is nothing to trade: no spare for the slot, no ranks
+-- the lower track could have covered, or a slot whose mark already sits
+-- at the lower track's cap.
+------------------------------------------------------------
+function ns:GetMarkLaunder(slotID)
+    local canUpgrade, up = ns:CanUpgradeItem(slotID)
+    if not canUpgrade or not up then return nil end
+
+    local track   = up.track
+    local overlap = track and ns.TRACK_FREE_RANKS[track]
+    if not overlap then return nil end
+
+    local levels     = ns.GEAR_TRACKS[track]
+    local prevTrack  = overlap.prevTrack
+    local prevLevels = ns.GEAR_TRACKS[prevTrack]
+    if not levels or not prevLevels then return nil end
+
+    local crestTrack     = ns.TRACK_CREST[track]
+    local prevCrestTrack = ns.TRACK_CREST[prevTrack]
+    if not crestTrack or not prevCrestTrack then return nil end
+
+    -- Read from the game, not inferred. Whether wearing a piece is
+    -- enough to mark a slot -- rather than upgrading one into it -- is
+    -- not a rule this addon should be guessing at, and it does not have
+    -- to: C_ItemUpgrade answers it per slot.
+    local mark = ns:GetFreeUpgradeIlvl(slotID) or 0
+
+    -- Zero is not "this slot has held nothing". It is "the client has
+    -- not answered for this slot yet" -- the query wants the upgrade
+    -- vendor open, and away from one it falls back to a cache that may
+    -- never have been filled.
+    --
+    -- Every number below is a difference from this one, so a zero here
+    -- does not make the advice vague, it makes it wrong: a Champion 1/6
+    -- prices at five ranks and a hundred crests, and the row tells the
+    -- player to hold out for a piece that would have cost twenty. Silence
+    -- is the right answer to a price nobody read.
+    if mark <= 0 then return nil end
+
+    local cost     = ns:GetCrestCost(crestTrack)
+    local prevCost = ns:GetCrestCost(prevCrestTrack)
+    local rank     = up.currUpgrade or 0
+    local maxRank  = up.maxUpgrade or 0
+
+    local best
+    for _, spare in ipairs(ns:GetBagSpares(slotID)) do
+        if spare.track == prevTrack then
+            -- What the spare costs to finish, priced against the mark
+            -- rather than against its rank.
+            local paidRanks, freeRanks = 0, 0
+            local top = spare.ilvl
+            for r = spare.rank + 1, spare.maxRank do
+                local lvl = prevLevels[r]
+                if lvl then
+                    if lvl > mark then paidRanks = paidRanks + 1
+                    else freeRanks = freeRanks + 1 end
+                    top = lvl
+                end
+            end
+
+            -- What finishing it then hands the worn piece: every rank of
+            -- it at or under where the spare tops out, that the slot has
+            -- not already reached.
+            local savedRanks, savedTo = 0, nil
+            for r = rank + 1, maxRank do
+                local lvl = levels[r]
+                if lvl and lvl > mark and lvl <= top then
+                    savedRanks = savedRanks + 1
+                    savedTo = lvl
+                end
+            end
+
+            if savedRanks > 0 then
+                local entry = {
+                    spare      = spare,
+                    top        = top,
+                    paidRanks  = paidRanks,
+                    freeRanks  = freeRanks,
+                    cost       = paidRanks * prevCost,
+                    savedRanks = savedRanks,
+                    savedTo    = savedTo,
+                    saved      = savedRanks * cost,
+                }
+                entry.net = entry.saved - entry.cost
+                -- Best net first, then the cheaper one: two spares that
+                -- buy the same thing are the same advice, and the one
+                -- asking for fewer crests is the one to name.
+                if not best or entry.net > best.net
+                    or (entry.net == best.net and entry.cost < best.cost) then
+                    best = entry
+                end
+            end
+        end
+    end
+    if not best then return nil end
+
+    best.slotID         = slotID
+    best.track          = track
+    best.prevTrack      = prevTrack
+    best.crestTrack     = crestTrack
+    best.prevCrestTrack = prevCrestTrack
+    best.rank           = rank
+    best.maxRank        = maxRank
+    best.fromIlvl       = levels[rank] or up.currIlvl
+    best.mark           = mark
+    best.held           = ns:GetCrestCountByTrack(prevCrestTrack)
+    -- Whether the cheaper crest is one this player is short of. It is
+    -- what decides the expensive case: 100 crests of something with
+    -- nowhere else to go is a different sentence from 100 crests of
+    -- something four other slots are waiting on.
+    best.spareIsCheap   = ns:IsCrestFree(prevCrestTrack)
+    return best
+end
+
 --- Every slot whose next crest purchase lands inside the overlap band.
 --- Returns the list, plus crestTrack -> total crests at stake.
 function ns:GetAllCrestWaste()
@@ -1686,6 +1835,94 @@ function ns:GetRecommendation(slotID)
                 freeRanks .. " free ranks to " .. (freeTarget or "?") ..
                 " — then " .. paidCost .. " " .. crestTrack .. " for the rest"
         end
+    end
+
+    -- ============================================================
+    -- RULE 0b: A spare piece for this slot pays with the cheaper crest
+    --
+    -- Directly after the free ranks, because it is the next best thing
+    -- to one: a rank bought with a crest the player is not short of.
+    -- See ns:GetMarkLaunder for why the price is almost never the one
+    -- the spare's rank suggests.
+    -- ============================================================
+    local launder = ns:GetMarkLaunder(slotID)
+    if launder then
+        local piece = launder.prevTrack .. " " .. launder.spare.rank ..
+            "/" .. launder.spare.maxRank
+
+        -- What the spare actually costs, said before anything else. The
+        -- whole reason this rule exists is that the number in the
+        -- player's head -- five ranks left, a hundred crests -- is
+        -- usually not the number the vendor would charge.
+        local price = launder.cost .. " " .. launder.prevCrestTrack
+        local net   = launder.saved - launder.cost
+
+        -- Waiting is only advice when there is something to wait FOR.
+        -- A spare with one rank above what the slot has seen is already
+        -- as cheap as this trade gets: a piece further up its track has
+        -- the same single rank to buy, so "hold out for a better one"
+        -- would be telling the player to wait for the same price.
+        local cheaperExists = launder.paidRanks > 1
+
+        local line
+        if net > 0 then
+            line = "The " .. piece .. " in your bags does this for " ..
+                price .. " — then this rank is free"
+        elseif launder.spareIsCheap then
+            line = price .. " on the " .. piece .. " in your bags saves " ..
+                launder.saved .. " " .. launder.crestTrack .. " — spend it, " ..
+                launder.prevCrestTrack .. " has nowhere better to go"
+        elseif cheaperExists then
+            line = "The " .. piece .. " in your bags would save " ..
+                launder.saved .. " " .. launder.crestTrack .. ", but costs " ..
+                price .. " — a " .. launder.prevTrack ..
+                " piece further up its track does it for less"
+        else
+            line = price .. " on the " .. piece .. " in your bags buys this "
+                .. "rank instead — an even trade, so spend whichever you "
+                .. "have more of"
+        end
+
+        local detail = {}
+        if launder.freeRanks > 0 then
+            detail[1] = "This slot has already reached " .. launder.mark ..
+                ", so " .. launder.freeRanks .. " of that piece's ranks cost "
+                .. "nothing and only the last " .. launder.paidRanks ..
+                (launder.paidRanks == 1 and " does" or " do") .. " — " ..
+                price .. " to take it to " .. launder.top .. "."
+        else
+            detail[1] = "Taking that piece to " .. launder.top .. " is " ..
+                launder.paidRanks ..
+                (launder.paidRanks == 1 and " rank" or " ranks") ..
+                " above anything this slot has held, so it is the full " ..
+                price .. "."
+        end
+
+        detail[#detail + 1] = "The slot has then reached " .. launder.top ..
+            ", and what you are wearing goes " .. launder.fromIlvl .. " to " ..
+            launder.savedTo .. " for nothing — " .. launder.saved .. " " ..
+            launder.crestTrack .. " you keep."
+
+        if net < 0 and not launder.spareIsCheap and cheaperExists then
+            -- The one place this advice is genuinely a judgement call,
+            -- so it is left as one. Waiting is cheaper; waiting is also
+            -- how a player spends the week NOT wearing an item level
+            -- that was there for the taking, and nothing here can price
+            -- which of those matters more today.
+            detail[#detail + 1] = "You hold " .. launder.held .. " " ..
+                launder.prevCrestTrack .. ", and a " .. launder.prevTrack ..
+                " piece further up its track reaches " .. launder.top ..
+                " for fewer of them. Worth waiting for — but if you would "
+                .. "rather have the item level now, " .. price ..
+                " is the whole price."
+        else
+            detail[#detail + 1] = "That piece stops at " .. launder.top ..
+                " for good; the one you are wearing carries on to " ..
+                ns:GetMaxIlvlForTrack(track) .. ", which is why it is still "
+                .. "the one to keep."
+        end
+
+        return ns.RECOMMEND.USE_LOWER_TRACK, line, detail
     end
 
     -- ============================================================
