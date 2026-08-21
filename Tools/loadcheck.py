@@ -1433,6 +1433,39 @@ def main():
         end
     """)(ns)
 
+    # Sub-tabs, asked for the way the shell asks for them: before the
+    # page exists.
+    #
+    # Shell:Mount restores the saved tab and draws the strip BEFORE it
+    # calls Build, so a lazily-built page has to answer this with no
+    # frames at all. Get it wrong and the strip is empty on the first
+    # visit and correct on the second -- which is a bug that hides from
+    # everyone who checks it twice.
+    #
+    # Read here for the same reason as the snapshot above: any later and
+    # the render phase has already built the pages.
+    subtabs_at_load = L.eval("""
+        function(ns)
+            local out = {}
+            for _, page in ipairs({
+                { "consumables", "ConsumablesFrame", "GetConsumablesTabs" },
+                { "loot",        "LootBrowserFrame", "GetLootBrowserTabs" },
+                { "mythicplus",  "MythicPlusFrame",  "GetMythicPlusTabs" },
+            }) do
+                local id, frameKey, fn = page[1], page[2], page[3]
+                local built = ns[frameKey] ~= nil
+                local n = 0
+                if type(ns[fn]) == "function" then
+                    local ok, tabs = pcall(ns[fn], ns)
+                    if ok and type(tabs) == "table" then n = #tabs end
+                end
+                out[#out + 1] = id .. ":" .. (built and "built" or "lazy")
+                    .. ":" .. n
+            end
+            return table.concat(out, " ")
+        end
+    """)(ns)
+
     # ── Phase 2: actually draw the pages ────────────────────────
     #
     # Loading proves the files parse and their top-level code runs. It
@@ -1487,6 +1520,10 @@ def main():
         ("CreateLootBrowserFrame",    None, None, None),
         ("BisUI.BuildInto",           host, None, None),
         ("BisUI.Refresh",             None, None, None),
+        # Built lazily. Without this the two calls below read
+        # "absent", which is not a failure, and the page silently
+        # loses all of its coverage.
+        ("CreateConsumablesFrame",    None, None, None),
         ("SetConsumablesAppMode",     True, 760, 520),
         ("RefreshConsumables",        None, None, None),
         # Also built lazily now. Without this the app-mode call below
@@ -5960,6 +5997,38 @@ def main():
     else:
         print("  FAIL gear window lazy build: %s" % lazy)
         failures.append(("gear window lazy build", str(lazy)))
+
+    # Every lazily-built page still answers the shell's sub-tab question.
+    #
+    # This is the one way a lazy page fails silently. Shell:Mount asks
+    # for the tab list, restores the saved tab and draws the strip, and
+    # only then calls Build -- so a page whose tab function moved inside
+    # its own builder returns nothing, the strip comes up empty, and the
+    # next visit is fine because by then the page exists.
+    #
+    # Consumables is the page this was written for: hoisting TAB_DEFS and
+    # GetConsumablesTabs above the builder is the only reason its strip
+    # survives being lazy. The other two are checked because they are the
+    # same shape and nothing else would notice them breaking.
+    subtabs = L.eval("""
+        function(ns, atLoad)
+            for entry in atLoad:gmatch("%S+") do
+                local id, state, n = entry:match("(%w+):(%w+):(%d+)")
+                n = tonumber(n)
+                if state == "lazy" and n == 0 then
+                    return id .. " answers no sub-tabs until it is built, "
+                        .. "so the shell draws an empty strip on the first "
+                        .. "visit and a correct one on the second"
+                end
+            end
+            return "ok " .. atLoad
+        end
+    """)(ns, subtabs_at_load)
+    if str(subtabs).startswith("ok"):
+        print("  ok   sub-tabs before build: %s" % str(subtabs)[3:])
+    else:
+        print("  FAIL sub-tabs before build: %s" % subtabs)
+        failures.append(("sub-tabs before build", str(subtabs)))
 
 
     # The character rail: section rules, and the crest track colours.

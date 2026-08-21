@@ -140,6 +140,7 @@ Adapt({
     id = "consumables", label = "Consumables", order = 40,
     accent = { 1.0, 0.0, 1.0 },
     frameKey = "ConsumablesFrame",
+    create = "CreateConsumablesFrame",
     appMode = "SetConsumablesAppMode",
     refresh = "RefreshConsumables",
     subTabs = function()

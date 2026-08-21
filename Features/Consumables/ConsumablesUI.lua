@@ -97,6 +97,65 @@ end
 ------------------------------------------------------------
 -- Main frame
 ------------------------------------------------------------
+------------------------------------------------------------
+-- The tab list, and why it lives up here
+--
+-- Shell:Mount asks a page for its sub-tabs BEFORE it builds it: it
+-- restores the saved tab, draws the strip, and only then calls Build.
+-- Since the page below is built on first open, anything the shell needs
+-- in that window has to exist without it.
+--
+-- Get this wrong and the failure hides: the strip is empty on the first
+-- visit and correct on the second, because by then the page exists.
+------------------------------------------------------------
+local TAB_DEFS = {
+    { id = "enchants",     label = "Enchants",     color = { 0.0, 1.0, 0.3 } },
+    { id = "gems",         label = "Gems",         color = { 0.64, 0.21, 0.93 } },
+    { id = "consumables",  label = "Consumables",  color = { 1.0, 0.53, 0.0 } },
+}
+
+--- The views this page offers.
+---
+--- The shell owns the sub-tab strip; this page was drawing its own row a
+--- few pixels from where the shell puts one, which is two tab rows on a
+--- single screen. Its own row still serves the standalone window and is
+--- hidden in app mode.
+---
+--- Reads TAB_DEFS and nothing else, which is what lets it answer before
+--- a single frame exists. Its partner ns:SetConsumablesTab stays inside
+--- the builder: that one drives real tab buttons, and the shell only
+--- calls it on a click, long after Build.
+function ns:GetConsumablesTabs()
+    local out = {}
+    for i, def in ipairs(TAB_DEFS) do
+        out[i] = { id = def.id, label = def.label, width = 110 }
+    end
+    return out
+end
+
+------------------------------------------------------------
+-- The page itself, built on first open.
+--
+-- Everything below this line used to run at load: 32 frames and 77
+-- regions -- the panel, the filter bar with its two dropdowns, and a tab
+-- button, scroll frame and container for each of the three tabs -- for a
+-- page that has to be clicked to be seen.
+--
+-- Wrapped whole rather than picked apart. The file is one construction
+-- script from here down, with no events and no registration, so the
+-- smallest honest change is to stop running it until somebody asks. Its
+-- 73 locals become the function's, which is why they were counted first:
+-- Lua allows 200 per function.
+--
+-- ns:SetConsumablesAppMode, ns:SetConsumablesTab and
+-- ns:RefreshConsumables are all defined in here, and that is correct.
+-- Core\ShellPages.lua looks each of them up BY NAME after running the
+-- creator, and every other caller guards on them. A page that does not
+-- exist has no app mode, no current tab and nothing to refresh.
+------------------------------------------------------------
+function ns:CreateConsumablesFrame()
+    if ns.ConsumablesFrame then return end
+
 local frame = CreateFrame("Frame", "YippYappConsumablesFrame", UIParent, "BackdropTemplate")
 frame:SetSize(PANEL_WIDTH, PANEL_HEIGHT)
 frame:SetPoint("CENTER", 200, 0)
@@ -506,12 +565,6 @@ end
 ------------------------------------------------------------
 local currentTab = "enchants"
 
-local TAB_DEFS = {
-    { id = "enchants",     label = "Enchants",     color = { 0.0, 1.0, 0.3 } },
-    { id = "gems",         label = "Gems",         color = { 0.64, 0.21, 0.93 } },
-    { id = "consumables",  label = "Consumables",  color = { 1.0, 0.53, 0.0 } },
-}
-
 -- Assigned, not declared: both are forward-declared up by
 -- SetConsumablesAppMode, which reads them. Re-declaring them local here
 -- would shadow those and leave the function looking at nil again.
@@ -589,20 +642,6 @@ for id, btn in pairs(tabButtons) do
 end
 
 UpdateTabs()
-
---- The views this page offers, and how to switch them.
----
---- The shell owns the sub-tab strip; this page was drawing its own row a
---- few pixels from where the shell puts one, which is two tab rows on a
---- single screen. Its own row still serves the standalone window and is
---- hidden in app mode.
-function ns:GetConsumablesTabs()
-    local out = {}
-    for i, def in ipairs(TAB_DEFS) do
-        out[i] = { id = def.id, label = def.label, width = 110 }
-    end
-    return out
-end
 
 function ns:SetConsumablesTab(id)
     if not tabButtons[id] or currentTab == id then return end
@@ -1554,4 +1593,5 @@ function ns:ToggleConsumablesPopout()
     -- open behind it.
     f:Raise()
     ns:RefreshConsumablesPopout()
+end
 end
