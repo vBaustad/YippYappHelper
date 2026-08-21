@@ -119,6 +119,11 @@ Core\ShellPages.lua
 # Reads Features\Gear\ClassGuideData.lua, loaded above.
 Features\Gear\BisUI.lua
 
+# Dungeon teleports. Ahead of Mythic+ because that page reads the same
+# table for its per-dungeon teleport buttons; the Teleports page below
+# only draws it.
+Features\Teleports\TeleportData.lua
+
 Features\MythicPlus\MythicPlusData.lua
 Features\MythicPlus\MythicPlusUI.lua
 Features\MythicPlus\CompletionPopup.lua

@@ -634,6 +634,7 @@ function GetSpecializationInfoByID() return 102, "Balance", "", 136096, "DAMAGER
 function GetItemInfo() return nil end
 function GetInventoryItemID() return nil end
 function GetInventoryItemLink() return nil end
+function UnitFactionGroup() return "Alliance" end
 function GetDetailedItemLevelInfo() return 0 end
 function InCombatLockdown() return false end
 -- In a guild, so the Guild tab draws its "waiting for replies" empty
@@ -5679,7 +5680,13 @@ def main():
             local h = w._scripts and w._scripts.OnEvent
             if not h then return "no OnEvent handler registered" end
 
-            local KINGS_REST = 1289778
+            -- Asked for, not written down. A hardcoded id here is a
+            -- second copy of the teleport table, and the last two
+            -- copies of it disagreed with the game for a whole season.
+            local spells = ns.TELEPORT_SPELLS_BY_NAME
+                and ns.TELEPORT_SPELLS_BY_NAME["Kings' Rest"]
+            local KINGS_REST = spells and spells[1]
+            if not KINGS_REST then return "no teleport spell for Kings' Rest" end
             local tile = f._tilesByDungeon["Kings' Rest"]
             if not tile then return "no tile registered for Kings' Rest" end
 
@@ -5729,6 +5736,134 @@ def main():
     else:
         print("  FAIL teleport cast: %s" % cast)
         failures.append(("teleport cast", str(cast)))
+
+    # The teleport table, checked for the shapes of being wrong that a
+    # human reading it cannot see.
+    #
+    # Eight spell ids in here were invented -- a tidy run of
+    # 1289772..1289782 that exists in no addon and no game -- and they
+    # survived because they were plausible, contiguous, and written down
+    # twice. Nothing offline could tell an id that works from one that
+    # does not, and it still cannot: only the client knows. What it CAN
+    # tell is that the two copies are gone, that every season name
+    # resolves, and that no two dungeons claim the same spell.
+    teleports = L.eval("""
+        function(ns)
+            local groups = ns.TELEPORT_GROUPS
+            if not (groups and #groups > 0) then return "no teleport table" end
+
+            -- The comment above CURRENT_SEASON has claimed for a long
+            -- time that a test asserts this. There was no such test, so
+            -- a mistyped season name would have silently shrunk the
+            -- section of the page people look at first.
+            local missing = ns.TELEPORT_MISSING_SEASON or {}
+            if #missing > 0 then
+                return "season names with no canonical entry: "
+                    .. table.concat(missing, ", ")
+            end
+
+            local owner, count = {}, 0
+            for _, group in ipairs(groups) do
+                for _, entry in ipairs(group.entries) do
+                    if not (entry.ids and #entry.ids > 0) then
+                        return entry.name .. " has no spell at all"
+                    end
+                    for _, id in ipairs(entry.ids) do
+                        if type(id) ~= "number" or id <= 0 then
+                            return entry.name .. " has a spell id of "
+                                .. tostring(id)
+                        end
+                        -- Two dungeons sharing a spell is either a
+                        -- copy-paste or a teleport filed twice, and it
+                        -- makes GetDungeonForTeleportSpell answer with
+                        -- whichever it saw last.
+                        if owner[id] and owner[id] ~= entry.name then
+                            return "spell " .. id .. " is claimed by both "
+                                .. owner[id] .. " and " .. entry.name
+                        end
+                        owner[id] = entry.name
+                        count = count + 1
+                    end
+                end
+            end
+
+            -- Both pages read the same table now. The Mythic+ page asks
+            -- by the name C_ChallengeMode gives it, so every canonical
+            -- name and every Mythic+ alias has to resolve through it --
+            -- that lookup returning nil is exactly the dead button this
+            -- was all about.
+            local byName = ns.TELEPORT_SPELLS_BY_NAME
+            if not byName then return "no name lookup for the Mythic+ page" end
+            for _, group in ipairs(groups) do
+                for _, entry in ipairs(group.entries) do
+                    if byName[entry.name] ~= entry.ids then
+                        return entry.name .. " does not resolve to its own "
+                            .. "spells by name"
+                    end
+                    for _, alias in ipairs(entry.mplus or {}) do
+                        if byName[alias] ~= entry.ids then
+                            return "the Mythic+ name '" .. alias
+                                .. "' does not resolve to " .. entry.name
+                        end
+                    end
+                end
+            end
+
+            -- And the reverse map covers every candidate, not only the
+            -- first: the caller is naming a cast that already started.
+            local bySpell = ns.TELEPORT_NAME_BY_SPELL
+            if not bySpell then return "no spell lookup" end
+            for id, name in pairs(owner) do
+                if bySpell[id] ~= name then
+                    return "spell " .. id .. " maps back to "
+                        .. tostring(bySpell[id]) .. ", not " .. name
+                end
+            end
+
+            -- A faction pair is two spells for one dungeon and the
+            -- player's own has to come first, because that is the icon a
+            -- LOCKED tile draws.
+            local boralus
+            for _, group in ipairs(groups) do
+                for _, entry in ipairs(group.entries) do
+                    if entry.ally or entry.horde then
+                        boralus = entry
+                        if #entry.ids ~= 2 then
+                            return entry.name .. " is a faction pair with "
+                                .. #entry.ids .. " spell(s)"
+                        end
+                        local mine = (UnitFactionGroup("player") == "Horde")
+                            and entry.horde or entry.ally
+                        local theirs = (mine == entry.ally) and entry.horde
+                            or entry.ally
+                        if entry.ids[1] ~= mine then
+                            return entry.name .. " lists the other faction's "
+                                .. "spell first"
+                        end
+                        -- Both still present: the "do you know it" test
+                        -- must not depend on having read the faction
+                        -- right, only the locked tile's icon does.
+                        if entry.ids[2] ~= theirs then
+                            return entry.name .. " dropped the other "
+                                .. "faction's spell"
+                        end
+                    end
+                end
+            end
+            if not boralus then
+                return "no faction-split teleport survived the table"
+            end
+
+            return "ok " .. count
+        end
+    """)(ns)
+    if str(teleports).startswith("ok"):
+        print("  ok   teleports: one table, %s spell ids, no dungeon sharing "
+              "one, every season name and Mythic+ alias resolves"
+              % str(teleports)[3:])
+    else:
+        print("  FAIL teleports: %s" % teleports)
+        failures.append(("teleports", str(teleports)))
 
     # The character rail: section rules, and the crest track colours.
     #

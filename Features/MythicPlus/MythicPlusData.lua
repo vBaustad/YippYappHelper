@@ -929,104 +929,18 @@ end
 -- Maps challengeModeMapID -> teleport spellID.
 -- These must be updated each season when the dungeon pool rotates.
 ------------------------------------------------------------
--- Teleport spells keyed by dungeon name (matched against C_ChallengeMode names)
--- Sourced from Porter addon Data.lua — covers all known Hero's Path teleports
--- Values are a spell ID, or a list of candidates in preference order.
+-- Spell candidates by dungeon name, from Features\Teleports\TeleportData.lua.
 --
--- Several dungeons carry more than one teleport spell: legacy dungeons
--- reissue a new one when they rejoin a season (Kings' Rest exists as both
--- the BfA 272261 and the Midnight S2 1289778), so which one a given
--- character knows depends on when they earned it. Candidates are resolved
--- against IsSpellKnown at query time.
-local DUNGEON_TELEPORT_BY_NAME = {
-    -- Midnight Season 2
-    ["Altar of Fangs"]           = 1289772,
-    ["Den of Nalorakk"]          = 1289773,
-    ["The Blinding Vale"]        = 1289776,
-    ["Murder Row"]               = { 1289775, 1248186, 1253942 },
-    ["Voidscar Arena"]           = { 1289777, 1286119 },
-    ["Kings' Rest"]              = { 1289778, 272261 },
-    ["Temple of Sethraliss"]     = { 1289782, 272267 },
-    ["Ruby Life Pools"]          = { 1289780, 393256 },
-    -- Midnight Season 1
-    ["Magisters' Terrace"]       = 1254572,
-    ["Windrunner Spire"]         = 1254400,
-    ["Nexus-Point Xenas"]        = 1254563,
-    ["Maisara Caverns"]          = 1254559,
-    ["Pit of Saron"]             = 1254555,
-    ["Seat of the Triumvirate"]  = 1254551,
-    ["Skyreach"]                 = 159898,
-    ["Algeth'ar Academy"]        = 393273,
-    -- TWW Season 3
-    ["Operation: Floodgate"]     = 1216786,
-    ["Eco-Dome Al'dani"]         = 1237215,
-    ["Ara-Kara, City of Echoes"] = 445417,
-    ["The Dawnbreaker"]          = 445414,
-    ["Priory of the Sacred Flame"] = 445444,
-    ["Tazavesh: Streets of Wonder"] = 367416,
-    ["Tazavesh: So'leah's Gambit"] = 367416,
-    ["Halls of Atonement"]       = 354465,
-    -- TWW legacy (S1/S2)
-    ["City of Threads"]          = 445416,
-    ["The Stonevault"]           = 445269,
-    ["Cinderbrew Meadery"]       = 445440,
-    ["Darkflame Cleft"]          = 445441,
-    ["The Rookery"]              = 445443,
-    -- Dragonflight
-    ["Brackenhide Hollow"]       = 393267,
-    ["Halls of Infusion"]        = 393283,
-    ["Neltharus"]                = 393276,
-    ["Uldaman: Legacy of Tyr"]   = 393222,
-    ["Dawn of the Infinite"]     = 424197,
-    ["The Azure Vault"]          = 393279,
-    ["The Nokhud Offensive"]     = 393262,
-    -- Shadowlands
-    ["The Necrotic Wake"]        = 354462,
-    ["Plaguefall"]               = 354463,
-    ["Mists of Tirna Scithe"]    = 354464,
-    ["Halls of Atonement"]       = 354465,
-    ["Spires of Ascension"]      = 354466,
-    ["Theater of Pain"]          = 354467,
-    ["De Other Side"]            = 354468,
-    ["Sanguine Depths"]          = 354469,
-    -- BfA
-    ["Freehold"]                 = 410071,
-    ["The Underrot"]             = 410074,
-    ["Waycrest Manor"]           = 424167,
-    ["Atal'Dazar"]               = 424187,
-    ["Operation: Mechagon"]      = 373274,
-    ["Siege of Boralus"]         = 445418,
-    ["The MOTHERLODE!!"]         = 272268,
-    -- Legion
-    ["Neltharion's Lair"]        = 410078,
-    ["Black Rook Hold"]          = 424153,
-    ["Darkheart Thicket"]        = 424163,
-    ["Halls of Valor"]           = 393764,
-    ["Court of Stars"]           = 393766,
-    ["Return to Karazhan"]       = 373262,
-    -- WoD
-    ["The Everbloom"]            = 159901,
-    ["Grimrail Depot"]           = 159900,
-    ["Iron Docks"]               = 159896,
-    ["Auchindoun"]               = 159897,
-    ["Bloodmaul Slag Mines"]     = 159895,
-    ["Shadowmoon Burial Grounds"] = 159899,
-    ["Upper Blackrock Spire"]    = 159902,
-    -- MoP
-    ["Temple of the Jade Serpent"] = 131204,
-    ["Stormstout Brewery"]       = 131205,
-    ["Shado-Pan Monastery"]      = 131206,
-    ["Gate of the Setting Sun"]  = 131225,
-    ["Mogu'shan Palace"]         = 131222,
-    ["Siege of Niuzao Temple"]   = 131228,
-    ["Scholomance"]              = 131232,
-    ["Scarlet Halls"]            = 131231,
-    ["Scarlet Monastery"]        = 131229,
-    -- Cata
-    ["The Vortex Pinnacle"]      = 410080,
-    ["Throne of the Tides"]      = 424142,
-    ["Grim Batol"]               = 445424,
-}
+-- This file used to carry its own copy of that mapping. Two tables of
+-- the same thing is how eight invented spell ids survived in both of
+-- them at once, agreeing with each other and with nothing else.
+--
+-- Read through a function rather than captured at load: TeleportData
+-- loads after this file, and every caller here runs at query time.
+local function TeleportSpellsFor(name)
+    local by = ns.TELEPORT_SPELLS_BY_NAME
+    return by and by[name]
+end
 
 -- Build mapID -> spellID cache on first use
 local teleportCache = nil
@@ -1056,17 +970,21 @@ local function GetTeleportCache()
     local cache = {}
     for _, mapID in ipairs(maps) do
         local name = C_ChallengeMode.GetMapUIInfo(mapID)
-        if name and DUNGEON_TELEPORT_BY_NAME[name] then
-            cache[mapID] = DUNGEON_TELEPORT_BY_NAME[name]
+        local spells = name and TeleportSpellsFor(name)
+        if spells then
+            cache[mapID] = spells
         end
     end
     teleportCache = cache
     return teleportCache
 end
 
--- Resolve a table entry (spell ID or candidate list) to the ID this
--- character actually has. Falls back to the first candidate so the UI can
--- still show a greyed-out icon for a teleport that is not unlocked yet.
+-- Resolve a candidate list to the ID this character actually has. Falls
+-- back to the first so the UI can still show a greyed-out icon for a
+-- teleport that is not unlocked yet.
+--
+-- Always a list now. The old table mixed bare numbers and lists, and the
+-- second branch of every caller below existed only to cope with that.
 local function ResolveTeleport(entry)
     if type(entry) ~= "table" then return entry end
     for _, spellID in ipairs(entry) do
@@ -1075,32 +993,11 @@ local function ResolveTeleport(entry)
     return entry[1], false
 end
 
--- The reverse of DUNGEON_TELEPORT_BY_NAME: which dungeon a teleport
--- spell belongs to.
---
--- Covers every candidate ID rather than only the one this character
--- knows. The caller is identifying a cast that has already started, and
--- by then the client has said which spell it is -- resolving against
--- IsSpellKnown there would be answering a question nobody asked.
-local teleportBySpell = nil
-
-local function GetTeleportBySpell()
-    if teleportBySpell then return teleportBySpell end
-    teleportBySpell = {}
-    for name, entry in pairs(DUNGEON_TELEPORT_BY_NAME) do
-        if type(entry) == "table" then
-            for _, spellID in ipairs(entry) do teleportBySpell[spellID] = name end
-        else
-            teleportBySpell[entry] = name
-        end
-    end
-    return teleportBySpell
-end
-
 --- The dungeon a teleport spell travels to, or nil if it is not one.
 function ns:GetDungeonForTeleportSpell(spellID)
     if not spellID then return nil end
-    return GetTeleportBySpell()[spellID]
+    local by = ns.TELEPORT_NAME_BY_SPELL
+    return by and by[spellID] or nil
 end
 
 function ns:GetDungeonTeleportSpell(mapID)
@@ -1110,9 +1007,8 @@ end
 function ns:CanTeleportToDungeon(mapID)
     local entry = GetTeleportCache()[mapID]
     if not entry then return false end
-    local spellID, known = ResolveTeleport(entry)
-    if known ~= nil and type(entry) == "table" then return known end
-    return spellID and IsSpellKnown(spellID) or false
+    local _, known = ResolveTeleport(entry)
+    return known or false
 end
 
 function ns:TeleportToDungeon(mapID)
