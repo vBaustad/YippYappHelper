@@ -166,8 +166,10 @@ end
 -- here, and the one move that spends the crest a player has too many of
 -- could not be advised at all.
 --
--- Only pieces with a live upgrade track and a rank left to buy come
--- back. A finished piece has nothing left to give a slot it is not in.
+-- Only pieces carrying this season's upgrade track come back, finished
+-- ones included. A Champion 6/6 in a bag has no rank left to buy and is
+-- still the biggest thing in the bags: bound, it has taken the slot to
+-- 308, and everything the slot holds is free up to there.
 ------------------------------------------------------------
 
 --- Which equipment slots an item's inventory type can be worn in.
@@ -235,7 +237,7 @@ local function ScanBagSpares()
                 local levels = found and found.track and ns.GEAR_TRACKS[found.track]
                 local rank = found and found.rank
                 local maxRank = found and found.maxRank
-                if levels and rank and maxRank and rank < maxRank then
+                if levels and rank and maxRank and rank <= maxRank then
                     local link = C.GetContainerItemLink and C.GetContainerItemLink(bag, slot)
                     local ilvl
                     if link and GetDetailedItemLevelInfo then
@@ -258,6 +260,16 @@ local function ScanBagSpares()
                             ilvl    = ilvl,
                             crafted = found.crafted,
                             unbound = found.unbound or false,
+                            -- Rings, trinkets and one-handers go in two
+                            -- slots, and the pair keeps ONE memory
+                            -- between them -- one that follows the
+                            -- lower of the two. So a third piece
+                            -- better than one of them changes nothing:
+                            -- the lower of the top two is still the
+                            -- lower of the top two. Anything reasoning
+                            -- about what a piece did to a slot has to
+                            -- know this and decline.
+                            shared  = #slots > 1,
                         }
                         for _, slotID in ipairs(slots) do
                             out[slotID] = out[slotID] or {}
@@ -271,9 +283,13 @@ local function ScanBagSpares()
     return out
 end
 
---- Upgradeable pieces in the bags that belong in this slot.
+--- Pieces in the bags that belong in this slot.
 ---
 --- Always a table, never nil: every caller wants to iterate it.
+---
+--- Callers that are pricing a spare have to skip the finished ones
+--- themselves -- a piece at its last rank cannot be bought any further,
+--- but it still counts for what it has already done to the slot.
 function ns:GetBagSpares(slotID)
     if not bagSpareCache then
         bagSpareCache = ScanBagSpares()
@@ -490,26 +506,50 @@ end
 -- Restored in ADDON_LOADED, written through on every successful query.
 ns.watermarkCache = {}
 
+--- Ask the client how high this slot has been. Zero for no answer.
+---
+--- Both of these take an ITEM, not a location:
+---
+---   bad argument #1 to '?' (Usage: local characterHighWatermark,
+---   accountHighWatermark = C_ItemUpgrade.GetHighWatermarkForItem(itemInfo))
+---
+--- itemInfo is the link/name/id form. An ItemLocation is what nearly
+--- everything else in C_Item wants, which is how it got in here, and
+--- passing one does not return zero -- it THROWS. Wrapped in the pcall
+--- three lines down, a throw and an honest "this slot has been nowhere"
+--- are the same value, so the whole free-rank half of the addon was
+--- switched off in a way nothing could see: /yh debug printed wm:none
+--- down all sixteen slots and every row priced its ranks as paid.
+---
+--- Which is the real lesson, and it is in the harness now: the stub
+--- used to accept the location happily, so no check could ever have
+--- caught this. It throws like the client does now.
 local function QueryWatermark(slotID)
     if not C_ItemUpgrade then return 0 end
 
-    local itemLocation = ItemLocation:CreateFromEquipmentSlot(slotID)
-    if not C_Item.DoesItemExist(itemLocation) then return 0 end
+    -- GetSlotInfo rather than GetInventoryItemLink so a slot that has
+    -- been stood in for -- by the harness, or by anything else that
+    -- answers for gear -- is asked the same question as a real one.
+    local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
+    local itemLink = info and info.link
+    if not itemLink then return 0 end
 
-    -- Try item-based watermark first
     if C_ItemUpgrade.GetHighWatermarkForItem then
-        local ok, charMark, accountMark = pcall(C_ItemUpgrade.GetHighWatermarkForItem, itemLocation)
+        local ok, charMark, accountMark =
+            pcall(C_ItemUpgrade.GetHighWatermarkForItem, itemLink)
         if ok then
             local mark = math.max(charMark or 0, accountMark or 0)
             if mark > 0 then return mark end
         end
     end
 
-    -- Fallback: slot-based watermark
+    -- Fallback: whatever redundancy slot this item belongs to. Rings and
+    -- trinkets answer here as a pair rather than one slot each.
     if C_ItemUpgrade.GetHighWatermarkSlotForItem and C_ItemUpgrade.GetHighWatermarkForSlot then
-        local ok1, redundancySlot = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem, itemLocation)
+        local ok1, redundancySlot = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem, itemLink)
         if ok1 and redundancySlot then
-            local ok2, charMark, accountMark = pcall(C_ItemUpgrade.GetHighWatermarkForSlot, redundancySlot)
+            local ok2, charMark, accountMark =
+                pcall(C_ItemUpgrade.GetHighWatermarkForSlot, redundancySlot)
             if ok2 then
                 return math.max(charMark or 0, accountMark or 0)
             end
@@ -557,15 +597,125 @@ function ns:RefreshWatermarks()
     end
 end
 
-function ns:GetFreeUpgradeIlvl(slotID)
-    -- Try live query first
+--- The highest item level a SOULBOUND piece in the bags has given this
+--- slot.
+---
+--- Binding is what sets the level, and a piece binds in a bag as
+--- readily as on the body: letting a drop's trade timer run out does it
+--- without the player touching anything. So a bound spare sitting above
+--- what the slot is said to have reached is not a contradiction, it is
+--- the client not having been asked since the drop landed -- the live
+--- query wants the upgrade vendor open, and away from one this falls
+--- back to a value written before the loot.
+---
+--- Which is the whole bug: a pair of boots better than the worn ones
+--- lands, binds, and the free rank it just handed the worn pair goes
+--- unmentioned until the player next stands at a vendor -- the one
+--- place they no longer need to be told.
+---
+--- Slots that keep ONE memory between the two of them.
+---
+--- Which changes what it takes to move it: the shared line follows the
+--- LOWER of the pair, so one good ring is worth nothing and two are
+--- worth everything. Exactly the difference between a 295 trinket
+--- landing on a 292 and a 292 -- top two are 295 and 292, the lower is
+--- the 292 it always was -- and a SECOND 295 landing after it, where
+--- the top two are 295 and 295 and both worn trinkets go free to 295.
+---
+--- Weapons are deliberately not in here. Whether main hand and off hand
+--- share a line is not something this addon has established, and the
+--- one-handers that could go in either are declined below instead.
+local PAIRED_SLOTS = {
+    [11] = { 11, 12 },  -- rings
+    [12] = { 11, 12 },
+    [13] = { 13, 14 },  -- trinkets
+    [14] = { 13, 14 },
+}
+
+--- How high this slot is provably known to have been, from pieces the
+--- addon can actually see: what is worn in it, and anything bound
+--- sitting in the bags.
+---
+--- A floor and never a ceiling. It counts only pieces the tooltip
+--- positively showed as bound -- an unbound one has given the slot
+--- nothing yet, which is a different rule (see ns:GetBagLift) -- and
+--- there are always pieces it cannot see, because a slot remembers
+--- things sold, disenchanted or left behind three weeks ago.
+---
+--- On a paired slot it takes the SECOND highest, which is what "follows
+--- the lower of the pair" means once both slots and the bags are one
+--- population. On a single slot the second highest of one piece would
+--- be nothing, so it takes the highest.
+local function BoundBagFloor(slotID)
+    local pair = PAIRED_SLOTS[slotID]
+    local seen = {}
+
+    -- Worn counts. It is bound by definition, and on a paired slot the
+    -- twin's piece is half of what sets the line.
+    for _, s in ipairs(pair or { slotID }) do
+        local info = ns.GetSlotInfo and ns:GetSlotInfo(s)
+        if info and info.ilvl and info.ilvl > 0 then
+            seen[#seen + 1] = info.ilvl
+        end
+    end
+
+    for _, spare in ipairs(ns:GetBagSpares(slotID)) do
+        -- spare.shared is the one-hander case: it could go in either
+        -- hand and nothing here knows which line it moved. On a slot
+        -- that is genuinely paired, shared is the whole point.
+        if not spare.unbound and (pair or not spare.shared)
+            and spare.ilvl and spare.ilvl > 0 then
+            seen[#seen + 1] = spare.ilvl
+        end
+    end
+
+    table.sort(seen, function(a, b) return a > b end)
+    return seen[pair and 2 or 1] or 0
+end
+
+--- What the CLIENT has said this slot reached. Zero for "it has not
+--- said".
+---
+--- Kept separate from ns:GetFreeUpgradeIlvl below because the two
+--- answers are not interchangeable, and which one a caller wants
+--- depends entirely on which direction being wrong would hurt.
+---
+--- This is the one to use before quoting a price. A price is a
+--- statement about what is ABOVE the line, and a floor cannot support
+--- one: guess the line too low and the row confidently charges for
+--- ranks the vendor would hand over. Silence is the right answer to a
+--- price nobody read.
+function ns:GetMarkRead(slotID)
     local mark = QueryWatermark(slotID)
     if mark > 0 then
         RememberWatermark(slotID, mark)
         return mark
     end
-    -- Fall back to cached value
     return ns.watermarkCache[slotID] or 0
+end
+
+--- How high this slot is KNOWN to have been. Never an over-statement.
+---
+--- The client's answer where there is one, raised by anything bound in
+--- the bags that says otherwise -- and standing on the bags alone when
+--- the client says nothing at all, which on a character that has not
+--- been to an upgrade vendor is every slot it has.
+---
+--- Safe in that direction and only that direction. Everything built on
+--- this asks "is this rank at or under the line", and a line that is
+--- too low hands out too FEW free ranks -- which is where the addon
+--- already was, so it cannot make anything worse. Nothing here may be
+--- read as "and everything above the line is paid": see ns:GetMarkRead.
+function ns:GetFreeUpgradeIlvl(slotID)
+    local mark = ns:GetMarkRead(slotID)
+
+    -- Deliberately not written through to SavedVariables. Everything
+    -- else in that cache came from the client; this is inference off a
+    -- tooltip, and inference that outlives the bag it was read from is
+    -- inference nothing can correct.
+    local floor = BoundBagFloor(slotID)
+    if floor > mark then return floor end
+    return mark
 end
 
 -- Anchor the helper frame relative to upgrade vendor or free-floating
@@ -1430,12 +1580,63 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
                     upStr = upInfo.track .. " " .. upInfo.currUpgrade .. "/" .. upInfo.maxUpgrade .. " (ilvl " .. upInfo.currIlvl .. "->" .. upInfo.maxIlvl .. ")"
                 end
                 local risk = ns:GetReplacementRisk(slotInfo.slot, info.ilvl)
-                local watermark = ns:GetFreeUpgradeIlvl(slotInfo.slot)
-                local wmStr = watermark > 0 and ("wm:" .. watermark) or "wm:none"
+                -- Both numbers, because the gap between them is the
+                -- thing worth seeing: what the client said, and what
+                -- the bags prove regardless.
+                local read = ns:GetMarkRead(slotInfo.slot)
+                local known = ns:GetFreeUpgradeIlvl(slotInfo.slot)
+                local wmStr = read > 0 and ("wm:" .. read) or "wm:none"
+                if known > read then wmStr = wmStr .. " (bags:" .. known .. ")" end
                 print(string.format("  %s: %s | %s | risk: %s | %s | %s",
                     slotInfo.name, upStr, wmStr, risk, rec.label, reason))
             end
         end
+
+        -- Why the marks are missing, when they are.
+        --
+        -- Every free-rank rule in the addon is downstream of one query,
+        -- and a whole character reading wm:none is not a gear problem,
+        -- it is that query answering nothing. Which of the three ways
+        -- it can answer nothing -- absent, erroring, or returning a
+        -- flat zero -- decides whether this is fixable here at all, and
+        -- there is no way to tell them apart from the outside.
+        print("--- High-water query (Feet) ---")
+        if not C_ItemUpgrade then
+            print("  C_ItemUpgrade: MISSING")
+        else
+            local info = ns:GetSlotInfo(8)
+            local link = info and info.link
+            print("  item link: " .. tostring(link and link:gsub("|", "||")))
+            print("  vendor open: " .. tostring(ns.upgradeVendorOpen or false))
+            local function try(name, fn, arg)
+                if type(fn) ~= "function" then
+                    print("  " .. name .. ": MISSING")
+                    return
+                end
+                local r = { pcall(fn, arg) }
+                if not r[1] then
+                    print("  " .. name .. ": ERROR " .. tostring(r[2]))
+                    return
+                end
+                local out = {}
+                for i = 2, math.max(#r, 2) do out[#out + 1] = tostring(r[i]) end
+                print("  " .. name .. ": " .. (table.concat(out, ", ")))
+            end
+            try("GetHighWatermarkForItem", C_ItemUpgrade.GetHighWatermarkForItem, link)
+            try("GetHighWatermarkSlotForItem", C_ItemUpgrade.GetHighWatermarkSlotForItem, link)
+            local okSlot, redundancy = pcall(function()
+                return C_ItemUpgrade.GetHighWatermarkSlotForItem
+                    and C_ItemUpgrade.GetHighWatermarkSlotForItem(link)
+            end)
+            if okSlot and redundancy then
+                try("GetHighWatermarkForSlot(" .. tostring(redundancy) .. ")",
+                    C_ItemUpgrade.GetHighWatermarkForSlot, redundancy)
+            else
+                print("  GetHighWatermarkForSlot: no redundancy slot to ask about")
+            end
+        end
+        print("  (run this again standing at an upgrade vendor -- if the "
+            .. "numbers only appear there, the cache is the fix)")
         return
     end
 

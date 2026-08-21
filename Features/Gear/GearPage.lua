@@ -68,6 +68,12 @@ local TRACK_COLORS = {
     Myth       = "ffff0000",
 }
 
+-- The colour the whole addon uses for a rank that costs nothing:
+-- ns.RECOMMEND.FREE_UPGRADE is ff00ffff and Core/UI.lua's vendor glow is
+-- the same cyan. A third opinion about what free looks like would be one
+-- too many.
+local FREE_R, FREE_G, FREE_B = 0.0, 1.0, 1.0
+
 local ui
 
 --- Slot name by inventory id, taken from the same table the rest of the
@@ -77,6 +83,106 @@ local function slotName(slotID)
         if s.slot == slotID then return s.name end
     end
     return tostring(slotID)
+end
+
+--- How many ranks of this slot are already paid for.
+---
+--- The same arithmetic RULE 0 does in Features/Gear/Recommend.lua, and
+--- deliberately not the recommendation itself: that returns
+--- FREE_UPGRADE for a piece still sitting tradeable in the bags too,
+--- which is a rank one decision AWAY from free. A border promising
+--- something the vendor will not hand over today is worse than no
+--- border.
+local function FreeRanks(slotID, ilvl)
+    if not (ns.CanUpgradeItem and ns.GetFreeUpgradeIlvl) then return 0 end
+    local canUpgrade, up = ns:CanUpgradeItem(slotID)
+    if not (canUpgrade and up) then return 0 end
+
+    local levels = up.track and ns.GEAR_TRACKS[up.track]
+    if not levels then return 0 end
+
+    local mark = ns:GetFreeUpgradeIlvl(slotID) or 0
+    if mark <= (ilvl or up.currIlvl or 0) then return 0 end
+
+    local n = 0
+    for r = (up.currUpgrade or 0) + 1, (up.maxUpgrade or 0) do
+        if levels[r] and levels[r] <= mark then n = n + 1 else break end
+    end
+    return n
+end
+
+--- A pulsing outline for a card whose ranks are already owned.
+---
+--- The only animated thing on this page, and it earns that by being the
+--- only state that is different in KIND rather than in degree. Every
+--- other card says how good a slot is; this one says there is item
+--- level sitting at a vendor with the player's name on it, and a still
+--- border in a grid of sixteen still borders is exactly how that went
+--- unnoticed for as long as it did.
+---
+--- Four thin textures, not a Blizzard highlight atlas. Those are cut
+--- for square action buttons and stretch into a smear across a card
+--- three times as wide as it is tall.
+---
+--- On its own frame ABOVE the card rather than as textures on it.
+--- Frame level beats draw layer, so a glow drawn around a card has to
+--- outrank the card -- being created later is not enough, and that
+--- assumption has cost this addon four separate invisible-content bugs.
+local function BuildFreeGlow(card)
+    local glow = CreateFrame("Frame", nil, card)
+    glow:SetAllPoints(card)
+    glow:SetFrameLevel(card:GetFrameLevel() + 5)
+    glow:Hide()
+
+    local T = 2
+    local edges = {}
+    local function edge(p1, p2, w, h)
+        local t = glow:CreateTexture(nil, "OVERLAY")
+        t:SetColorTexture(FREE_R, FREE_G, FREE_B, 1)
+        t:SetPoint(p1)
+        t:SetPoint(p2)
+        if w then t:SetWidth(w) end
+        if h then t:SetHeight(h) end
+        edges[#edges + 1] = t
+        return t
+    end
+    edge("TOPLEFT", "TOPRIGHT", nil, T)
+    edge("BOTTOMLEFT", "BOTTOMRIGHT", nil, T)
+    edge("TOPLEFT", "BOTTOMLEFT", T, nil)
+    edge("TOPRIGHT", "BOTTOMRIGHT", T, nil)
+    glow.edges = edges
+
+    -- BOUNCE rather than REPEAT: a sawtooth snaps back to bright at the
+    -- end of every cycle, which reads as a blink and pulls the eye off
+    -- whatever it was on. Breathing is noticeable without being a
+    -- distress signal, and there can be several of these on screen.
+    glow.anim = glow:CreateAnimationGroup()
+    glow.anim:SetLooping("BOUNCE")
+    local fade = glow.anim:CreateAnimation("Alpha")
+    fade:SetFromAlpha(1.0)
+    fade:SetToAlpha(0.25)
+    fade:SetDuration(0.9)
+    fade:SetSmoothing("IN_OUT")
+
+    return glow
+end
+
+--- Turn the border on or off, without restarting a running animation.
+---
+--- Re-Play() on every refresh would jump every card back to full bright
+--- in step, and the gear page refreshes on inventory changes, bag
+--- changes and currency changes -- which is to say constantly, and all
+--- at once.
+local function SetFreeGlow(card, on)
+    local glow = card.freeGlow
+    if not glow then return end
+    if on then
+        glow:Show()
+        if not glow.anim:IsPlaying() then glow.anim:Play() end
+    else
+        if glow.anim:IsPlaying() then glow.anim:Stop() end
+        glow:Hide()
+    end
 end
 
 ------------------------------------------------------------
@@ -128,6 +234,8 @@ local function BuildCard(parent, slotID)
     card.track = W:Label(card, "GameFontNormalSmall", "RIGHT")
     card.track:SetPoint("BOTTOMRIGHT", -10, 6)
 
+    card.freeGlow = BuildFreeGlow(card)
+
     card:EnableMouse(true)
     card:SetScript("OnEnter", function(self)
         if not self.slotID then return end
@@ -151,6 +259,10 @@ local function RefreshCard(card)
     card.slot:SetText(slotName(card.slotID))
 
     if not info then
+        -- An empty slot cannot have ranks waiting on it, and a border
+        -- left running from the piece that used to be there would be
+        -- the addon pointing at nothing.
+        SetFreeGlow(card, false)
         card.icon:SetTexture("Interface\\Paperdoll\\UI-PaperDoll-Slot-Chest")
         card.icon:SetDesaturated(true)
         W:SetIconQuality(card.iconEdge, nil)
@@ -190,7 +302,17 @@ local function RefreshCard(card)
     end
 
     local canUpgrade = ns.CanUpgradeItem and select(1, ns:CanUpgradeItem(card.slotID))
-    if canUpgrade then
+    local free = FreeRanks(card.slotID, info.ilvl)
+    SetFreeGlow(card, free > 0)
+
+    if free > 0 then
+        -- The left edge is the card's state in one colour, and "already
+        -- paid for" outranks "could be upgraded". Same cyan as the
+        -- border around it, so the two read as one thing rather than as
+        -- two overlapping opinions.
+        card.edge:SetColorTexture(FREE_R, FREE_G, FREE_B, 1)
+        card.edge:SetAlpha(1)
+    elseif canUpgrade then
         card.edge:SetColorTexture(W:Color("good"))
         card.edge:SetAlpha(0.9)
     else

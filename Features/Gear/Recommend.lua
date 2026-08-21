@@ -1388,6 +1388,14 @@ function ns:GetMarkLaunder(slotID)
     -- prices at five ranks and a hundred crests, and the row tells the
     -- player to hold out for a piece that would have cost twenty. Silence
     -- is the right answer to a price nobody read.
+    --
+    -- The guard is on the READ and the arithmetic runs on the floor: a
+    -- bound piece in the bags makes the spare CHEAPER than the client's
+    -- answer alone would say, and that direction is always safe. What
+    -- is not safe is a price standing on the bags with no answer under
+    -- it at all -- the floor is a lower bound, and a lower bound used
+    -- as the line over-charges for everything above it.
+    if ns:GetMarkRead(slotID) <= 0 then return nil end
     if mark <= 0 then return nil end
 
     local cost     = ns:GetCrestCost(crestTrack)
@@ -1397,7 +1405,11 @@ function ns:GetMarkLaunder(slotID)
 
     local best
     for _, spare in ipairs(ns:GetBagSpares(slotID)) do
-        if spare.track == prevTrack then
+        -- A spare at its last rank cannot be bought any further, so it
+        -- is not a trade between two crest tiers -- it is either
+        -- already counted (bound, and the slot's free ranks have it) or
+        -- it is ns:GetBagLift's, below.
+        if spare.track == prevTrack and spare.rank < spare.maxRank then
             -- What the spare costs to finish, priced against the mark
             -- rather than against its rank.
             local paidRanks, freeRanks = 0, 0
@@ -1480,6 +1492,156 @@ function ns:GetMarkLaunder(slotID)
     -- something four other slots are waiting on.
     best.spareIsCheap   = ns:IsCrestFree(prevCrestTrack)
     return best
+end
+
+------------------------------------------------------------
+-- The other half of a drop: what it gives the slot, not the body.
+--
+-- A piece is worth item level twice. Once for wearing, and once
+-- because the slot remembers the highest item level it has held, and
+-- every rank up to there costs nothing -- so a better piece for a slot
+-- pays out even in a bag, and even if it is never worn.
+--
+-- The second half is invisible at exactly the moment it is decided. A
+-- fresh drop is still tradeable, and a tradeable piece has given the
+-- slot nothing: the item level lands when it BINDS. Both of the things
+-- a player normally does bind it -- putting it on, or simply keeping it
+-- until the trade timer runs out -- and handing it to somebody else is
+-- the only way to miss.
+--
+-- So this is the one rule that reads a piece the player has not
+-- committed to, and all it says is what committing is worth. It is
+-- allowed to name the item level because the piece is above what the
+-- slot has reached: that much of the move is not a guess, only how
+-- much further a LATER piece might take it would be.
+--
+-- Bound spares are not read here. A bound piece has already given the
+-- slot its item level, so its ranks are free now rather than later, and
+-- RULE 0 has them -- see BoundBagFloor in Core/Core.lua, which is what
+-- makes sure RULE 0 actually knows.
+--
+-- Rings, trinkets and one-handers are not read here either, in any
+-- state. Two slots share one memory there and it follows the lower of
+-- the pair, so what keeping the piece is worth is genuinely unknown --
+-- a 295 trinket over a 292 and a 292 buys nothing at all, and the same
+-- piece over a 295 and a 292 buys three item levels in both slots. A
+-- number for that would be a guess wearing a decimal point.
+--
+-- nil when there is nothing tradeable above what the slot has reached,
+-- or when what is there covers no rank the worn piece has left.
+------------------------------------------------------------
+function ns:GetBagLift(slotID)
+    local canUpgrade, up = ns:CanUpgradeItem(slotID)
+    if not canUpgrade or not up then return nil end
+
+    local track  = up.track
+    local levels = track and ns.GEAR_TRACKS[track]
+    if not levels then return nil end
+
+    local crestTrack = ns.TRACK_CREST[track]
+    if not crestTrack then return nil end
+
+    -- The same silence as ns:GetMarkLaunder, and guarded on the same
+    -- thing. This rule is forward-looking -- it says what a rank WILL
+    -- cost once the player commits -- and that needs the real line, not
+    -- a lower bound on it. Standing on the bags alone it would count
+    -- ranks as about-to-be-free that are either free already or never
+    -- were.
+    if ns:GetMarkRead(slotID) <= 0 then return nil end
+
+    local mark = ns:GetFreeUpgradeIlvl(slotID) or 0
+    if mark <= 0 then return nil end
+
+    -- The highest one, because that is the one that takes the slot
+    -- furthest. Two tradeable pieces are one decision.
+    local best
+    for _, spare in ipairs(ns:GetBagSpares(slotID)) do
+        if spare.unbound and not spare.shared and spare.ilvl > mark
+            and (not best or spare.ilvl > best.ilvl) then
+            best = spare
+        end
+    end
+    if not best then return nil end
+
+    local rank    = up.currUpgrade or 0
+    local maxRank = up.maxUpgrade or 0
+
+    -- Ranks of the WORN piece that the spare would cover: above what
+    -- the slot has reached, at or under where the spare sits.
+    local ranks, toIlvl = 0, nil
+    for r = rank + 1, maxRank do
+        local lvl = levels[r]
+        if lvl and lvl > mark and lvl <= best.ilvl then
+            ranks  = ranks + 1
+            toIlvl = lvl
+        end
+    end
+    if ranks == 0 then return nil end
+
+    return {
+        slotID     = slotID,
+        spare      = best,
+        mark       = mark,
+        track      = track,
+        crestTrack = crestTrack,
+        fromIlvl   = levels[rank] or mark,
+        ranks      = ranks,
+        toIlvl     = toIlvl,
+        saved      = ranks * ns:GetCrestCost(crestTrack),
+    }
+end
+
+--- The piece, as the player would read it off the tooltip.
+local function LiftPiece(lift)
+    return lift.spare.track .. " " .. lift.spare.rank .. "/" ..
+        lift.spare.maxRank
+end
+
+--- How binding happens, said as the two ordinary things it is.
+---
+--- Written out in full rather than "once it binds", because "bind" is
+--- the mechanic and the two things are the advice. One of them is doing
+--- nothing at all, and a player who does not know that is a player who
+--- thinks this costs them something.
+local BIND_SENTENCE =
+    "It is still tradeable, so it has given the slot nothing yet. Two "
+    .. "things change that and both are ordinary: put it on, or leave it "
+    .. "alone until its trade timer runs out. Handing it to somebody else "
+    .. "is the only thing that does not."
+
+--- The headline and the reasoning for a tradeable piece in the bags.
+local function BagLiftSentences(lift)
+    local piece = LiftPiece(lift)
+    local line
+    if lift.ranks == 1 then
+        line = "Keep the " .. piece .. " in your bags — this slot's "
+            .. "next rank, " .. lift.fromIlvl .. " to " .. lift.toIlvl ..
+            ", then costs no crests"
+    else
+        line = "Keep the " .. piece .. " in your bags — this slot's "
+            .. "next " .. lift.ranks .. " ranks, " .. lift.fromIlvl .. " to " ..
+            lift.toIlvl .. ", then cost no crests"
+    end
+    return line, {
+        BIND_SENTENCE,
+        "Either way the slot has been to " .. lift.toIlvl ..
+            ", and getting what you are wearing there stops costing crests "
+            .. "— " .. lift.saved .. " " .. lift.crestTrack ..
+            " you keep. Wearing it gets you the same " .. lift.toIlvl ..
+            " outright, so upgrading instead is only worth it if you want "
+            .. "the piece you already have on.",
+    }
+end
+
+--- One line, for a slot that has free ranks already and is about to
+--- have more.
+local function BagLiftAddendum(lift)
+    return "And the " .. LiftPiece(lift) .. " in your bags is still "
+        .. "tradeable — keep it, which putting it on does and so "
+        .. "does letting its timer run out, and the free run carries on to "
+        .. lift.toIlvl .. ": " .. lift.ranks ..
+        (lift.ranks == 1 and " more rank, " or " more ranks, ") ..
+        lift.saved .. " " .. lift.crestTrack .. " you keep."
 end
 
 --- Every slot whose next crest purchase lands inside the overlap band.
@@ -1855,9 +2017,17 @@ function ns:GetRecommendation(slotID)
             local freeTarget = ns.GEAR_TRACKS[track] and ns.GEAR_TRACKS[track][rank + freeRanks]
             local paidRanks = upgradesNeeded - freeRanks
             local paidCost = paidRanks * crestCost
+            -- The rest is only the full price if nothing in the bags is
+            -- about to shorten it. A tradeable piece above where this
+            -- slot has been extends the free run the moment it binds,
+            -- and the player is holding that decision right now.
+            local lift = ns:GetBagLift(slotID)
             return ns.RECOMMEND.FREE_UPGRADE,
-                freeRanks .. " free ranks to " .. (freeTarget or "?") ..
-                " — then " .. paidCost .. " " .. crestTrack .. " for the rest"
+                freeRanks .. (freeRanks == 1 and " free rank to "
+                    or " free ranks to ") .. (freeTarget or "?") ..
+                " — then " .. paidCost .. " " .. crestTrack ..
+                " for the rest",
+                lift and { BagLiftAddendum(lift) } or nil
         end
     end
 
@@ -1971,6 +2141,25 @@ function ns:GetRecommendation(slotID)
         end
 
         return ns.RECOMMEND.USE_LOWER_TRACK, line, detail
+    end
+
+    -- ============================================================
+    -- RULE 0c: A piece in the bags this slot has never been to
+    --
+    -- Last of the free ones, and after the spare-piece trade above on
+    -- purpose: where both fire it is usually the same piece, and there
+    -- the price of the trade is the more useful thing to be told.
+    --
+    -- What is left for here is the case that had nothing at all: a drop
+    -- for a slot already wearing something of the same track, a rank or
+    -- two up. No crest changes hands in that story, so no rule about
+    -- crests noticed it -- and it is the most common good news the
+    -- addon has to give.
+    -- ============================================================
+    local lift = ns:GetBagLift(slotID)
+    if lift then
+        local liftLine, liftDetail = BagLiftSentences(lift)
+        return ns.RECOMMEND.FREE_UPGRADE, liftLine, liftDetail
     end
 
     -- ============================================================

@@ -27,6 +27,11 @@ local CATEGORIES = {
     raid   = { label = "Raid",     short = "Raid",    accent = { 0.85, 0.40, 0.95 } }, -- violet
     delves = { label = "Delves",   short = "Delves",  accent = { 0.35, 0.85, 0.40 } }, -- green
     crests = { label = "Crests",   short = "Crests",  accent = { 1.0,  0.60, 0.20 } }, -- amber
+    -- Cyan, matching ns.RECOMMEND.FREE_UPGRADE and the pulsing border
+    -- on the gear page. The stripe is the only thing tying a row here
+    -- to the cards it is talking about, so it has to be the same cyan
+    -- and not merely a nearby one.
+    gear   = { label = "Gear",     short = "Gear",    accent = { 0.0,  1.0,  1.0  } }, -- cyan
 }
 P.CATEGORIES = CATEGORIES
 
@@ -119,6 +124,13 @@ end
 
 -- Lower priority = shown first. Unlock-vault actions outrank crest
 -- farming, which outranks miscellaneous nudges.
+--
+-- Above all of them: item level the character already owns. Everything
+-- else on this panel is a proposal to go and spend an evening earning
+-- something; this one is a walk to a vendor for gear that has already
+-- been paid for, and it is the only row that can be finished during the
+-- loading screen before the raid.
+local PRI_FREE_UPGRADE  = 0
 local PRI_UNLOCK_NEXT   = 1
 local PRI_UNLOCK_UPPER  = 2
 local PRI_IMPROVE       = 3
@@ -442,6 +454,81 @@ local function describeCrestCap()
     return nil
 end
 
+--- Ranks the character already owns and has not collected.
+---
+--- A slot remembers the highest item level it has ever held, and
+--- upgrades up to there cost no crests. Which means gear can sit one
+--- vendor visit below where it is entitled to be for weeks, silently,
+--- because nothing about the character looks wrong -- and the panel that
+--- exists to say what is worth doing tonight was the obvious place for
+--- it to have been said all along.
+---
+--- Counts SLOTS and RANKS separately. Slots is how many pieces to hand
+--- over and ranks is what comes back, and they are rarely the same
+--- number: one slot four ranks below its line is a bigger evening than
+--- four slots one rank below theirs.
+---
+--- nil when there is nothing waiting, which on a character who visits a
+--- vendor regularly is most of the time. A row that says "no free
+--- upgrades" is a row spent on the absence of news.
+local function describeFreeUpgrades()
+    if not (ns.SLOT_IDS and ns.CanUpgradeItem and ns.GetFreeUpgradeIlvl) then
+        return nil
+    end
+
+    local slots, ranks, names = 0, 0, {}
+    for _, si in ipairs(ns.SLOT_IDS) do
+        local canUpgrade, up = ns:CanUpgradeItem(si.slot)
+        local levels = canUpgrade and up and up.track and ns.GEAR_TRACKS[up.track]
+        if levels then
+            local mark = ns:GetFreeUpgradeIlvl(si.slot) or 0
+            local n = 0
+            if mark > (up.currIlvl or 0) then
+                for r = (up.currUpgrade or 0) + 1, (up.maxUpgrade or 0) do
+                    if levels[r] and levels[r] <= mark then n = n + 1 else break end
+                end
+            end
+            if n > 0 then
+                slots = slots + 1
+                ranks = ranks + n
+                names[#names + 1] = si.name
+            end
+        end
+    end
+    if slots == 0 then return nil end
+
+    -- Named while naming them still fits. Three slot names is a useful
+    -- sentence and six is a list nobody reads to the end of, so past
+    -- two it counts the rest instead.
+    local where
+    if #names == 1 then
+        where = names[1]
+    elseif #names == 2 then
+        where = names[1] .. " and " .. names[2]
+    else
+        where = ("%s, %s and %d more"):format(names[1], names[2], #names - 2)
+    end
+
+    return {
+        category = "gear",
+        title    = slots == 1
+            and ("Collect a free upgrade on your " .. names[1])
+            or ("Collect %d free gear upgrades"):format(slots),
+        -- The title carries the single slot's name already, so
+        -- repeating it in the detail would spend the second line
+        -- saying the first line again.
+        detail   = slots == 1
+            and ("%d %s at the upgrade vendor, no crests"):format(
+                ranks, ranks == 1 and "rank" or "ranks")
+            or ("%s · %d ranks, no crests"):format(where, ranks),
+        priority = PRI_FREE_UPGRADE,
+        -- Not filler. Filler is a counter that moves on its own while
+        -- you do the rows above it, and this one moves only when the
+        -- player goes and does it.
+        extra    = { slots = slots, ranks = ranks, where = where },
+    }
+end
+
 local function vaultFullyUnlocked(v)
     if not v then return false end
     local function done(t) return t and t.total > 0 and t.filled >= t.total end
@@ -474,6 +561,7 @@ function P:BuildPlan()
         into[#into + 1] = item
     end
 
+    add(describeFreeUpgrades())
     add(describeBonusRoll(vault))
     add(describeNextMPlus(vault and vault.mplus))
     add(describeNextRaid(vault and vault.raid))

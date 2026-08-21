@@ -469,6 +469,17 @@ end
 function Region.CreateMaskTexture(self) return NewRegion("MaskTexture", self) end
 function Region.CreateAnimationGroup(self) return NewRegion("AnimationGroup", self) end
 
+-- Play/Stop/IsPlaying, for the same reason SetChecked and Show are real
+-- rather than no-ops: IsPlaying falling through to the CamelCase no-op
+-- answers "not playing" forever, so an animation that never starts and
+-- one that never stops look identical, and every `if not
+-- anim:IsPlaying() then anim:Play() end` in the addon reads as correct
+-- whatever it does.
+function Region.Play(self) self._playing = true; return self end
+function Region.Stop(self) self._playing = false; return self end
+function Region.Pause(self) self._playing = false; return self end
+function Region.IsPlaying(self) return self._playing == true end
+
 -- Events, really registered and really dispatched.
 --
 -- RegisterEvent used to fall through to the CamelCase no-op, which made
@@ -907,12 +918,47 @@ YYH_WATERMARKS = {}
 ItemLocation = { CreateFromEquipmentSlot = function(self, slot)
                      return { slot = slot or self }
                  end }
+-- The equipped link for a slot the fixtures gave a mark to, so the
+-- watermark query has something of the right SHAPE to ask about.
+--
+-- Which is the point. This stub used to take the ItemLocation the addon
+-- was passing and answer cheerfully, and the real client throws on it:
+--
+--   bad argument #1 to '?' (Usage: local characterHighWatermark,
+--   accountHighWatermark = C_ItemUpgrade.GetHighWatermarkForItem(itemInfo))
+--
+-- A stub more forgiving than the client is a stub that certifies a bug.
+-- The addon caught the throw in a pcall and read it as "this slot has
+-- been nowhere", so every free-rank rule was dead in the client and
+-- green in here, for as long as both have existed.
+local function watermarkSlotFromItem(itemInfo)
+    if type(itemInfo) ~= "string" and type(itemInfo) ~= "number" then
+        error("bad argument #1 to '?' (Usage: local characterHighWatermark, "
+            .. "accountHighWatermark = "
+            .. "C_ItemUpgrade.GetHighWatermarkForItem(itemInfo))", 2)
+    end
+    return tonumber(tostring(itemInfo):match("|Hitem:7000(%d+):"))
+end
 C_ItemUpgrade = {
-    GetHighWatermarkForItem = function(loc)
-        local m = loc and loc.slot and YYH_WATERMARKS[loc.slot]
+    GetHighWatermarkForItem = function(itemInfo)
+        local slot = watermarkSlotFromItem(itemInfo)
+        local m = slot and YYH_WATERMARKS[slot]
         return m or 0, 0
     end,
+    GetHighWatermarkSlotForItem = function(itemInfo)
+        return watermarkSlotFromItem(itemInfo)
+    end,
+    GetHighWatermarkForSlot = function(slot)
+        return (slot and YYH_WATERMARKS[slot]) or 0, 0
+    end,
 }
+--- The link a fixture's equipped item carries, when the fixture did not
+--- supply one of its own. Encodes the slot so the stubs above can key
+--- off it the way the real client keys off a real item.
+function YYH_SLOT_LINK(slot)
+    return "|cffa335ee|Hitem:7000" .. slot ..
+        "::::::::80:::::|h[Slot " .. slot .. "]|h|r"
+end
 C_Container = { GetContainerNumSlots = function() return 0 end,
                 GetContainerItemID = function() return nil end,
                 GetContainerItemLink = function() return nil end }
@@ -3432,7 +3478,7 @@ def main():
             -- 305: ranks 3, 4 and 5 are paid for and the player has not
             -- collected them.
             local piece = {
-                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                link = YYH_SLOT_LINK(16),
                 ilvl = T.Champion[2], quality = 4, icon = 134400,
                 track = "Champion", rank = 2, maxRank = 6, crafted = false,
             }
@@ -3519,7 +3565,7 @@ def main():
             -- Worn: the Hero drop that just landed. Bagged: the Champion
             -- piece it went in on top of.
             local worn = {
-                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Drop]|h|r",
+                link = YYH_SLOT_LINK(16),
                 ilvl = T.Hero[1], quality = 4, icon = 134400,
                 track = "Hero", rank = 1, maxRank = 6, crafted = false,
             }
@@ -3626,7 +3672,7 @@ def main():
             local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
             local realPrecious = ns.IsCrestFree
             local worn = {
-                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Drop]|h|r",
+                link = YYH_SLOT_LINK(13),
                 ilvl = T.Hero[1], quality = 4, icon = 134400,
                 track = "Hero", rank = 1, maxRank = 6, crafted = false,
             }
@@ -3635,31 +3681,31 @@ def main():
                 track = "Champion", rank = 1, maxRank = 6, ilvl = T.Champion[1],
             }
             ns.GetSlotInfo = function(self, slotID)
-                return slotID == 16 and worn or nil
+                return slotID == 13 and worn or nil
             end
             ns.GetBagSpares = function(self, slotID)
-                return slotID == 16 and { spare } or {}
+                return slotID == 13 and { spare } or {}
             end
             -- Champion is worth something to this character, or waiting
             -- would not be the question.
             ns.IsCrestFree = function() return false end
-            YYH_WATERMARKS[16] = T.Champion[1]    -- the slot has seen 292
+            YYH_WATERMARKS[13] = T.Champion[1]    -- the slot has seen 292
             wipe(ns.watermarkCache)
             ns:InvalidateCrestPlans()
 
             local function restore(msg)
                 ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
                 ns.IsCrestFree = realPrecious
-                YYH_WATERMARKS[16] = nil
+                YYH_WATERMARKS[13] = nil
                 wipe(ns.watermarkCache)
                 if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[16] = nil
+                    YippYappHelperDB.watermarks[13] = nil
                 end
                 ns:InvalidateCrestPlans()
                 return msg
             end
 
-            local l = ns:GetMarkLaunder(16)
+            local l = ns:GetMarkLaunder(13)
             if not l then return restore("no trade found at all") end
             if l.paidRanks ~= 5 or l.cost ~= 5 * ns:GetCrestCost("Champion") then
                 return restore("a slot that has only seen 292 prices the "
@@ -3667,7 +3713,7 @@ def main():
                     .. " rank(s)")
             end
 
-            local _, reason, detail = ns:GetRecommendation(16)
+            local _, reason, detail = ns:GetRecommendation(13)
             local said = reason .. " " .. table.concat(detail or {}, " ")
             if not said:find("further up its track", 1, true) then
                 return restore("nothing suggests the cheaper spare: " .. said)
@@ -3684,12 +3730,12 @@ def main():
 
             -- And with no mark read at all, it says nothing rather than
             -- quoting a price built out of a zero.
-            YYH_WATERMARKS[16] = nil
+            YYH_WATERMARKS[13] = nil
             wipe(ns.watermarkCache)
             if YippYappHelperDB and YippYappHelperDB.watermarks then
-                YippYappHelperDB.watermarks[16] = nil
+                YippYappHelperDB.watermarks[13] = nil
             end
-            if ns:GetMarkLaunder(16) ~= nil then
+            if ns:GetMarkLaunder(13) ~= nil then
                 return restore("a slot with no mark read still gets priced")
             end
             return restore("ok")
@@ -3720,7 +3766,7 @@ def main():
             -- Worn: whatever was in the slot before. In the bags: the
             -- Hero drop, still tradeable, and the Champion piece.
             local worn = {
-                link = "|cffa335ee|Hitem:1::::::::80:::::|h[Old]|h|r",
+                link = YYH_SLOT_LINK(13),
                 ilvl = T.Hero[1], quality = 4, icon = 134400,
                 track = "Hero", rank = 1, maxRank = 6, crafted = false,
             }
@@ -3734,35 +3780,35 @@ def main():
                 unbound = true,
             }
             ns.GetSlotInfo = function(self, slotID)
-                return slotID == 16 and worn or nil
+                return slotID == 13 and worn or nil
             end
             ns.GetBagSpares = function(self, slotID)
-                return slotID == 16 and { champ, fresh } or {}
+                return slotID == 13 and { champ, fresh } or {}
             end
             ns.IsCrestFree = function() return false end
-            YYH_WATERMARKS[16] = T.Champion[1]    -- the slot has seen 292
+            YYH_WATERMARKS[13] = T.Champion[1]    -- the slot has seen 292
             wipe(ns.watermarkCache)
             ns:InvalidateCrestPlans()
 
             local function restore(msg)
                 ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
                 ns.IsCrestFree = realFree
-                YYH_WATERMARKS[16] = nil
+                YYH_WATERMARKS[13] = nil
                 wipe(ns.watermarkCache)
                 if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[16] = nil
+                    YippYappHelperDB.watermarks[13] = nil
                 end
                 ns:InvalidateCrestPlans()
                 return msg
             end
 
-            local l = ns:GetMarkLaunder(16)
+            local l = ns:GetMarkLaunder(13)
             if not l then return restore("no trade found at all") end
             if l.pending ~= fresh then
                 return restore("the undecided piece was not spotted")
             end
 
-            local _, reason, detail = ns:GetRecommendation(16)
+            local _, reason, detail = ns:GetRecommendation(13)
             local said = reason .. " " .. table.concat(detail or {}, " ")
             -- The expensive-case check above proves this row WOULD tell
             -- the player to wait on exactly this fixture. It must not,
@@ -3782,7 +3828,7 @@ def main():
 
             -- Once it is bound the row goes back to being about crests.
             fresh.unbound = false
-            local _, boundReason = ns:GetRecommendation(16)
+            local _, boundReason = ns:GetRecommendation(13)
             if boundReason:find("still tradeable", 1, true) then
                 return restore("a bound piece is still treated as pending")
             end
@@ -3795,6 +3841,483 @@ def main():
     else:
         print("  FAIL spare piece (unbound): %s" % pending)
         failures.append(("spare piece (unbound)", str(pending)))
+
+    # The plainest version of the whole mechanic, and the one that had
+    # nothing to say about it.
+    #
+    # A better pair of boots drops for a slot already wearing the same
+    # track. No crest changes hands, no lower track is involved, so every
+    # rule about crests looked straight past it -- and it is the most
+    # ordinary good news there is: keep the drop and the slot has been to
+    # 295, so the worn pair goes there for nothing.
+    #
+    # Checked in both of its states, because they are different advice.
+    # Bound, the free rank is already owned and the row should just say
+    # so. Still tradeable, it is owned the moment the player stops
+    # thinking about it -- and the row has to say which two things count
+    # as doing that, one of which is nothing at all.
+    same = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            -- Worn: the Champion 1/6 that has been in the slot a while,
+            -- so the slot has been to 292 and no further.
+            local worn = {
+                link = YYH_SLOT_LINK(8),
+                ilvl = T.Champion[1], quality = 4, icon = 134400,
+                track = "Champion", rank = 1, maxRank = 6, crafted = false,
+            }
+            -- In the bags: the pair that just dropped, one rank up.
+            local drop = {
+                itemID = 2, link = "|cffa335ee|Hitem:2::::::::80:::::|h[Drop]|h|r",
+                track = "Champion", rank = 2, maxRank = 6, ilvl = T.Champion[2],
+                unbound = true,
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 8 and worn or nil
+            end
+            ns.GetBagSpares = function(self, slotID)
+                return slotID == 8 and { drop } or {}
+            end
+            YYH_WATERMARKS[8] = T.Champion[1]
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                YYH_WATERMARKS[8] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[8] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            -- STILL TRADEABLE. It has given the slot nothing yet, so the
+            -- rank is not free -- it is one decision away from free, and
+            -- the row's whole job is to say so.
+            local lift = ns:GetBagLift(8)
+            if not lift then
+                return restore("a tradeable pair one rank up is not seen "
+                    .. "at all")
+            end
+            if lift.ranks ~= 1 or lift.toIlvl ~= T.Champion[2] then
+                return restore("it is said to cover " .. lift.ranks ..
+                    " rank(s) to " .. tostring(lift.toIlvl))
+            end
+            if lift.saved ~= ns:GetCrestCost("Champion") then
+                return restore("the rank is valued at " .. lift.saved ..
+                    ", not one Champion upgrade")
+            end
+
+            local rec, reason, detail = ns:GetRecommendation(8)
+            if rec ~= ns.RECOMMEND.FREE_UPGRADE then
+                return restore("the row is not offered as a free upgrade: "
+                    .. tostring(reason))
+            end
+            local said = reason .. " " .. table.concat(detail or {}, " ")
+            if not said:find("Champion 2/6", 1, true) then
+                return restore("the row never names the pair in the bags: "
+                    .. said)
+            end
+            if not said:find(tostring(T.Champion[2]), 1, true) then
+                return restore("the row never says where the slot gets to: "
+                    .. said)
+            end
+            -- Doing nothing is one of the two ways to keep it, and a
+            -- player who does not know that thinks this costs them
+            -- something.
+            if not said:find("trade timer runs out", 1, true) then
+                return restore("the row does not say that keeping it is "
+                    .. "enough: " .. said)
+            end
+            -- One rank is one rank.
+            if said:find("1 ranks", 1, true) or said:find("1 more ranks", 1, true) then
+                return restore("plural for a single rank: " .. said)
+            end
+
+            -- BOUND. Whether by wearing it or by letting the timer run
+            -- out, the slot has now been to 295 -- and the client, away
+            -- from an upgrade vendor, may still be answering 292. The
+            -- pair in the bag is the answer, and the row must not wait
+            -- for the player to walk to an NPC to be told.
+            drop.unbound = false
+            wipe(ns.watermarkCache)
+            if ns:GetFreeUpgradeIlvl(8) ~= T.Champion[2] then
+                return restore("a bound pair in the bags does not count "
+                    .. "towards the slot: " .. ns:GetFreeUpgradeIlvl(8))
+            end
+            if ns:GetBagLift(8) ~= nil then
+                return restore("a bound pair is still offered as a decision")
+            end
+            local boundRec, boundReason = ns:GetRecommendation(8)
+            if boundRec ~= ns.RECOMMEND.FREE_UPGRADE then
+                return restore("the free rank is not offered once the pair "
+                    .. "has bound: " .. tostring(boundReason))
+            end
+            if not boundReason:find("1 free rank to " .. T.Champion[2], 1, true) then
+                return restore("the free rank is not stated as one rank to "
+                    .. T.Champion[2] .. ": " .. boundReason)
+            end
+            -- NOTHING READ. The live query wants an upgrade vendor open
+            -- and the saved cache can be empty for a whole character --
+            -- /yh debug printing wm:none down every slot is the state
+            -- this has to survive, because it is the state the addon is
+            -- usually in.
+            --
+            -- The bound pair in the bags still settles the free rank: it
+            -- is in there and it is soulbound, so the slot has been to
+            -- 295 whatever the client feels like saying. What it does
+            -- NOT settle is anything above 295, so a floor with no
+            -- answer under it may be read one way and not the other.
+            YYH_WATERMARKS[8] = nil
+            wipe(ns.watermarkCache)
+            if YippYappHelperDB and YippYappHelperDB.watermarks then
+                YippYappHelperDB.watermarks[8] = nil
+            end
+            if ns:GetMarkRead(8) ~= 0 then
+                return restore("a slot the client never answered for "
+                    .. "reads as answered")
+            end
+            if ns:GetFreeUpgradeIlvl(8) ~= T.Champion[2] then
+                return restore("with no answer from the client the bound "
+                    .. "pair in the bags stops counting: " ..
+                    ns:GetFreeUpgradeIlvl(8))
+            end
+            local blindRec, blindReason = ns:GetRecommendation(8)
+            if blindRec ~= ns.RECOMMEND.FREE_UPGRADE then
+                return restore("a character that has never opened an "
+                    .. "upgrade vendor is told nothing: " ..
+                    tostring(blindReason))
+            end
+            -- But nothing forward-looking gets priced off it.
+            drop.unbound = true
+            if ns:GetBagLift(8) ~= nil then
+                return restore("a tradeable piece is priced against a "
+                    .. "line nobody read")
+            end
+            drop.unbound = false
+
+            -- PAIRED. The identical piece in a trinket slot settles
+            -- nothing: the two slots keep one memory between them and it
+            -- follows the lower of the pair, so a 295 landing on a 292
+            -- and a 292 leaves the lower of the top two exactly where it
+            -- was. Silence is the answer, in both of the piece's states.
+            YYH_WATERMARKS[8] = T.Champion[1]
+            wipe(ns.watermarkCache)
+            drop.shared = true
+            if ns:GetFreeUpgradeIlvl(8) ~= T.Champion[1] then
+                return restore("a trinket in the bags moved a mark it "
+                    .. "shares with the other trinket slot")
+            end
+            drop.unbound = true
+            if ns:GetBagLift(8) ~= nil then
+                return restore("a tradeable trinket is priced as though "
+                    .. "keeping it were worth a known number")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if same == "ok":
+        print("  ok   same-track drop: a better pair in the bags is a free "
+              "rank on the worn one, said before it binds and owned after")
+    else:
+        print("  FAIL same-track drop: %s" % same)
+        failures.append(("same-track drop", str(same)))
+
+    # Two slots, one line, and it takes two pieces to move it.
+    #
+    # The trinket pair is the case where the obvious reading is wrong in
+    # both directions. One 295 landing on a 292 and a 292 buys nothing --
+    # the pair reads the LOWER of its top two and that is still 292 --
+    # and the second 295 buys three item levels in both slots at once.
+    #
+    # A rule that declines the whole pair gets the first half right and
+    # throws the second half away, which is what shipped first. This is
+    # the check that says the difference out loud.
+    pairwise = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local function trinket(slot)
+                return {
+                    link = YYH_SLOT_LINK(slot), ilvl = T.Champion[1],
+                    quality = 4, icon = 134400, track = "Champion",
+                    rank = 1, maxRank = 6, crafted = false,
+                }
+            end
+            local worn = { [13] = trinket(13), [14] = trinket(14) }
+            -- The one that dropped: bound, in the bags, and belonging to
+            -- both trinket slots the way a real trinket does.
+            local first = {
+                itemID = 2, link = "|cffa335ee|Hitem:2::::::::80:::::|h[Idol]|h|r",
+                track = "Champion", rank = 2, maxRank = 6, ilvl = T.Champion[2],
+                unbound = false, shared = true,
+            }
+            local second = {
+                itemID = 3, link = "|cffa335ee|Hitem:3::::::::80:::::|h[Sigil]|h|r",
+                track = "Champion", rank = 2, maxRank = 6, ilvl = T.Champion[2],
+                unbound = false, shared = true,
+            }
+            local bags = { first }
+            ns.GetSlotInfo = function(self, slotID) return worn[slotID] end
+            ns.GetBagSpares = function(self, slotID)
+                return (slotID == 13 or slotID == 14) and bags or {}
+            end
+            -- No mark read at all, which is the state the character in
+            -- the report is actually in.
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                wipe(ns.watermarkCache)
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            -- ONE. Top two are 295 and 292; the lower is the 292 the
+            -- pair was already at. Nothing has been bought.
+            if ns:GetFreeUpgradeIlvl(13) ~= T.Champion[1] then
+                return restore("one trinket moved a line that takes two: "
+                    .. ns:GetFreeUpgradeIlvl(13))
+            end
+            local oneRec = ns:GetRecommendation(13)
+            if oneRec == ns.RECOMMEND.FREE_UPGRADE then
+                return restore("a free rank is offered off a single trinket")
+            end
+
+            -- TWO. Top two are 295 and 295, and both worn trinkets go
+            -- there for nothing -- the pair moves for both slots at once
+            -- or not at all.
+            bags = { first, second }
+            ns:InvalidateCrestPlans()
+            for _, slot in ipairs({ 13, 14 }) do
+                if ns:GetFreeUpgradeIlvl(slot) ~= T.Champion[2] then
+                    return restore("slot " .. slot .. " did not move on a "
+                        .. "second 295: " .. ns:GetFreeUpgradeIlvl(slot))
+                end
+                local rec, reason = ns:GetRecommendation(slot)
+                if rec ~= ns.RECOMMEND.FREE_UPGRADE then
+                    return restore("slot " .. slot .. " is not offered the "
+                        .. "free rank: " .. tostring(reason))
+                end
+                if not reason:find("1 free rank to " .. T.Champion[2], 1, true) then
+                    return restore("slot " .. slot .. " does not say one "
+                        .. "rank to " .. T.Champion[2] .. ": " .. reason)
+                end
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if pairwise == "ok":
+        print("  ok   trinket pair: one 295 over two 292s buys nothing and a "
+              "second 295 frees a rank in both slots")
+    else:
+        print("  FAIL trinket pair: %s" % pairwise)
+        failures.append(("trinket pair", str(pairwise)))
+
+    # Free ranks belong on the panel that says what to do tonight.
+    #
+    # A slot sitting below the level it has already reached is the only
+    # thing this addon can offer that costs nothing and takes a minute,
+    # and it was invisible on the home page: the plan talked about
+    # evenings of Mythic+ and said nothing about the gear already paid
+    # for. It sorts above every other row for that reason -- everything
+    # else there is a proposal to go and earn something.
+    freeplan = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot = ns.GetSlotInfo
+            -- One slot, two ranks under where it has been.
+            local worn = {
+                link = YYH_SLOT_LINK(8), ilvl = T.Champion[1], quality = 4,
+                icon = 134400, track = "Champion", rank = 1, maxRank = 6,
+                crafted = false,
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 8 and worn or nil
+            end
+            YYH_WATERMARKS[8] = T.Champion[3]
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo = realSlot
+                YYH_WATERMARKS[8] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[8] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local P = ns.Planner
+            if not (P and P.BuildPlan) then return restore("no planner") end
+            local ok, built = pcall(P.BuildPlan, P)
+            if not ok then return restore("BuildPlan failed: " .. tostring(built)) end
+            local items = (built and built.items) or {}
+            if #items == 0 then return restore("the plan came back empty") end
+
+            local row = items[1]
+            if (row.category or "") ~= "gear" then
+                return restore("free ranks do not lead the plan; the first "
+                    .. "row is '" .. tostring(row.title) .. "'")
+            end
+            -- One slot, so the title names it rather than counting.
+            if not tostring(row.title):find("Feet", 1, true) then
+                return restore("the row does not say which slot: " .. tostring(row.title))
+            end
+            -- Champion 1/6 under a line at 298 is ranks 2 and 3.
+            if not tostring(row.detail):find("2 ranks", 1, true) then
+                return restore("the row does not count the ranks: "
+                    .. tostring(row.detail))
+            end
+            if not tostring(row.detail):find("no crests", 1, true) then
+                return restore("the row does not say it is free: "
+                    .. tostring(row.detail))
+            end
+            -- The stripe ties this row to the cyan border on the gear
+            -- page. A category with no accent renders grey and the
+            -- connection is lost.
+            local accent = P.CATEGORIES and P.CATEGORIES.gear
+                and P.CATEGORIES.gear.accent
+            if not (accent and accent[2] == 1.0 and accent[3] == 1.0) then
+                return restore("the gear category is not the addon's cyan")
+            end
+
+            -- And it is gone the moment there is nothing waiting, rather
+            -- than sitting there saying so.
+            YYH_WATERMARKS[8] = T.Champion[1]
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+            local ok2, none = pcall(P.BuildPlan, P)
+            if not ok2 then return restore("BuildPlan failed: " .. tostring(none)) end
+            for _, it in ipairs((none and none.items) or {}) do
+                if (it.category or "") == "gear" then
+                    return restore("a row is spent saying there is nothing "
+                        .. "free: " .. tostring(it.title))
+                end
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if freeplan == "ok":
+        print("  ok   tonight: free ranks lead the plan, name the slot and "
+              "count themselves, and vanish when there are none")
+    else:
+        print("  FAIL tonight free ranks: %s" % freeplan)
+        failures.append(("tonight free ranks", str(freeplan)))
+
+    # The free-upgrade border on the gear page.
+    #
+    # Sixteen cards that differ only in colour, and the one state worth
+    # crossing the room for -- item level already paid for -- looked
+    # exactly like the fifteen that were not. It animates now, and the
+    # two things that can go wrong with that are both silent: a border
+    # that never stops once the rank is collected, and a border drawn
+    # UNDER the card it is meant to be around.
+    #
+    # The second is this addon's oldest bug: frame level beats draw
+    # layer, and four separate "content is invisible" reports all came
+    # from a frame assuming creation order would keep it in front.
+    glow = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot = ns.GetSlotInfo
+            local worn = {
+                link = YYH_SLOT_LINK(8), ilvl = T.Champion[1], quality = 4,
+                icon = 134400, track = "Champion", rank = 1, maxRank = 6,
+                crafted = false,
+            }
+            ns.GetSlotInfo = function(self, slotID)
+                return slotID == 8 and worn or nil
+            end
+            YYH_WATERMARKS[8] = T.Champion[3]
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo = realSlot
+                YYH_WATERMARKS[8] = nil
+                wipe(ns.watermarkCache)
+                if YippYappHelperDB and YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[8] = nil
+                end
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local def = ns.Shell and ns.Shell.GetPage and ns.Shell:GetPage("gear")
+            if not (def and def.Build and def.Refresh) then
+                return restore("no gear page registered")
+            end
+            local host = CreateFrame("Frame", nil, UIParent)
+            host:SetSize(760, 520)
+            def.Build(host)
+            def.Refresh({ width = 760, height = 520 })
+
+            local ui = ns.GearPageUI
+            local card = ui and ui.cards and ui.cards[8]
+            if not card then return restore("no card for the Feet slot") end
+            local g = card.freeGlow
+            if not g then return restore("the card has no free-upgrade border") end
+
+            if not g:IsShown() then
+                return restore("a slot two ranks under where it has been "
+                    .. "gets no border")
+            end
+            if not g.anim:IsPlaying() then
+                return restore("the border is drawn but never animates")
+            end
+            -- Above the card, not merely created after it.
+            if (g:GetFrameLevel() or 0) <= (card:GetFrameLevel() or 0) then
+                return restore("the border sits at level " .. tostring(g:GetFrameLevel())
+                    .. " under a card at " .. tostring(card:GetFrameLevel()))
+            end
+
+            -- A card with nothing waiting must not be wearing one, and a
+            -- second refresh must not restart the one that is: the gear
+            -- page redraws on every bag and currency event, and a
+            -- Play() per redraw snaps every border back to full bright
+            -- in lockstep.
+            local other
+            for slot, c in pairs(ui.cards) do
+                if slot ~= 8 then other = c break end
+            end
+            if other and other.freeGlow and other.freeGlow:IsShown() then
+                return restore("an empty slot is wearing a free-upgrade border")
+            end
+            local before = g.anim._playing
+            def.Refresh({ width = 760, height = 520 })
+            if g.anim._playing ~= before then
+                return restore("a redraw restarts a border already running")
+            end
+
+            -- Collected: the mark and the item level agree, and the
+            -- border goes away rather than pointing at nothing.
+            worn.ilvl = T.Champion[3]
+            worn.rank = 3
+            wipe(ns.watermarkCache)
+            ns:InvalidateCrestPlans()
+            def.Refresh({ width = 760, height = 520 })
+            if g:IsShown() then
+                return restore("the border outlives the free rank")
+            end
+            if g.anim:IsPlaying() then
+                return restore("the border is hidden but still animating")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if glow == "ok":
+        print("  ok   free-upgrade border: drawn above the card, animated, "
+              "not restarted by a redraw, and gone once the rank is taken")
+    else:
+        print("  FAIL free-upgrade border: %s" % glow)
+        failures.append(("free-upgrade border", str(glow)))
 
     # A row is about the slot it is headed with.
     #
