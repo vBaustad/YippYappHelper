@@ -205,16 +205,52 @@ local HALDURON_WEEKLY = {
     93758,  -- Nexus-Point Xenas
 }
 
---- Every route to this week's spark: Liadrin's weekly, plus the two that
---- are not hers. One spark a week, so any of them finishing is the
---- answer.
-local SPARK_SOURCES = {
-    98172,  -- Trailing Xal'atath, a separate Silvermoon meta
-    93426,  -- Sparks of War: Voidstorm, PvP War Mode
-    96726,  -- Sparks of War: Naigtal, PvP War Mode
-}
-for _, id in ipairs(LIADRIN_WEEKLY) do
-    SPARK_SOURCES[#SPARK_SOURCES + 1] = id
+--- Sparks obtained this season, against how many were obtainable.
+---
+--- Tidal Spark Dust is residue: one grain per Spark of Tides OBTAINED,
+--- and it does not go down when the spark is spent. That is the whole
+--- reason it can answer a question the sparks themselves cannot --
+--- holding zero of them is equally consistent with "not collected" and
+--- "collected and already crafted with".
+---
+--- Read off the client on 2026-08-21 rather than assumed, because
+--- guessing at an API's shape is how the high-water query spent a
+--- season returning a silent zero:
+---
+---   name                     Tidal Spark Dust
+---   totalEarned              4      the Total the tooltip shows
+---   maxQuantity              4      its "Current Season Maximum"
+---   useTotalEarnedForMaxQty  true   so totalEarned is the number
+---   isAccountWide            false  this character, which is what a
+---                                   per-character chore list wants
+---   quantityEarnedThisWeek   0      unusable, see below
+---   maxWeeklyQuantity        0
+---
+--- The weekly pair reads zero on a character holding four, so this
+--- currency does not meter itself by week and there is no "did you get
+--- one THIS week" field to read.
+---
+--- What there is is better. A season total against a season ceiling
+--- says how far behind you are rather than yes or no, and it counts the
+--- catch-up routes -- Delves, Mythic+, raids, instanced PvP, some
+--- outdoor events -- that a list of seven quest ids had never heard of.
+--- Behind is behind whether it happened this week or three weeks ago,
+--- and catching up is the part the player can act on.
+---
+--- nil rather than a guess when the client has not answered: the row
+--- falls back to a manual tick, which is what it did before any of this.
+local SPARK_DUST = 3509
+
+local function sparkProgress()
+    if not (C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo) then return nil end
+    local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, SPARK_DUST)
+    if not (ok and type(info) == "table") then return nil end
+
+    local max = info.maxQuantity or 0
+    if max <= 0 then return nil end
+
+    local have = info.useTotalEarnedForMaxQty and info.totalEarned or info.quantity
+    return have or 0, max
 end
 
 ------------------------------------------------------------
@@ -447,50 +483,46 @@ local ITEMS = {
         id = "spark",
         label = "Collect this week's spark",
         detail = "One a week, from whichever source reaches you first -- "
-            .. "any of the Silvermoon weeklies, or the War Mode one. Taking it "
-            .. "from one closes the rest until the reset. Most crafted gear "
-            .. "takes two.",
+            .. "any of the Silvermoon weeklies, or the War Mode one. Fall "
+            .. "behind and max-level content pays catch-up sparks. Most "
+            .. "crafted gear takes two.",
         category = "crests",
 
         -- Recorded because it is the thing the row is about, NOT because
         -- it decides the answer. Counting Sparks of Tides in the bags
         -- cannot: holding zero is equally consistent with "not collected"
         -- and "collected and already spent", and the second is the normal
-        -- case for anyone who crafts. It sets a floor and nothing more --
-        -- three in the bag proves three were collected, an empty bag
-        -- proves nothing at all.
-        --
-        -- That floor is exactly wrong for the person it matters to. Someone
-        -- installing this addon mid-week has already spent theirs, so a bag
-        -- count nags them all week about a chore they finished on Tuesday.
+        -- case for anyone who crafts.
         itemID = 274476,   -- Spark of Tides
 
-        -- Which is why the answer comes from the sources instead. A quest
-        -- completion is recorded on the server the moment the spark is
-        -- ACQUIRED and does not care what happened to it afterwards or when
-        -- the addon was installed -- so this reads a fresh install exactly
-        -- as correctly as one that has been running all season.
+        -- The answer comes from Tidal Spark Dust -- see sparkProgress
+        -- above for what the client actually returns and why the weekly
+        -- fields are no use.
         --
-        -- One spark a week, claimed from ANY of these, and taking it from
-        -- one closes the rest until the reset. So the row is a tick and the
-        -- list is any-of: whichever route the player took, the flag it set
-        -- is the evidence.
+        -- This replaced an inference over seven quest ids: Liadrin's
+        -- five, Trailing Xal'atath and the two War Mode ones, any of
+        -- which finishing meant the spark was in. That worked, and was
+        -- wrong at both edges. It could not see the catch-up routes, so
+        -- somebody who made up a missed spark in a delve still read as
+        -- owing one. And it needed 96995 Turn Back the Surge held OUT by
+        -- hand, because the quest lists Spark of Tides among its rewards
+        -- and does not award one -- a reward list being what a quest
+        -- claims to give rather than what it gives.
         --
-        -- Doing a second route afterwards pays no spark but still sets its
-        -- flag, and the row is right either way -- it reads "collected",
-        -- which is true, just not because of that quest.
-        --
-        -- Shared with the Liadrin row rather than listed again here. Doing
-        -- her weekly IS how most players take the spark, so the two rows
-        -- are reading one event and must not be able to disagree about it.
-        --
-        -- NOT in the list, and it was one edit from going in:
-        --
-        --   96995  Turn Back the Surge
-        --          Lists Spark of Tides in its rewards and does not award
-        --          one. Blizzard say it is a bug. A reward list is what a
-        --          quest claims to give, which is not what it gives.
-        quests = SPARK_SOURCES,
+        -- The residue count has no edges to get wrong. It is the number
+        -- of sparks this character has been paid, from anywhere, ever.
+        auto = function()
+            local have, max = sparkProgress()
+            if not have then return nil end
+            return have >= max
+        end,
+
+        -- No `progress` hook, though sparkProgress would feed one
+        -- directly. Only the crest row measures itself on this page, and
+        -- Tools/loadcheck.py enforces that: the renderer draws a bar for
+        -- any row carrying a fraction, so a second one is a visible
+        -- change to the page rather than a change to this row. Worth
+        -- doing on purpose, not as a side effect of fixing the answer.
     },
     {
         id = "bountymap",

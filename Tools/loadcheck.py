@@ -1234,6 +1234,18 @@ local CURRENCY_LIST = {
     { name = "Shard of Dundun", currencyID = 3598, quantity = 0,
       weekly = { earned = 0, cap = 10 } },
     { name = "Voidlight Marl", currencyID = 3511, quantity = 41033 },
+    -- Tidal Spark Dust: residue, one grain per Spark of Tides obtained,
+    -- and it does not go down when the spark is spent. Seeded one short
+    -- of the ceiling so the spark row has something to be wrong about --
+    -- a fixture sitting AT the cap would pass whether the row read the
+    -- currency or just defaulted to done.
+    --
+    -- No `weekly` on purpose. The real currency reports
+    -- quantityEarnedThisWeek = 0 on a character holding four, so the
+    -- weekly pair is not a thing this currency maintains and the fixture
+    -- must not pretend otherwise.
+    { name = "Tidal Spark Dust", currencyID = 3509, quantity = 3,
+      season = { earned = 3, cap = 4 } },
     -- The five crests, capped CUMULATIVELY: no weekly cap at all, a
     -- season total in maxQuantity, and totalEarned measured against it.
     -- That is how the live client reports them -- dumping the weekly
@@ -6072,6 +6084,97 @@ def main():
     else:
         print("  FAIL raid sub-tabs: %s" % taborder)
         failures.append(("raid sub-tabs", str(taborder)))
+
+    # The spark row reads residue, not seven quest flags.
+    #
+    # Sparks of Tides cannot answer "did you collect this week's": zero
+    # in the bags is equally consistent with not collected and with
+    # collected-and-crafted-with. The row used to infer it from any of
+    # seven quests finishing, which could not see the catch-up routes and
+    # needed one quest held out by hand for advertising a reward it does
+    # not pay.
+    #
+    # Tidal Spark Dust counts sparks OBTAINED and never decreases, so
+    # totalEarned against maxQuantity is the whole answer. Checked at
+    # three points, because the interesting one is the middle: a row that
+    # always says done is indistinguishable from a correct one if the
+    # fixture only ever sits at the cap.
+    spark = L.eval("""
+        function(ns)
+            local Wk = ns.Weekly
+            if not (Wk and Wk.ITEMS) then return "no weekly checklist" end
+
+            local row
+            for _, item in ipairs(Wk.ITEMS) do
+                if item.id == "spark" then row = item end
+            end
+            if not row then return "no spark row" end
+            if row.quests then
+                return "the spark row still infers the answer from quest ids"
+            end
+            if not row.auto then
+                return "the spark row has no auto answer"
+            end
+
+            -- Driven through a temporary stub rather than by editing the
+            -- currency fixture: CURRENCY_LIST is a prelude local and is
+            -- not reachable from here, and each leg wants its own numbers
+            -- anyway.
+            local real = C_CurrencyInfo.GetCurrencyInfo
+            local earned, cap = 3, 4
+            C_CurrencyInfo.GetCurrencyInfo = function(id)
+                if id ~= 3509 then return real(id) end
+                return { name = "Tidal Spark Dust", quantity = earned,
+                         totalEarned = earned, maxQuantity = cap,
+                         useTotalEarnedForMaxQty = true }
+            end
+            local function restore(msg)
+                C_CurrencyInfo.GetCurrencyInfo = real
+                return msg
+            end
+
+            -- BEHIND: three of the four this season has paid out.
+            if row.auto() ~= false then
+                return restore("a character one spark short reads as done")
+            end
+
+            -- CAUGHT UP.
+            earned = 4
+            if row.auto() ~= true then
+                return restore("a character at the ceiling still reads as "
+                    .. "owing one")
+            end
+
+            -- Overshooting is not supposed to happen, but a catch-up
+            -- week paying two would do it, and the row must not flip
+            -- back to unticked when it does.
+            earned = 5
+            if row.auto() ~= true then
+                return restore("overshooting the ceiling unticks the row")
+            end
+
+            -- NO ANSWER. Before the client has answered -- which on this
+            -- currency means a zero cap -- the row must fall back to a
+            -- manual tick rather than claim either way. That is what it
+            -- did before any currency was involved and the fallback has
+            -- to survive.
+            earned, cap = 3, 0
+            if row.auto() ~= nil then
+                return restore("with no cap read the row still asserts an answer")
+            end
+            local _, manual = Wk:IsDone(row)
+            if not manual then
+                return restore("with no answer the row is not clickable")
+            end
+            return restore("ok")
+        end
+    """)(ns)
+    if spark == "ok":
+        print("  ok   spark row: reads Tidal Spark Dust, knows behind from "
+              "caught up, and hands back to a manual tick when unanswered")
+    else:
+        print("  FAIL spark row: %s" % spark)
+        failures.append(("spark row", str(spark)))
 
 
     # The character rail: section rules, and the crest track colours.
