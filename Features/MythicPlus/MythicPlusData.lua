@@ -384,34 +384,40 @@ end
 -- the page and the chips in the header agree by construction instead of
 -- being two estimates that drift apart on a Tuesday.
 --
--- `completed` is the vault's test, not the timer's -- a depleted key
--- still fills a slot. Anything here that calls a run "timed" would be
--- answering a question this API was not asked.
+-- What a history entry actually carries, read off BigWigs/Tools/
+-- Keystones.lua, which renders this same list against a live client:
+--   mapChallengeModeID, level, completed, thisWeek, runScore,
+--   durationSec, completionDate { year, month, monthDay, weekday,
+--   hour, minute }
+--
+-- So the week list is not limited to "it finished" for older runs, as
+-- it was while this file believed `completed` was all there was. How
+-- long the run took, when it happened and what it scored are on every
+-- entry, this week's and the season's alike.
+--
+-- Order: index 1 is the OLDEST run. BigWigs walks the array forward to
+-- accumulate each dungeon's best score and backward to print newest
+-- first, which only works one way round.
 --
 ------------------------------------------------------------
 -- The run journal
 --
--- C_MythicPlus.GetRunHistory answers ONE thing about a run: whether it
--- completed. Not whether it beat the timer, not by how much, not what
--- the key upgraded to, not what it paid in score. That is why the week
--- list could only say "counts" and "left" -- it was reporting the only
--- fact it had.
---
--- Everything richer exists for exactly one moment. C_ChallengeMode.
--- GetCompletionInfo is populated when a run ends and says nothing
--- before or after, so the only way to have it later is to write it down
--- when it happens. This does that, into saved variables, and the week
--- list reads back from it.
+-- Two things the history still does not answer: how many levels the
+-- key gained, and how many times the group died. Both exist for
+-- exactly one moment -- C_ChallengeMode.GetCompletionInfo is populated
+-- when a run ends and says nothing before or after -- so the only way
+-- to have them later is to write them down as they happen. This does
+-- that, into saved variables, and the week list reads back from it.
 --
 -- Return order verified against RaiderIO/core.lua, which is maintained
 -- against a live client:
 --   mapID, level, time, onTime, keystoneUpgradeLevels, practiceRun,
 --   oldDungeonScore, newDungeonScore, ...
 --
--- The consequence worth stating: a run finished before this existed --
--- or on a character or install without it -- has no entry, and never
--- will. The list falls back to "completed" for those rather than
--- inventing a time, which is why rows can differ in what they show.
+-- A run finished before this existed -- or on a character or install
+-- without it -- has no entry and never will. That now costs a death
+-- count and an exact upgrade level, not the whole row: the history's
+-- own duration says whether the key was timed, and by how much.
 ------------------------------------------------------------
 
 --- The start of the current M+ week, as an epoch second.
@@ -480,20 +486,53 @@ function ns:RecordCompletedRun()
         deaths = deaths,
         limit  = limit,
         at     = (type(time) == "function" and time()) or 0,
+        -- Whose run it was. The journal is account-wide saved
+        -- variables, and a run of an alt's must not be merged into
+        -- this character's week -- see GetWeeklyRuns.
+        who    = UnitGUID and UnitGUID("player") or nil,
     }
 end
 
 --- The journal entry for a run, or nil.
 ---
---- Matched on map AND level, and each entry is consumed once, so two
---- runs of the same key this week get their own rows rather than both
---- showing the first one's time.
-local function TakeJournalEntry(pool, mapID, level)
+--- Matched on map and level, then on the clock, and each entry is
+--- consumed once. The clock matters because a key gets run twice: a
+--- +10 Altar of Fangs blown at 9:46 and a +10 Altar of Fangs timed at
+--- 17:37 are the same map at the same level, and on map and level alone
+--- the morning's row collects the evening's time.
+---
+--- Worse than a wrong time, that also loses the run. The evening's
+--- entry is the one the history has not published yet, and an entry
+--- taken by the morning's row is no longer in the pool to be merged in
+--- as a row of its own -- so the key you just finished stays invisible.
+---
+--- Compared on DURATION rather than the timestamp. Both come from the
+--- same client and mean the same thing, where the journal's stamp is
+--- local time and the history's date need not be. A candidate whose
+--- duration disagrees is a different run and is refused; a candidate
+--- with no duration to compare is allowed, because nothing says it is
+--- wrong.
+local function TakeJournalEntry(pool, mapID, level, durationSec)
+    local fallback
     for i, e in ipairs(pool) do
         if e.mapID == mapID and e.level == level then
-            table.remove(pool, i)
-            return e
+            local mine = e.ms and (e.ms / 1000) or nil
+            if durationSec and mine then
+                -- Two seconds of slack: the history rounds to whole
+                -- seconds and the journal keeps milliseconds.
+                if math.abs(durationSec - mine) <= 2 then
+                    table.remove(pool, i)
+                    return e
+                end
+            elseif not fallback then
+                fallback = i
+            end
         end
+    end
+    if fallback then
+        local e = pool[fallback]
+        table.remove(pool, fallback)
+        return e
     end
     return nil
 end
@@ -511,39 +550,346 @@ do
     end)
 end
 
--- Returns highest key first: { mapID, name, level, completed }
+--- How many levels a timed key gained.
+---
+--- Beating the timer upgrades the key by one, 20% under by two, 40%
+--- under by three. Derived rather than read, because the number itself
+--- only exists in the completion info the journal captures -- so this
+--- is what a run from before the journal gets, and the journal's own
+--- count wins wherever there is one.
+local function UpgradeLevels(durationSec, limit)
+    if not (durationSec and limit and limit > 0) then return nil end
+    if durationSec > limit then return 0 end
+    local frac = durationSec / limit
+    if frac <= 0.6 then return 3 end
+    if frac <= 0.8 then return 2 end
+    return 1
+end
+
+--- Epoch seconds for a history entry's completionDate, or nil.
+local function DateToEpoch(d)
+    if not (d and d.year and d.month and d.monthDay) then return nil end
+    if type(time) ~= "function" then return nil end
+    local ok, at = pcall(time, {
+        year = d.year, month = d.month, day = d.monthDay,
+        hour = d.hour or 12, min = d.minute or 0, sec = 0,
+    })
+    if ok and type(at) == "number" then return at end
+    return nil
+end
+
+-- Returns most recent first:
+--   { mapID, name, level, completed, timed, durationSec, limit,
+--     score, gain, date, chests, detail }
 function ns:GetWeeklyRuns()
-    local history = C_MythicPlus.GetRunHistory(false, true)
+    if not (C_MythicPlus and C_MythicPlus.GetRunHistory) then return {} end
+
+    -- The whole season, not just this week, for one reason: rating
+    -- counts a dungeon's best run only, so what a run was worth is the
+    -- amount it beat that dungeon's previous best by -- and last week's
+    -- runs are what set that bar.
+    local history = C_MythicPlus.GetRunHistory(true, true)
     if not history then return {} end
+
+    local weekStart = WeekStart()
+
+    --- Whether an entry belongs to the week the card is headed with.
+    --- `thisWeek` is the client's own answer; the date is a fallback for
+    --- a build that stops setting it.
+    local function IsThisWeek(run)
+        if run.thisWeek ~= nil then return run.thisWeek and true or false end
+        local at = DateToEpoch(run.completionDate)
+        if at and weekStart > 0 then return at >= weekStart end
+        return nil  -- undecidable
+    end
+
+    -- Undecidable week membership would silently spill last week's runs
+    -- into a card headed "This Week", so fall back to asking for this
+    -- week alone and give up the score gains rather than be wrong.
+    local decidable = true
+    for _, run in ipairs(history) do
+        if IsThisWeek(run) == nil then decidable = false; break end
+    end
+    if not decidable then
+        history = C_MythicPlus.GetRunHistory(false, true) or {}
+    end
+
+    -- Oldest first, by the clock.
+    --
+    -- The order the history arrives in was read as chronological, on
+    -- the strength of another addon walking it that way, and it is not:
+    -- a morning +2 came back above an afternoon +5 and the key finished
+    -- minutes ago sat nine rows down. Every entry carries the minute it
+    -- finished, so that is what decides, and the arrival order only
+    -- breaks ties.
+    local ordered = {}
+    for i, run in ipairs(history) do
+        ordered[i] = { run = run, at = DateToEpoch(run.completionDate), idx = i }
+    end
+    table.sort(ordered, function(a, b)
+        if a.at and b.at then
+            if a.at ~= b.at then return a.at < b.at end
+            return a.idx < b.idx
+        end
+        -- A run with no date cannot be placed against ones that have
+        -- one. Treated as the oldest, so it ends up at the back of the
+        -- list the card draws rather than jumping to the top of it.
+        if a.at then return false end
+        if b.at then return true end
+        return a.idx < b.idx
+    end)
 
     -- A working copy: entries are consumed as they are matched, so two
     -- runs of the same key do not both take the first one's detail.
     local pool = {}
     for _, e in ipairs(self:PruneRunJournal()) do pool[#pool + 1] = e end
 
-    local out = {}
-    for _, run in ipairs(history) do
+    -- Oldest to newest, so each dungeon's best score is the best BEFORE
+    -- the run being measured -- which is why this walks the sorted list
+    -- and not the raw one. Gains are given up entirely on the fallback:
+    -- with only this week in hand the first run of a dungeon would look
+    -- like it earned its whole score, which is a wrong answer rather
+    -- than a missing one.
+    local best, out = {}, {}
+    for _, o in ipairs(ordered) do
+        local run = o.run
         local mapID = run.mapChallengeModeID
-        if mapID then
-            local name = C_ChallengeMode.GetMapUIInfo(mapID)
+        local gain
+        if decidable and mapID then
+            local score = run.runScore or 0
+            local prev = best[mapID] or 0
+            if score > prev then
+                gain = score - prev
+                best[mapID] = score
+            else
+                gain = 0
+            end
+        end
+
+        if mapID and (not decidable or IsThisWeek(run)) then
+            local name, _, limit = C_ChallengeMode.GetMapUIInfo(mapID)
             local level = run.level or 0
             local entry = {
                 mapID     = mapID,
                 name      = name or "Unknown",
                 level     = level,
                 completed = run.completed and true or false,
+                score     = run.runScore,
+                gain      = gain,
+                date      = run.completionDate,
+                limit     = limit,
+                at        = o.at,
             }
             -- `detail` is absent for anything finished before the
             -- journal existed, and callers must handle that rather than
-            -- assume every run has a time.
-            entry.detail = TakeJournalEntry(pool, mapID, level)
+            -- assume every run has a death count.
+            entry.detail = TakeJournalEntry(pool, mapID, level, run.durationSec)
+            entry.at = entry.at or (entry.detail and entry.detail.at)
+
+            -- Duration: the history's, or the journal's for a client
+            -- that does not carry one.
+            entry.durationSec = run.durationSec
+            if not entry.durationSec and entry.detail and entry.detail.ms then
+                entry.durationSec = entry.detail.ms / 1000
+            end
+            if entry.detail and entry.detail.limit then
+                entry.limit = entry.limit or entry.detail.limit
+            end
+
+            -- A zero duration is not a run finished instantly, and a
+            -- key the client says did not complete is not a timed one
+            -- however its clock reads. Either would otherwise come out
+            -- of the arithmetic as a three-chest run.
+            if entry.durationSec and entry.durationSec > 0
+                and entry.limit and entry.limit > 0 then
+                entry.timed = entry.completed and entry.durationSec <= entry.limit
+            elseif entry.detail then
+                entry.timed = entry.detail.onTime and true or false
+            end
+
+            -- The journal counted the upgrade; everything else infers it.
+            if entry.detail and entry.detail.chests then
+                entry.chests = entry.detail.chests
+            elseif entry.timed then
+                entry.chests = UpgradeLevels(entry.durationSec, entry.limit)
+            end
+
+            if entry.gain == nil and entry.detail and entry.detail.gain then
+                entry.gain = entry.detail.gain
+            end
+
+            entry.idx = #out + 1
             out[#out + 1] = entry
         end
     end
 
-    -- The vault fills from the top of this list, so the order on screen
-    -- is the order that decides the reward.
-    table.sort(out, function(a, b) return a.level > b.level end)
+    -- The run you just finished, which the history does not have yet.
+    --
+    -- CHALLENGE_MODE_COMPLETED fires well before the client's own run
+    -- history carries the run, so a list drawn seconds later is drawn
+    -- without it -- the key is finished, the vault knows, and the card
+    -- says nothing. Whatever is left in the pool is exactly that: a run
+    -- the journal watched happen and the history has not published.
+    --
+    -- Only this character's. The journal is account-wide saved
+    -- variables, so an alt's runs are in it too and they belong on the
+    -- alt's week. An entry from before the journal recorded a character
+    -- is not merged at all -- it is old enough that the history has it.
+    local me = UnitGUID and UnitGUID("player") or nil
+    for _, e in ipairs(pool) do
+        if me and e.who == me then
+            local name, _, limit = C_ChallengeMode.GetMapUIInfo(e.mapID)
+            out[#out + 1] = {
+                mapID       = e.mapID,
+                name        = name or "Unknown",
+                level       = e.level or 0,
+                completed   = true,
+                timed       = e.onTime and true or false,
+                chests      = e.chests,
+                durationSec = e.ms and (e.ms / 1000) or nil,
+                limit       = e.limit or limit,
+                gain        = e.gain,
+                detail      = e,
+                at          = e.at,
+                idx         = #out + 1,
+            }
+        end
+    end
+
+    -- Newest first: the list is read the way a night is remembered, the
+    -- key that just ended at the top, rather than sorted by level --
+    -- which put a Monday +10 above the +9 that finished ten minutes
+    -- ago. Sorted rather than reversed, because the merged runs were
+    -- appended and are not in any order of their own.
+    table.sort(out, function(a, b)
+        if a.at and b.at then
+            if a.at ~= b.at then return a.at > b.at end
+            return a.idx > b.idx
+        end
+        if a.at then return true end
+        if b.at then return false end
+        return a.idx > b.idx
+    end)
+
+    return out
+end
+
+------------------------------------------------------------
+-- What a run says when you hover it
+--
+-- Text, not drawing, so the week list's rows stay about layout and the
+-- sentences can be checked without a screen.
+------------------------------------------------------------
+
+--- m:ss, or h:mm:ss when a run ran long enough to need it.
+function ns:ClockText(sec)
+    sec = math.floor(math.abs(sec or 0) + 0.5)
+    local h = math.floor(sec / 3600)
+    local m = math.floor((sec % 3600) / 60)
+    local s = sec % 60
+    if h > 0 then return string.format("%d:%02d:%02d", h, m, s) end
+    return string.format("%d:%02d", m, s)
+end
+
+--- "today at 21:14", "Tuesday at 20:02", or nil for a run with no date.
+---
+--- Weekday 1 is Sunday, the client's own convention. Built from the
+--- global strings rather than CALENDAR_WEEKDAY_NAMES, which lives in a
+--- load-on-demand addon and is nil until the calendar has been opened
+--- once -- and built on the call, not at load, so a missing global
+--- degrades to a date instead of being baked in as one.
+local function WhenText(d)
+    if not (d and d.monthDay) then return nil end
+    local days = {
+        WEEKDAY_SUNDAY, WEEKDAY_MONDAY, WEEKDAY_TUESDAY, WEEKDAY_WEDNESDAY,
+        WEEKDAY_THURSDAY, WEEKDAY_FRIDAY, WEEKDAY_SATURDAY,
+    }
+    local when
+    local today = type(date) == "function" and date("*t") or nil
+    if type(today) == "table" and d.year == today.year
+        and d.month == today.month and d.monthDay == today.day then
+        when = "today"
+    elseif d.weekday and days[d.weekday] then
+        when = days[d.weekday]
+    else
+        when = string.format("%d/%d", d.monthDay, d.month or 0)
+    end
+    if d.hour and d.minute then
+        return string.format("%s at %d:%02d", when, d.hour, d.minute)
+    end
+    return when
+end
+
+--- The hover lines for one run, in order: { text, r, g, b } each, or
+--- { blank = true } for a spacer.
+---
+--- Every line is conditional on the fact behind it existing. A run from
+--- before the journal, on a client that stopped sending durations, has
+--- nothing but a level and whether it counted -- and says that, rather
+--- than filling the gap with a made-up time.
+function ns:DescribeRun(run)
+    local out = {}
+    local function Add(text, r, g, b)
+        out[#out + 1] = { text = text, r = r, g = g, b = b }
+    end
+
+    Add(run.name or "Unknown", 1, 1, 1)
+    Add("Keystone +" .. (run.level or 0), 0.7, 0.7, 0.7)
+
+    local when = WhenText(run.date)
+    if when then Add(when, 0.5, 0.5, 0.5) end
+
+    local margin = (run.durationSec and run.limit and run.limit > 0)
+        and (run.limit - run.durationSec) or nil
+
+    if run.durationSec then
+        out[#out + 1] = { blank = true }
+        local line = "Finished in " .. self:ClockText(run.durationSec)
+        if run.limit and run.limit > 0 then
+            line = line .. "   timer " .. self:ClockText(run.limit)
+        end
+        Add(line, 0.9, 0.9, 0.9)
+    end
+
+    if run.timed ~= nil and margin then
+        if run.timed then
+            Add(self:ClockText(margin) .. " under the timer", 0, 0.8, 0)
+            local chests = run.chests or 0
+            if chests > 0 then
+                Add(string.format("Key upgraded %d level%s, to +%d",
+                    chests, chests == 1 and "" or "s", (run.level or 0) + chests),
+                    0, 0.8, 0)
+            else
+                Add("Timed, but not by enough to upgrade", 0.7, 0.7, 0.7)
+            end
+        else
+            Add(self:ClockText(margin) .. " over the timer", 1, 0.4, 0.27)
+            Add("Key depleted a level", 1, 0.4, 0.27)
+        end
+    elseif run.timed == nil then
+        -- No clock on this one, so the vault's answer is the only one
+        -- there is: a finished key filled a slot whether or not it beat
+        -- the timer.
+        out[#out + 1] = { blank = true }
+        Add(run.completed and "Finished" or "Depleted", 0.9, 0.9, 0.9)
+        Add("No time was kept for this run", 0.5, 0.5, 0.5)
+    end
+
+    if run.score and run.score > 0 then
+        Add("Worth " .. run.score .. " score", 1, 0.82, 0)
+    end
+    if run.gain then
+        if run.gain > 0 then
+            Add("+" .. run.gain .. " rating -- a new best here", 1, 0.82, 0)
+        else
+            Add("No rating gained -- your best here is higher", 0.5, 0.5, 0.5)
+        end
+    end
+    local d = run.detail
+    if d and d.deaths then
+        Add(d.deaths .. (d.deaths == 1 and " death" or " deaths"), 0.7, 0.7, 0.7)
+    end
+
     return out
 end
 

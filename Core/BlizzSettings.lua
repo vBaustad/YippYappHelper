@@ -196,6 +196,16 @@ local function BuildAll(category, layout)
             YippYappHelperDB.trinketTooltips = v and true or false
         end)
 
+    -- Asked for on CurseForge, and the reason given is the reason it
+    -- lands here rather than on a page: what people want at the start of
+    -- an evening is the vault, which is the first thing the window shows.
+    AddCheckbox(category, "openOnLogin", "Open on login",
+        "Opens the YippYapp window by itself when the game loads, on the "
+        .. "dashboard -- so the Great Vault is the first thing you see. "
+        .. "Login and /reload only, not when you change zone.",
+        function() return ns.GetOpenOnLogin and ns.GetOpenOnLogin() end,
+        function(v) if ns.SetOpenOnLogin then ns.SetOpenOnLogin(v) end end)
+
     AddCheckbox(category, "minimapIcon", "Minimap button",
         "Show the YippYapp Helper button next to your minimap.",
         function()

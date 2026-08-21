@@ -205,6 +205,79 @@ local PLAN_ROW_H = 46
 -- currencies the client discovers. Two this season; the ceiling is here
 -- so a season with more does not silently lose the tail.
 local WEEKLY_ROWS = 12
+
+-- Blizzard's recurring-quest marker, most specific name first. Tried in
+-- order at build time; the first the client actually has is used and the
+-- rest are never looked at. Names in this corner of the atlas have moved
+-- more than once between expansions, so this is a list rather than a
+-- constant and a miss costs a hidden texture rather than an error.
+local QUEST_ATLASES = {
+    "quest-recurring-available",
+    "questlog-questtypeicon-weekly",
+    "questlog-questtypeicon-recurring",
+    "QuestRepeatableTurnin",
+    "questlog-questtypeicon-daily",
+}
+
+-- The game's own quest-title gold, not a skin colour.
+--
+-- Deliberately outside the palette: every other colour on this page is the
+-- skin talking, but this one is a quotation. A quest name reads as a quest
+-- name because it is the exact yellow the quest log uses, and a skin that
+-- recoloured it would be recolouring a fact about the game rather than a
+-- choice about the addon.
+local QUEST_GOLD = "ffd100"
+
+--- Puts the right picture on a checklist row, and says whether it managed.
+---
+--- Most specific thing the row has, in order: art it asked for by name, the
+--- icon of the item it is about, then the generic recurring-quest marker for
+--- anything quest-backed. A row with none of those keeps no icon at all,
+--- which is what every row did until now and is a perfectly good answer.
+---
+--- Atlases are tried as an ordered list rather than named once, because
+--- Blizzard's art moves between expansions and a name that has gone is
+--- silent -- W:TrySetAtlas answers false instead of erroring, so a miss
+--- costs a hidden texture rather than a broken page. Each row carries its
+--- own candidates for the same reason: the world boss wants a skull and the
+--- bounty wants a map, and neither of those is one guaranteed name.
+local function ApplyRowIcon(tex, data)
+    local item = data.item
+
+    if item and item.iconAtlas then
+        for _, atlas in ipairs(item.iconAtlas) do
+            if W:TrySetAtlas(tex, atlas) then return true end
+        end
+        -- A named fallback for when none of the atlases is there. Plain
+        -- texture paths do not move the way atlas names do.
+        if item.iconTexture then
+            tex:SetTexture(item.iconTexture)
+            return true
+        end
+    end
+
+    -- The item the row is about, drawn as itself. Nil before the client has
+    -- loaded the item, which is why the request goes out -- the next
+    -- refresh picks it up, and until then the row simply has no icon.
+    if item and item.itemID and C_Item then
+        local icon = C_Item.GetItemIconByID and C_Item.GetItemIconByID(item.itemID)
+        if icon then
+            tex:SetTexture(icon)
+            return true
+        end
+        if C_Item.RequestLoadItemDataByID then
+            C_Item.RequestLoadItemDataByID(item.itemID)
+        end
+    end
+
+    if data.questTitle then
+        for _, atlas in ipairs(QUEST_ATLASES) do
+            if W:TrySetAtlas(tex, atlas) then return true end
+        end
+    end
+
+    return false
+end
 local WEEKLY_ROW_H = 24
 -- Two columns, because these are one-line rows and a full-width one
 -- wastes two thirds of itself on empty space. Eight of them stacked ran
@@ -589,24 +662,38 @@ local function Build(host)
         row.tick:Hide()
 
         -- Which rows the player has to tick, said on the row instead of
-        -- in a tooltip.
+        -- in a tooltip. One slot, two possible words, never both. "manual" marks the
+        -- rows that will sit there unticked until the player says
+        -- otherwise; a quest's own progress ("2/3") replaces it on the
+        -- rows that answer themselves, where there is no click to hint at
+        -- and the count is the more useful thing to know.
+        row.tag = W:Label(row, "GameFontNormalSmall", "RIGHT")
+        row.tag:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        row.tag:Hide()
+
+        -- How far along a row that measures itself is, drawn behind
+        -- everything else on the row.
         --
-        -- Roughly half this list answers itself from the client and
-        -- half is the player's word, and nothing on screen said which
-        -- was which -- so the honest reading of ten empty boxes was
-        -- "ten things I have to remember to click", when it is closer
-        -- to five. The tag goes on the manual ones because that is the
-        -- shorter, more useful message: this is the set that will sit
-        -- there unticked until you say otherwise, and it doubles as the
-        -- hint that the row is clickable at all.
-        row.manualTag = W:Label(row, "GameFontNormalSmall", "RIGHT")
-        row.manualTag:SetPoint("RIGHT", row, "RIGHT", -8, 0)
-        row.manualTag:SetText(W:Tint("faint", "manual"))
-        row.manualTag:Hide()
+        -- BACKGROUND layer and the same frame as the contents, which is
+        -- what makes the ordering reliable here: draw layers only settle
+        -- ties WITHIN a frame, and a separate frame would have needed a
+        -- frame level instead. Anchored left and sized on refresh, so an
+        -- empty bar is a zero-width texture rather than a hidden one.
+        row.bar = row:CreateTexture(nil, "BACKGROUND")
+        row.bar:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        row.bar:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 0, 0)
+        row.bar:Hide()
+
+        -- What the row is about, in a picture. Filled at refresh rather
+        -- than here: rows are reused across the list, so the art belongs
+        -- to the data in the row and not to the frame.
+        row.icon = row:CreateTexture(nil, "ARTWORK")
+        row.icon:SetSize(14, 14)
+        row.icon:SetPoint("LEFT", row.box, "RIGHT", 8, 0)
+        row.icon:Hide()
 
         row.label = W:Label(row, "GameFontNormalSmall")
-        row.label:SetPoint("LEFT", row.box, "RIGHT", 9, 0)
-        row.label:SetPoint("RIGHT", row.manualTag, "LEFT", -8, 0)
+        row.label:SetPoint("RIGHT", row.tag, "LEFT", -8, 0)
         row.label:SetJustifyH("LEFT")
         row.label:SetWordWrap(false)
 
@@ -618,17 +705,41 @@ local function Build(host)
         end)
         row:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:AddLine(self._title or "", 1, 1, 1)
+
+            -- The heading is what the ROW says, not what the table calls
+            -- it. Those diverged the moment a row started naming its
+            -- quest: hovering "Complete Purging the Vaults" produced a
+            -- tooltip headed "Complete the Vaults weekly", which reads as
+            -- two different things rather than one thing twice.
+            if self._questTitle then
+                GameTooltip:AddLine(self._questTitle, 1, 0.82, 0)
+            else
+                GameTooltip:AddLine(self._title or "", 1, 1, 1)
+            end
+
             if self._detail then
                 GameTooltip:AddLine(self._detail, 0.7, 0.7, 0.72, true)
             end
-            -- Said on every row, because a list where some rows are
-            -- clickable and some are not is a list you have to poke at
-            -- to find out which is which.
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine(self._manual
-                and "Click to mark this done. Clears at the weekly reset."
-                or "Tracked automatically.", 0.5, 0.5, 0.55, true)
+
+            -- The quest's own objective sentence, where there is one.
+            -- "Prey Hunts completed: 1/3" is better than anything written
+            -- about it here, and it is already on screen in the quest log
+            -- so it needs no explaining.
+            if self._questObjective then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine(self._questObjective, 1, 1, 1, true)
+            end
+
+            -- Only where there is something to click. "Tracked
+            -- automatically" was on every other row and told nobody
+            -- anything: a row that cannot be clicked demonstrates that by
+            -- not responding to a click, and a line spent saying so is a
+            -- line not spent saying where to go.
+            if self._manual then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("Click to mark this done. Clears at the weekly reset.",
+                    0.5, 0.5, 0.55, true)
+            end
             GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -882,13 +993,67 @@ local function Refresh(ctx)
                 end
                 row._item, row._title, row._detail, row._manual =
                     data.item, data.label, data.detail, data.manual
+                row._questTitle, row._questObjective =
+                    data.questTitle, data.questObjective
+
+                -- A row backed by a quest names the quest, in the quest
+                -- log's own gold, behind the recurring-quest marker. That
+                -- turns "Complete the Vaults weekly" into "Complete
+                -- Purging the Vaults" -- a thing that can be searched for
+                -- and asked about, rather than a bar to go and recognise.
+                --
+                -- The verb stays on whatever the state is. It reads as a
+                -- label for the row rather than as an order shouted at
+                -- the player, and a finished row already says it is
+                -- finished twice over -- ticked box, greyed icon -- so
+                -- there is nothing left for a shorter phrasing to add.
+                --
+                -- Falls back to the row's own label whenever the client
+                -- has not handed a title over yet: the first draw after
+                -- login often lands before the quest is resident, and the
+                -- load event redraws the page when it arrives.
+                local hasQuest = data.questTitle ~= nil
+                local text
+                if hasQuest then
+                    text = ("%s |cff%s%s|r"):format(
+                        data.questVerb, QUEST_GOLD, data.questTitle)
+                else
+                    text = data.label
+                end
+
+                -- The icon takes the space in front of the words when it
+                -- is there, so the label starts after it rather than
+                -- underneath it.
+                -- Cleared first: the texture is reused across rows, and an
+                -- atlas left on it would survive a SetTexture that found
+                -- nothing and put the previous row's art on this one.
+                row.icon:SetTexture(nil)
+                local hasIcon = ApplyRowIcon(row.icon, data)
+                row.icon:SetShown(hasIcon)
+
+                row.label:ClearAllPoints()
+                row.label:SetPoint("RIGHT", row.tag, "LEFT", -8, 0)
+                if hasIcon then
+                    row.label:SetPoint("LEFT", row.icon, "RIGHT", 5, 0)
+                else
+                    row.label:SetPoint("LEFT", row.box, "RIGHT", 9, 0)
+                end
 
                 -- Done recedes, outstanding does not. The point of the
                 -- list is what is left, so the finished rows have to
                 -- stop competing with it -- struck through would be
-                -- louder, not quieter.
-                row.label:SetText(data.label)
-                row.label:SetTextColor(W:Color(data.done and "faint" or "text"))
+                -- louder, not quieter. A quest name carries its own
+                -- colour, so only the plain labels are tinted here.
+                row.label:SetText(text)
+                if hasQuest then
+                    row.label:SetTextColor(1, 1, 1)
+                else
+                    row.label:SetTextColor(W:Color(data.done and "faint" or "text"))
+                end
+
+                -- A finished row's icon recedes with the rest of it.
+                row.icon:SetDesaturated(data.done and true or false)
+                row.icon:SetAlpha(data.done and 0.45 or 1)
 
                 -- Border first, then the hole. Empty is an outline over
                 -- near-black; done is the same outline in green over a
@@ -905,10 +1070,35 @@ local function Refresh(ctx)
                 end
                 row.tick:SetShown(data.done and row._hasTick and true or false)
 
-                -- Hidden once it is ticked: at that point the row is
-                -- finished and the tag is answering a question nobody
-                -- is asking any more.
-                row.manualTag:SetShown(data.manual and not data.done)
+                -- The fill, for a row that reports a degree rather than a
+                -- state. Green once it is full, so it agrees with the tick
+                -- next to it instead of sitting there as a separate
+                -- opinion; the accent while it is filling.
+                if data.fraction and colW > 40 then
+                    local br, bg, bb = W:Color(data.done and "good" or "accent")
+                    row.bar:SetColorTexture(br, bg, bb, data.done and 0.16 or 0.13)
+                    row.bar:SetWidth(math.max(1, colW * data.fraction))
+                    row.bar:Show()
+                else
+                    row.bar:Hide()
+                end
+
+                -- One right-hand slot, three things that might want it, in
+                -- order of how much they say. A percentage is a fact about
+                -- this row and outranks both; quest progress is next; the
+                -- "manual" hint is the fallback and only while there is
+                -- still something to click.
+                if data.fractionText then
+                    row.tag:SetText(W:Tint(data.done and "faint" or "muted",
+                        data.fractionText))
+                    row.tag:Show()
+                elseif data.questProgress and not data.done then
+                    row.tag:SetText(W:Tint("muted", data.questProgress))
+                    row.tag:Show()
+                else
+                    row.tag:SetText(W:Tint("faint", "manual"))
+                    row.tag:SetShown(data.manual and not data.done)
+                end
 
                 -- Only a row the player can actually change lights up
                 -- under the cursor.
@@ -948,9 +1138,20 @@ local function Refresh(ctx)
             or W:Tint("faint", "all done"))
     end
 
+    -- The key in your bag, or nothing at all.
+    --
+    -- "no keystone" used to sit here and it is the one thing this slot
+    -- can say that is worth nothing: it states an absence the player
+    -- already knows about, next to a list whose whole job is telling
+    -- them what to do about absences. The other two titles on this page
+    -- carry facts you cannot get by looking -- the vault's reset
+    -- countdown, and how much of the checklist is left -- and this one
+    -- only has a fact when there is a key. So it says so then, and
+    -- stays quiet the rest of the time rather than filling the space
+    -- for the sake of symmetry.
     ui.planTitle:SetValue(keyName
         and ("|cff%s+%d %s|r"):format(W:Hex("text"), keyLevel or 0, keyName)
-        or W:Tint("faint", "no keystone"))
+        or "")
 
     local left = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
         and C_DateAndTime.GetSecondsUntilWeeklyReset()

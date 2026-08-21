@@ -6505,6 +6505,36 @@ def main():
                 return "an unnamed row had no label to fall back on"
             end
 
+            -- The crest row measures itself instead of ticking.
+            --
+            -- The fixture has Adventurer capped at 300/300 and Champion
+            -- part-way at 180/300, so a correct sum is strictly between
+            -- nothing and everything -- which is the only shape that can
+            -- catch a total that forgot to add one of the tracks, or one
+            -- that divided by the wrong thing.
+            local crests
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id == "crests" then crests = r end
+            end
+            if not crests then return "the crest row is gone" end
+            if not crests.fraction then
+                return "the crest row reported no progress at all"
+            end
+            if not (crests.fraction > 0 and crests.fraction < 1) then
+                return ("a part-filled crest allowance summed to %s")
+                    :format(tostring(crests.fraction))
+            end
+            if not (crests.fractionText or ""):match("^%d+%%$") then
+                return "the crest percentage read as " .. tostring(crests.fractionText)
+            end
+            -- And a row that does NOT measure itself must not grow a
+            -- fraction, or every tick on the page draws an empty bar.
+            for _, r in ipairs(Wk:GetList()) do
+                if r.id ~= "crests" and r.fraction then
+                    return r.id .. " reported a progress fraction it has no source for"
+                end
+            end
+
             -- The bounty map, which neither the bag nor the quest flag
             -- can answer on its own.
             --
@@ -6539,13 +6569,35 @@ def main():
                 return "a bounty that was never earned read as spent"
             end
 
-            -- Earned this week, gone from the bag: spent.
+            -- The used flag on its own is enough, with nothing else true.
+            -- This is the direct observation the row is built on, so it
+            -- has to work without help from the source quest.
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 86371 end
+            if not (Wk:IsDone(bounty)) then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "the used-bounty flag alone did not read as spent"
+            end
+
+            -- Earned this week, gone from the bag, and no used flag: the
+            -- fallback path, for a client where the hidden id is absent.
             C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 95520 end
             if not (Wk:IsDone(bounty)) then
                 ITEM_COUNTS[bounty.itemID] = nil
                 C_QuestLog.IsQuestFlaggedCompleted = realFlagged
                 return "a bounty earned and no longer held did not read as spent"
             end
+
+            -- Holding one beats the used flag. This is what keeps the row
+            -- honest if 86371 turns out not to clear at the reset.
+            ITEM_COUNTS[bounty.itemID] = 1
+            C_QuestLog.IsQuestFlaggedCompleted = function(id) return id == 86371 end
+            if Wk:IsDone(bounty) then
+                ITEM_COUNTS[bounty.itemID] = nil
+                C_QuestLog.IsQuestFlaggedCompleted = realFlagged
+                return "a stale used flag outranked a map sitting in the bag"
+            end
+            ITEM_COUNTS[bounty.itemID] = 0
 
             -- Earned AND holding beats the flag: a map in hand is still
             -- worth spending whichever week it came from.

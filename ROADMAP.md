@@ -6,6 +6,220 @@ re-deriving whether it is possible.
 
 ---
 
+## Weekly checklist: quest ids instead of ticks
+
+**Status:** plumbing built, ids missing. Blocked on one thing only, and that
+thing has to come out of the game.
+
+Asked for on CurseForge: a tree of the weekly quests you have not done,
+grouped by zone. The tree is the wrong shape and the thing underneath it is
+right — the weekly checklist should know which quests it is talking about
+instead of asking you.
+
+### Why not the tree
+
+`Features/Planner/WeeklyChecklist.lua` states the membership test at the top
+of `ITEMS`: *does skipping it this week cost you something you cannot get
+back?* That test is why the list is seven lines instead of forty, and it is
+written down there because an earlier version discovered rows instead of
+naming them and filled with things nobody cared about. An expansion-wide zone
+tree is the same mistake wearing a different hat — a collapsed node is still a
+row to scroll past, and the reason this list gets read is that there is
+nothing in it to scroll past.
+
+### What is built
+
+`questsDone` and a `quests = { ... }` field per row. `Wk:IsDone` consults it
+ahead of both the bespoke `auto` checks and the player's own tick, because
+where a quest id exists it is the client's record of this character's week and
+outranks anything else on the page.
+
+An empty list returns nil, meaning "nothing to go on", so a row with no id yet
+keeps its manual tick and behaves exactly as it did before. That is the point
+of the design: ids go in one at a time, and a row that has not been confirmed
+is not a row that is wrong.
+
+The list is a list rather than one id because a single chore is routinely
+several — a quest with per-faction or per-zone variants, one Blizzard reissues
+under a new id each patch, or a choice of three where doing any one is the
+week done.
+
+`Tools/loadcheck.py` drives all of it through a synthetic row: completed,
+outstanding, second-id-in-the-list, empty list, and a stale manual tick losing
+to a live flag. Deliberately not through a shipped row — those are empty until
+someone confirms ids, so a check written against them would test nothing today
+and break the day they are filled in.
+
+### What the ids turned out to be
+
+Read off Wowhead's own quest and item pages, and in one case off a Blizzard
+statement. Three rows are settled and in the file:
+
+```
+spark        quests = { 98232, 98172, 93426, 96726 }
+             98232 Midnight: Vaults of Atal'Utek   PvE meta
+             98172 Trailing Xal'atath              PvE meta, Silvermoon
+             93426 Sparks of War: Voidstorm        PvP, War Mode
+             96726 Sparks of War: Naigtal          PvP, War Mode
+vaultweekly  quests = { 95520 }  Purging the Vaults
+bountymap    itemID = 274374     Trovehunter's Bounty. Fully automatic from
+                                 the bag count AND 95520's flag together --
+                                 earned this week and not in the bag means
+                                 spent. Neither fact answers it alone, which
+                                 is why this row was written off as
+                                 half-trackable for longer than it deserved.
+```
+
+Two of the supplied ids were sub-steps of `95520` rather than rows of their
+own and are unused: `96639` Patrolling the Temple and `96642` Decisive
+Incursions. `96643` From Whence It Came is a daily and fails the membership
+test outright.
+
+### Two mistakes worth not repeating
+
+**A reward list is not evidence.** `96995` Turn Back the Surge lists Spark of
+Tides in its rewards and does not award one — Blizzard say it is a bug. It
+was one edit from being written in as a confirmed source, on the strength of
+that list.
+
+**A catch-up bump is not the steady state.** Blizzard raised the weekly spark
+maximum to four at the reset on 2026-08-18, as a one-off to level characters
+that had picked up an unintended third. Reading that as the ongoing model
+produced a whole counting mechanism — a second `questsAll` field, a
+"2 of 4" row tag, and the harness to go with it — for a row that is a tick.
+The real rule is one spark a week from any one source, taking it from one
+closing the rest until the reset, which is what `quests` already expresses.
+All of it came back out. Anything time-bounded to a single week does not
+belong in a data table that has no concept of a date.
+
+### Sparks: what is worth deriving, and what is not
+
+Proposed: read the season's cumulative allowance from the week number, count
+Sparks of Tides in the bags, find the Tidal Crafted gear the player is wearing
+and add back what it cost, and report how many sparks they are owed.
+
+The allowance half is cheap and correct. `ns.SEASON_PATCH_START` and the
+`seasonWeek` derivation in `Features/Fun/Advisor.lua` already exist, and four
+this week rising by one a week is a formula rather than a table.
+
+**The spend half does not work, and it fails in the nagging direction.** A
+gear scan sees equipped items and bags. It cannot see a crafted piece that has
+since been replaced, vendored or disenchanted, one sitting on an alt, or
+anything in void storage. So spent-sparks is a FLOOR, which makes acquired a
+floor, which makes "you are owed N" an over-estimate. A player five weeks in
+who has replaced two crafted pieces is told they are two sparks behind, every
+week, permanently. That is the failure this whole design has been avoiding.
+
+Two things would have to be settled before any of it could be trusted, and
+both are load-bearing:
+
+- **What a crafted item costs.** Wowhead's own reporting says two sparks for
+  most items and four for a two-hander; the proposal says one and two. The
+  ratio agrees and the multiplier does not, which smells like a whole-versus-
+  fragment unit confusion. Every derived number doubles or halves on it.
+- **Whether recrafting spends another spark.** If it does, one visible item
+  can represent one spark or several and nothing distinguishes them.
+
+Detection is the smaller problem but not free: "Tidal Crafted" is a tooltip
+property, so finding it means tooltip scanning, which is locale-dependent. A
+bonus id would be robust but has to be datamined.
+
+**What is sound is also most of the value.** Two exact numbers, no inference:
+
+- *Did you take this week's spark?* Quest flags, already answered correctly by
+  the `spark` row.
+- *How many can you spend right now?* `C_Item.GetItemCount` on 274476, which
+  is exact. Include the account bank in the call -- the item is bind-on-pickup
+  and the warband bank holds those, so a count that omits it under-reports.
+
+Those two plus the allowance formula answer the question a player actually
+has, which is not "how many have I earned" but "when can I craft the
+two-hander". Holding is exact, the weekly flag is exact, and the arithmetic
+between them needs no gear scan at all. Build that; leave the season total
+alone.
+
+### The two weekly-quest givers, and what they mean for three rows
+
+Lady Liadrin (npc 256203) offers a **selection of four** "Midnight: ..."
+quests each week, of which a character completes **one**. Sixteen variants
+exist. Every one checked pays a Spark of Tides, which makes her weekly the
+spark route for most players.
+
+Archmage Aethas Sunreaver (npc 256212) also gives one weekly, from a
+different and larger set -- the Timewalking "Path Through Time" quests, and
+the Call to Delves / World Awaits / Emissary of War family. Checked two of
+them and **neither pays a spark**, so his set is a separate chore, not a
+spark route. Worth a decision on its own merits rather than folding in here.
+
+Three consequences for the list, none of them safe to act on without a call:
+
+- **`weeklyquest` is probably the spark row wearing a different hat.** "The
+  recurring quest in the season's zone" was written before anyone knew what
+  it referred to. It refers to the Liadrin weekly -- which is exactly what
+  grants the spark, and the spark is the thing you cannot get back. Two rows
+  for one action fails the list's own rule. Deleting `weeklyquest` and
+  letting `spark` carry it is the tidier answer.
+- **`prey` cannot become a quest row as it stands.** `93910` Midnight: Prey
+  is one of Liadrin's sixteen, so it is only offered some weeks. Wired to
+  that id the row would sit permanently unticked AND unclickable on every
+  week it is not in the selection -- strictly worse than the manual tick it
+  has now. It only survives as its own row if prey hunts carry a weekly cap
+  independent of the meta quest, which is what its detail line claims and
+  what nobody has confirmed.
+- **A row per offered quest is not the answer either.** Four are offered and
+  one is completable, so four rows would report three permanent failures.
+
+### Cracked Keystone (92600) belongs to Yeeper, not to the checklist
+
+One-time, gated behind a level 11 delve, and it pays crests that do not count
+against the weekly cap. Worth telling people about; wrong shape for this list.
+
+The membership test at the top of `ITEMS` is *does skipping it this week cost
+you something you cannot get back?* A one-time quest costs nothing this week
+-- it is there next week too. As a checklist row it would either nag forever
+on a character that has not done it or sit permanently ticked on one that
+has, and neither is a weekly chore.
+
+The advisor is the right home and the fit is exact: gate a rule on
+`IsQuestFlaggedCompleted(92600)` being false and it appears for someone who
+has not done it and disappears for good the moment they do. Uncapped crests
+behind a one-off quest is precisely the kind of thing Yeeper exists to be
+rude about, and the delve requirement gives the line something concrete to
+tell them to go and do.
+
+### Still open
+
+```
+prey         this week's prey hunts; nothing at all yet
+weeklyquest  98172 is already in the spark row and is the strong candidate
+             here too, so check first whether these are two chores or one.
+             Wowhead marks 98172 Side: Alliance and no second quest of that
+             name exists -- either the split is a datamining artefact or the
+             Horde id is under another name.
+```
+
+### The zone half, if it is still wanted afterwards
+
+`C_Map.GetBestMapForUnit("player")` gives the current map, and that map's group
+sorts first. That is the whole of "changes with the zone you're in", and it
+should be a sort key rather than a filter — someone in Valdrakken still needs
+to see that the season's zone has one outstanding.
+
+Grouping only earns its keep once there are enough rows to group. At seven,
+group headers are chrome over a list that reads fine flat. Revisit if the list
+grows.
+
+### Names come from the client, not from us
+
+If a row ever wants to name its quest rather than describe it,
+`C_QuestLog.GetTitleForQuestID` returns the real localised title, and
+`C_QuestLog.RequestLoadQuestByID` plus `QUEST_DATA_LOAD_RESULT` fills the cache
+for a quest not currently in the log. Storing titles would mean shipping an
+English list that goes stale on the first rename. Store the id; the zone is the
+only fact about a quest that the client cannot hand back from an id alone.
+
+---
+
 ## Editable Best in Slot list
 
 **Status:** wanted, not started. Feasible.
@@ -234,6 +448,14 @@ that never pays Champion. The advice is never "run M0s for Champion" — it is
   the policy line, but nothing above the list says it. A track budget is a
   fact about sixteen slots and one wallet, and it belongs at the top of the
   page, not inside a tooltip on one row.
+- **No per-slot drop LEVEL.** The band is one pair of numbers for the whole
+  character, but raid item level is per boss: the same slot comes off an early
+  boss low and a late one high, and which bosses a player kills decides whether
+  a mark ever pays. `Features/Loot/LootBrowserData.lua` already scans the
+  Encounter Journal per boss, per spec, per slot — that is the data. Caution:
+  it is also the scan a previous probe got wrong by reading item level off an
+  unresolved link (see the note above `ns.DUNGEON_LOOT`), so it wants a careful
+  pass, not a quick one.
 - **No per-slot drop likelihood.** The strongest rule in every community
   guide is *solve the slots your content will not* — a slot your keys fill
   weekly is a poor crest target; one nothing has offered in three weeks is

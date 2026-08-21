@@ -127,9 +127,6 @@ Features\MythicPlus\UtilityAdvisor.lua
 
 Features\Teleports\TeleportUI.lua
 
-# Data only: the Folio is chased by Mr. Yeeper rather than given a page.
-Features\OmniumFolio\OmniumFolioData.lua
-
 Features\Interrupts\InterruptsSettings.lua
 Features\Interrupts\InterruptsData.lua
 Features\Interrupts\InterruptsUI.lua
@@ -140,7 +137,6 @@ Features\Interrupts\InterruptsUI.lua
 Features\Fun\FunStats.lua
 Features\Fun\Snark.lua
 Features\Fun\Advisor.lua
-Features\Fun\WhatsNew.lua
 
 Features\Delves\DelvesData.lua
 Features\Delves\DelvesUI.lua

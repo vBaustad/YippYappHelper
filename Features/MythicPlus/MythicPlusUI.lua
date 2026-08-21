@@ -1813,21 +1813,14 @@ function ns:RefreshMythicPlus()
 
     if #weekRuns > 0 then
         local WK_ICON = 18
-        -- Two heights. A run the journal recorded carries a second line
-        -- -- score, margin, deaths -- and one it did not has nothing to
-        -- put there, so giving every row the taller size would pad out a
-        -- week of runs finished before the journal existed.
+        -- Two heights: one line, or one with score, margin and deaths
+        -- under it. Which is used is decided below, once it is known
+        -- how many runs there are to fit.
         local WK_ROW_PLAIN, WK_ROW_DETAIL = 22, 33
 
-        --- m:ss, or h:mm:ss when a run ran long enough to need it.
-        local function Clock(sec)
-            sec = math.floor(math.abs(sec or 0) + 0.5)
-            local h = math.floor(sec / 3600)
-            local m = math.floor((sec % 3600) / 60)
-            local s2 = sec % 60
-            if h > 0 then return string.format("%d:%02d:%02d", h, m, s2) end
-            return string.format("%d:%02d", m, s2)
-        end
+        -- Shared with the hover text, so the margin on the row and the
+        -- margin in the tooltip cannot come out formatted two ways.
+        local function Clock(sec) return ns:ClockText(sec) end
 
         -- Eight is what the vault counts and what a full week looks
         -- like; past that the list is history rather than information.
@@ -1841,11 +1834,38 @@ function ns:RefreshMythicPlus()
         wkSec:SetValue(ns.Widgets:Tint("faint",
             #weekRuns .. (#weekRuns == 1 and " run" or " runs")))
 
+        -- Second lines are what spare room buys, and the week comes
+        -- first: a night of twelve runs fills the card with rows rather
+        -- than pushing four of them off it to make space for margins
+        -- and score. Nothing is lost either way -- the hover says all
+        -- of it, on every row.
+        local detailed = (#weekRuns * (WK_ROW_DETAIL + 2)) <= room
+
         local shown = 0
         for i = 1, #weekRuns do
             local run = weekRuns[i]
             local d = run.detail
-            local rowH = d and WK_ROW_DETAIL or WK_ROW_PLAIN
+
+            -- The second line, worked out before the row is drawn,
+            -- because whether there is one decides how tall it is.
+            local bits = {}
+            if run.gain and run.gain > 0 then
+                bits[#bits + 1] = "|cffffd100+" .. run.gain .. "|r score"
+            end
+            if run.durationSec and run.limit and run.limit > 0 then
+                local delta = run.limit - run.durationSec
+                if delta >= 0 then
+                    bits[#bits + 1] = Clock(delta) .. " under"
+                else
+                    bits[#bits + 1] = "|cffff6644" .. Clock(delta) .. "|r over"
+                end
+            end
+            if d and (d.deaths or 0) > 0 then
+                bits[#bits + 1] = d.deaths
+                    .. (d.deaths == 1 and " death" or " deaths")
+            end
+
+            local rowH = (detailed and #bits > 0) and WK_ROW_DETAIL or WK_ROW_PLAIN
             -- Room is the only limit. There used to be a hard cap of
             -- eight on the grounds that eight is what the vault counts,
             -- but the card runs to the bottom of the page now and a
@@ -1883,65 +1903,68 @@ function ns:RefreshMythicPlus()
             rLvl:SetJustifyH("RIGHT")
             rLvl:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
 
-            if d then
-                -- The keystone's own verdict. keystoneUpgradeLevels is
-                -- how many levels the key gained, which is the thing
-                -- players call chests -- and it is 0 on a run that beat
-                -- the timer by too little to upgrade, so "in time" has
-                -- to be its own case rather than "0 chest".
-                if d.onTime then
-                    local chest = (d.chests or 0) > 0
-                        and (d.chests .. " chest") or "in time"
+            if run.timed ~= nil then
+                -- The keystone's own verdict. Chests are the levels the
+                -- key gained, and a run can beat the timer by too little
+                -- to gain any, so "in time" has to be its own case
+                -- rather than "0 chest".
+                if run.timed then
+                    local chest = (run.chests or 0) > 0
+                        and (run.chests .. " chest") or "in time"
                     rLvl:SetText(string.format("|cff00d4ff+%d|r  |cff00cc00%s|r",
                         run.level, chest))
                 else
                     rLvl:SetText(string.format("|cff888888+%d|r  |cffff6644over time|r",
                         run.level))
                 end
+            elseif run.completed then
+                -- No duration on this entry, so the only fact left is
+                -- the vault's: a finished key filled a slot whether or
+                -- not it beat the timer, and saying more would be
+                -- inventing a result.
+                rLvl:SetText(string.format("|cff00d4ff+%d|r  |cff777777finished|r",
+                    run.level))
+            else
+                rLvl:SetText(string.format("|cff888888+%d|r  |cffff4444depleted|r",
+                    run.level))
+            end
 
-                -- Second line: what it paid and what it cost.
-                local bits = {}
-                if d.gain and d.gain > 0 then
-                    bits[#bits + 1] = "|cffffd100+" .. d.gain .. "|r score"
-                end
-                local elapsed = (d.ms or 0) / 1000
-                if d.limit and d.limit > 0 then
-                    local delta = d.limit - elapsed
-                    if delta >= 0 then
-                        bits[#bits + 1] = Clock(delta) .. " under"
+            if detailed and #bits > 0 then
+                local rSub = AcquireFS(content)
+                rSub:SetPoint("TOPLEFT", rIcon, "BOTTOMRIGHT", 5, -1)
+                rSub:SetPoint("RIGHT", rowBg, "RIGHT", -6, 0)
+                rSub:SetJustifyH("LEFT")
+                rSub:SetFont(STANDARD_TEXT_FONT, 9, "")
+                rSub:SetText("|cff" .. ns.Widgets:Hex("muted")
+                    .. table.concat(bits, "  ") .. "|r")
+            end
+
+            -- The row in full, on hover. The line on the card is as much
+            -- as fits beside a dungeon name; the clock time, the par it
+            -- was measured against, when the run happened and what it
+            -- was worth live here instead of being cut.
+            local hover = AcquireBtn(content)
+            hover:SetSize(wkInnerW, rowH)
+            hover:SetPoint("TOPLEFT", rowBg, "TOPLEFT", 0, 0)
+            hover:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
+            hover:SetBackdropColor(1, 1, 1, 0)
+            local lines = ns:DescribeRun(run)
+            hover:SetScript("OnEnter", function(self)
+                self:SetBackdropColor(1, 1, 1, 0.06)
+                tooltip:SetOwner(self, "ANCHOR_RIGHT")
+                for _, line in ipairs(lines) do
+                    if line.blank then
+                        tooltip:AddLine(" ")
                     else
-                        bits[#bits + 1] = "|cffff6644" .. Clock(delta) .. "|r over"
+                        tooltip:AddLine(line.text, line.r, line.g, line.b)
                     end
                 end
-                if (d.deaths or 0) > 0 then
-                    bits[#bits + 1] = d.deaths
-                        .. (d.deaths == 1 and " death" or " deaths")
-                end
-
-                if #bits > 0 then
-                    local rSub = AcquireFS(content)
-                    rSub:SetPoint("TOPLEFT", rIcon, "BOTTOMRIGHT", 5, -1)
-                    rSub:SetPoint("RIGHT", rowBg, "RIGHT", -6, 0)
-                    rSub:SetJustifyH("LEFT")
-                    rSub:SetFont(STANDARD_TEXT_FONT, 9, "")
-                    rSub:SetText("|cff" .. ns.Widgets:Hex("muted")
-                        .. table.concat(bits, "  ") .. "|r")
-                end
-            else
-                -- No journal entry: GetRunHistory answers only whether
-                -- the run finished, so this says that and no more. It
-                -- is the honest half of the old "counts"/"left" -- a
-                -- finished key filled a vault slot whether or not it
-                -- beat the timer, and claiming otherwise would be
-                -- inventing a result.
-                if run.completed then
-                    rLvl:SetText(string.format("|cff00d4ff+%d|r  |cff777777finished|r",
-                        run.level))
-                else
-                    rLvl:SetText(string.format("|cff888888+%d|r  |cffff4444depleted|r",
-                        run.level))
-                end
-            end
+                tooltip:Show()
+            end)
+            hover:SetScript("OnLeave", function(self)
+                self:SetBackdropColor(1, 1, 1, 0)
+                tooltip:Hide()
+            end)
 
             wkY = wkY - (rowH + 2)
         end

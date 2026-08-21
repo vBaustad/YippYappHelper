@@ -172,8 +172,8 @@ single target and AoE, and the footer names whichever site the list on
 screen came from.
 
 bloodmallet re-sims a new season a few specs at a time, so the file holds
-both while that runs. 20 of its 31 specs are fully on Season 2 numbers;
-the other 11 keep a Season 1 ranking for at least one fight style rather
+both while that runs. 21 of its 31 specs are fully on Season 2 numbers;
+the other 10 keep a Season 1 ranking for at least one fight style rather
 than being dropped, and say so in the list, on the loot council rows and
 in the tooltip. This is per fight style — a spec can be Season 2 on
 single target and Season 1 on 5-target.
@@ -233,13 +233,6 @@ guide text inline.
 > banner saying the advice is written for Season 1 — visible rather than
 > silently stale.
 
-### Omnium Folio
-Tracked from your actual quest log rather than a checklist you tick
-yourself. It no longer has its own page: the chain became catch-up
-content that finishes in an afternoon, so a full page for it was more
-furniture than help. Mr. Yeeper raises it instead, and only when you have
-started it and then stopped.
-
 ### Dungeon Teleports
 Every Hero's Path teleport from MoP through Midnight, filed under the
 expansion its dungeon came from, with the current season shown first.
@@ -254,11 +247,6 @@ crests to chase and where.
 
 The character bar also carries a jump counter, which serves no purpose
 whatsoever and is not going anywhere.
-
-### What's New
-On the first login after an update, Mr. Yeeper summarises what changed.
-Once per version, never again for that version. `/yh whatsnew` reopens
-it if you closed it too quickly.
 
 ### Mr. Yeeper
 The dashboard's advisor. He reads your gear, crests, vault, keystones,
@@ -305,7 +293,6 @@ race and level.
 | `/yh profile [name]` | Switch profile (normal / heroic / mythic) |
 | `/yh discount <track>` | Toggle a crest discount |
 | `/yh discounts` | Show current discount status |
-| `/yh whatsnew` | What changed this patch |
 | `/yh advisor` | What Mr. Yeeper would say, plus the facts behind it |
 | `/yh fun` | Fun stat counters (`/yh fun reset` to clear) |
 | `/yh introreset` | Replay Mr. Yeeper's introduction |
@@ -368,7 +355,18 @@ generated instead:
 | `Features/Consumables/ConsumablesData.lua` | Wowhead per-spec guides | `python Tools/scrape_consumables.py` |
 | `Features/Trinkets/TrinketData.lua` | bloodmallet.com sims | `python Tools/scrape_trinkets.py` |
 | `Features/Trinkets/TrinketDataHealer.lua` | QE Live healer charts | capture with `Tools/qe_capture.js`, then `python Tools/scrape_healer_trinkets.py` |
+| `Features/Raid/RaidGuideData.lua` | mythictrap.com (Warcraft Logs) for structure, spell IDs and per-difficulty changes; a PTR video walkthrough for tactics | Hand-written per boss |
 | Gear tracks, crests, progression tables | In-game currency descriptions + community sheets | Hand-verified per season |
+
+The raid guide is the one generated file whose *prose* is not generated.
+mythictrap supplies the skeleton — which mechanics exist, which phase
+each belongs to, the real spell ID for every one, and an explicit list
+of what Heroic and Mythic change. Their wording is theirs and is not
+reproduced; every sentence on the page is written here from the mechanic
+being described. The spell IDs are what let the page draw the client's
+own icon and the client's own tooltip, so the numbers a player reads
+come from the game rather than from a guide that may have been written
+against the PTR.
 
 Both scrapers record the season/tier their data came from, and the addon
 says so in-game when that's behind the current season. Neither ships to

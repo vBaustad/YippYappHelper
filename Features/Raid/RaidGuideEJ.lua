@@ -366,33 +366,162 @@ function G:ReadAbilities(boss)
     return sections
 end
 
---- Ability titles the journal lists and our text never mentions.
+------------------------------------------------------------
+-- Letting the client name the mechanics
+--
+-- Most mechanics in the data carry a real `spell` id, taken from a
+-- source that had one. Ula'tek is the exception and always will be:
+-- nobody published a guide for him, so his entry is written from an
+-- auto-captioned video, and auto-captions are reliable about mechanics
+-- and useless about proper nouns. His ability names are our best
+-- reading of what a narrator said out loud.
+--
+-- The client knows the real ones. This matches what we wrote against
+-- the Encounter Journal's own section titles and, where it is confident,
+-- adopts BOTH the spell id (so the row draws a real icon and a real
+-- tooltip) and the client's spelling (so the page stops printing our
+-- transcription of a spoken word).
+--
+-- Two rules keep a wrong match from being worse than no match:
+--
+--   * An EXACT title match only ever adopts the id. There is nothing to
+--     correct -- the names already agree -- so there is no way for this
+--     path to rename anything.
+--   * The fuzzy path is tried only for a mechanic with NO id of its own,
+--     and only accepts a section when it is the single one whose title
+--     contains every significant word we wrote. Two candidates means we
+--     cannot tell, and we would rather show a question mark than
+--     confidently attach the wrong tooltip to a raid mechanic.
+------------------------------------------------------------
+
+--- Lowercased, punctuation stripped, spaces collapsed. Apostrophes are
+--- the reason this exists: "Ula'tek's Presence" and "Ulateks Presence"
+--- are the same name and no string comparison agrees.
+local function Normalise(text)
+    text = (text or ""):lower():gsub("[^%a%d ]", ""):gsub("%s+", " ")
+    return (text:gsub("^ +", ""):gsub(" +$", ""))
+end
+
+--- Fill in `ejSpell` and `ejName` on every mechanic this boss has.
 ---
---- The guide is written from a video, so the interesting failure is not a
---- wrong sentence -- it is a mechanic the video skipped and we therefore
---- never knew about. This is the check for that, and it runs against the
---- client's own list rather than against anybody's memory.
+--- Cheap to call on every refresh: it gives up immediately once it has
+--- run, and it does not mark itself done until the journal actually
+--- answered -- otherwise a boss looked at before its raid data loaded
+--- would be stuck with question marks for the rest of the session.
+function G:ResolveMechanics(boss)
+    if not boss or boss._resolved then return end
+    local sections = self:ReadAbilities(boss)
+    if not sections then return end
+    boss._resolved = true
+
+    -- Ability sections only, keyed by normalised title. A title the
+    -- journal lists twice is recorded as `false`: present, but not
+    -- something we can resolve to one spell.
+    local byTitle = {}
+    for _, section in ipairs(sections) do
+        if section.spellID and section.title then
+            local key = Normalise(section.title)
+            if byTitle[key] == nil then
+                byTitle[key] = section
+            else
+                byTitle[key] = false
+            end
+        end
+    end
+
+    for _, phase in ipairs(boss.phases or {}) do
+        for _, mech in ipairs(phase.mechanics or {}) do
+            local hit = byTitle[Normalise(mech.name)]
+            if hit then
+                mech.ejSpell = hit.spellID
+            elseif not mech.spell then
+                -- Every word of four letters or more that we wrote has
+                -- to appear in the candidate's title. Short words are
+                -- skipped because "of" and "the" match everything.
+                local found, count = nil, 0
+                for _, section in ipairs(sections) do
+                    if section.spellID and section.title then
+                        local title = Normalise(section.title)
+                        local all = true
+                        for word in Normalise(mech.name):gmatch("[%a%d]+") do
+                            if #word >= 4 and not title:find(word, 1, true) then
+                                all = false
+                                break
+                            end
+                        end
+                        if all then
+                            found, count = section, count + 1
+                        end
+                    end
+                end
+                if count == 1 and found then
+                    mech.ejSpell = found.spellID
+                    mech.ejName = found.title
+                end
+            end
+        end
+    end
+end
+
+--- Ability titles the journal lists and our guide never mentions.
 ---
---- Conservative on purpose: a title counts as mentioned when all of its
---- distinctive words appear somewhere in our text for that boss, so
---- "Hungering Pyre" is matched by a line that says "the Pyre" only if it
---- also says "hungering" -- and a false "you missed this" is a cheap
---- error while a false "all covered" is the expensive one.
+--- The guide is written from other people's guides, so the interesting
+--- failure is not a wrong sentence -- it is a mechanic THEY skipped and
+--- we therefore never knew about. This is the check for that, and it
+--- runs against the client's own list rather than against anybody's
+--- memory.
+---
+--- SPELL ID FIRST, since 2026-08-20. Every mechanic in the data now
+--- carries the ability's real id, so "did we cover this" is an equality
+--- test rather than an inference -- and it no longer produces a false
+--- "you missed this" every time the client's wording of a name differs
+--- from the guide's.
+---
+--- The word-overlap pass is kept for the handful of mechanics with no
+--- id (the Coiled Altar's Soulbinding has none in any source) and stays
+--- deliberately conservative: a title counts as mentioned when ALL of
+--- its distinctive words appear somewhere in our text, so "Hungering
+--- Pyre" is matched by a line saying "the Pyre" only if it also says
+--- "hungering". A false "you missed this" is a cheap error; a false
+--- "all covered" is the expensive one.
 function G:UnmentionedAbilities(boss)
     local sections = self:ReadAbilities(boss)
     if not sections then return {} end
 
-    -- One haystack from every line we print for this boss.
+    -- Every spell id we print for this boss, at any difficulty. The
+    -- footnote is about coverage, not about tonight's difficulty -- a
+    -- mechanic we describe only on Mythic is still described.
+    local covered = {}
+    for _, phase in ipairs(boss.phases or {}) do
+        for _, mech in ipairs(phase.mechanics or {}) do
+            if mech.spell then covered[mech.spell] = true end
+            -- An id the journal itself handed us counts too, or every
+            -- mechanic we resolved from the client would be reported
+            -- back to the reader as one we had never heard of.
+            if mech.ejSpell then covered[mech.ejSpell] = true end
+        end
+    end
+
+    -- One haystack from every line we print, for the id-less remainder.
     local parts = { boss.oneLiner or "", boss.shape or "" }
     local function add(list)
         for _, line in ipairs(list or {}) do parts[#parts + 1] = line end
     end
     add(boss.rules)
-    add(boss.heroic)
+    for _, key in ipairs({ "heroic", "mythic" }) do
+        add(boss.changes and boss.changes[key])
+    end
     for _, phase in ipairs(boss.phases or {}) do
         parts[#parts + 1] = phase.name or ""
         parts[#parts + 1] = phase.tag or ""
-        add(phase.lines)
+        for _, mech in ipairs(phase.mechanics or {}) do
+            parts[#parts + 1] = mech.name or ""
+            parts[#parts + 1] = mech.tag or ""
+            parts[#parts + 1] = mech.todo or ""
+            parts[#parts + 1] = mech.heroic or ""
+            parts[#parts + 1] = mech.mythic or ""
+            add(mech.lines)
+        end
     end
     for _, role in pairs(boss.roles or {}) do add(role) end
     local haystack = table.concat(parts, " "):lower():gsub("'", "")
@@ -404,14 +533,16 @@ function G:UnmentionedAbilities(boss)
         -- reporting those as missing mechanics would bury the real ones.
         if section.spellID and section.title and not seen[section.title] then
             seen[section.title] = true
-            local missing = false
-            for word in section.title:gsub("'", ""):gmatch("[%a]+") do
-                if #word >= 4 and not haystack:find(word:lower(), 1, true) then
-                    missing = true
-                    break
+            if not covered[section.spellID] then
+                local missing = false
+                for word in section.title:gsub("'", ""):gmatch("[%a]+") do
+                    if #word >= 4 and not haystack:find(word:lower(), 1, true) then
+                        missing = true
+                        break
+                    end
                 end
+                if missing then out[#out + 1] = section.title end
             end
-            if missing then out[#out + 1] = section.title end
         end
     end
     return out

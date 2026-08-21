@@ -15,29 +15,43 @@ local _, ns = ...
 -- column first. The other two are one click away and nothing is hidden,
 -- but the default is the one you need.
 --
--- Difficulty works the same way. Heroic mechanics are genuinely extra
--- things on top rather than different fights, so Normal shows the fight
--- and Heroic adds one more page at the end of it.
+------------------------------------------------------------
+-- THE UNIT ON THE PAGE IS A MECHANIC.
+--
+-- This page used to print phases as bullet points of prose. That is a
+-- correct document and a bad pre-pull read: everything looked the same,
+-- so nothing could be found. A mechanic now draws as a ROW --
+--
+--     [icon]  Essence Rend  ·  Dispel
+--             Take it to the edge first
+--             you get pulled, then knocked back...
+--
+-- -- with the client's own spell icon, the client's own tooltip on
+-- hover, and a shift-click that links the spell into chat. The icon is
+-- not decoration: it is the thing a player recognises mid-pull, when
+-- they have seen the art on a debuff bar and cannot remember the name.
+--
+-- The imperative sits on its own line, in its own colour, directly
+-- under the name. If a reader takes one line off a mechanic it should
+-- be that one, so it is the line the eye lands on.
 --
 ------------------------------------------------------------
--- ONE PHASE AT A TIME.
+-- DIFFICULTY IS SHOWN WHERE IT HAPPENS.
 --
--- This page used to print the whole fight in one column: every phase,
--- every line, one after another. That is a correct document and a bad
--- pre-pull read -- it looked like an essay, and the reader's job became
--- finding their place in it rather than learning a phase.
+-- Heroic used to be a page at the end -- "what Heroic adds" -- which is
+-- the wrong shape for the question a player actually has. Nobody wants
+-- a list of heroic changes; they want to know whether THIS mechanic,
+-- the one they are reading, is different tonight.
 --
--- So the fight is paged. The rules and your own job stay pinned at the
--- top, because those are the three things you read while the timer runs;
--- under them is one phase, given room to breathe, with a numbered strip
--- to step or jump through the rest. Same words, a third of the height,
--- and the reader is never scrolling to find where phase three started.
+-- So a mechanic that only exists above Normal carries a badge on its
+-- name, and a mechanic that merely CHANGES carries a badged line under
+-- it. Selecting Normal hides both. The boss-wide summary still exists,
+-- but it is pinned at the top with the rules, where it is read before
+-- the pull rather than found after it.
 --
--- The controls moved to the left rail for the same reason. Seven bosses
--- in a 196px column leaves half that column empty, and the role and
--- difficulty toggles were spending a full row of the reading column on
--- something the eye only needs when it is choosing -- not when it is
--- reading.
+-- Three difficulties, because the Lair and the raid both go to Mythic
+-- and sending a player elsewhere for the third column is the same
+-- errand this page exists to save them.
 ------------------------------------------------------------
 
 ns.RaidGuideUI = ns.RaidGuideUI or {}
@@ -48,51 +62,68 @@ local GUTTER  = 14
 local ROW_H   = 30
 -- From the shell, not chosen here. At 12 this view sat four pixels
 -- further left than every other page, which is exactly the drift the
--- shared constant exists to stop -- and visible as the content shifting
--- when you change page.
+-- shared constant exists to stop.
 local PAD     = (ns.Shell and ns.Shell.PAD) or 12
 
 -- Vertical budget.
 --
--- The page was built out of one SectionCard per block, and a card costs
--- its heading, its ornament, its inner padding and the gap to the next
--- one -- about fifty pixels before a word is drawn. Eleven of them on
--- The Lost Explorers spent more height on chrome than on the guide.
+-- A SectionCard costs its heading, its ornament, its inner padding and
+-- the gap to the next one -- about fifty pixels before a word is drawn.
+-- A card marks a KIND of thing (what to know, and the phase you are
+-- on); everything inside it is a sub-heading or a mechanic row.
+local CARD_GAP    = 10
+local BODY_TOP    = 6
+local BODY_BOT    = 12
+local SUBHEAD_TOP = 8
+local SUBHEAD_BOT = 4
+local LINE_GAP    = 3
+
+-- Inside a mechanic row.
+local MECH_ICON   = 26   -- the spell icon
+local MECH_TEXTX  = MECH_ICON + 9
+local MECH_GAP    = 9    -- between one mechanic and the next
+local MECH_TIGHT  = 1    -- name to imperative
+local MECH_LINE   = 2    -- between body lines
+
+------------------------------------------------------------
+-- Type
 --
--- A card now marks a KIND of thing -- what to know, and the phase you
--- are on -- and everything else is a sub-heading, which costs a line.
-local CARD_GAP    = 10   -- between cards
-local BODY_TOP    = 6    -- inside a card, above its first line
-local BODY_BOT    = 12   -- and under its last
-local SUBHEAD_TOP = 7    -- air above a sub-heading, when it is not the first
-local SUBHEAD_BOT = 3
-local LINE_GAP    = 2
-
--- The phase page is the one place that is deliberately NOT dense. It
--- holds one phase, it has the room, and six bullets set two pixels apart
--- is the wall of text this rewrite exists to stop being.
-local LINE_GAP_WIDE = 7
-
--- The pager strip.
-local CHIP_W, CHIP_H, CHIP_GAP = 24, 20, 3
-local STEP_W = 46
+-- Everything on this page used to be GameFontNormalSmall, which is ten
+-- point. It is a page you read in a hurry, often while something else
+-- is happening, so the body moved up to twelve and only the labels --
+-- tags, badges, the rail's captions -- stayed small. Small is now a
+-- deliberate signal that a thing is a label rather than a sentence.
+------------------------------------------------------------
+local FONT_BODY  = "GameFontHighlight"      -- 12pt, the reading size
+local FONT_NAME  = "GameFontNormal"         -- 12pt, for a mechanic's name
+local FONT_HEAD  = "GameFontNormal"         -- sub-headings inside a card
+local FONT_LABEL = "GameFontNormalSmall"    -- tags, badges, rail captions
 
 local W = ns.Widgets
 
 local ROLE_LABEL = { TANK = "Tank", HEALER = "Healer", DAMAGER = "DPS" }
 local ROLE_ORDER = { "TANK", "HEALER", "DAMAGER" }
 
--- The mark on a name the source guide was not sure about.
---
--- This was the words "(name unconfirmed)" appended to the boss header
--- AND to every phase title carrying the flag -- four of them on The Lost
--- Explorers, one of which ran off the right edge because the titles do
--- not wrap. The honesty is worth keeping and the repetition is not, so
--- it is a glyph on the name and one footnote at the foot of the page.
+-- The mark on a name no source could confirm. Two bosses carried this
+-- for months; both were settled on 2026-08-20 and it is kept because the
+-- next patch will produce another one.
 local UNSURE = "?"
 local function Flagged(text, isUnsure)
     if not isUnsure then return text end
     return text .. W:Tint("faint", "\194\160" .. UNSURE)
+end
+
+-- A spell with no icon. Preferred over leaving the texture blank,
+-- because a missing icon and a mechanic we have no spell id for are the
+-- same thing to a reader and both mean "the client could not tell us".
+local ICON_UNKNOWN = "Interface\\Icons\\INV_Misc_QuestionMark"
+
+--- The client's icon for a spell, or the question mark.
+local function SpellIcon(spellID)
+    if not spellID then return ICON_UNKNOWN end
+    local tex = C_Spell and C_Spell.GetSpellTexture
+        and C_Spell.GetSpellTexture(spellID)
+    return tex or ICON_UNKNOWN
 end
 
 ------------------------------------------------------------
@@ -101,16 +132,39 @@ end
 local function Store()
     YippYappHelperDB = YippYappHelperDB or {}
     YippYappHelperDB.raidGuide = YippYappHelperDB.raidGuide or {}
-    return YippYappHelperDB.raidGuide
+    local s = YippYappHelperDB.raidGuide
+    -- Migration, once. The page held a boolean when it had two
+    -- difficulties; a returning player's saved `heroic = true` has to
+    -- mean Heroic rather than silently resetting them to Normal.
+    if s.diff == nil then
+        s.diff = s.heroic and "heroic" or "normal"
+    end
+    return s
+end
+
+--- The selected difficulty key, always one the data knows about.
+local function CurrentDiff()
+    local G = ns.RaidGuide
+    local want = Store().diff
+    for _, d in ipairs(G and G.DIFFS or {}) do
+        if d.key == want then return d.key end
+    end
+    return "normal"
+end
+
+--- The tone a difficulty is drawn in.
+local function DiffTone(key)
+    for _, d in ipairs(ns.RaidGuide and ns.RaidGuide.DIFFS or {}) do
+        if d.key == key then return d.tone end
+    end
+    return { 0.45, 0.85, 1.0 }
 end
 
 --- The role to open on.
 ---
 --- Group assignment first, because if you are in a raid that is the
 --- role you are about to play whatever your spec says. Spec second, for
---- reading the guide alone at the bank. The saved choice wins over both
---- -- somebody deliberately reading the tank column should not have it
---- taken off them by joining a group as DPS.
+--- reading the guide alone at the bank. The saved choice wins over both.
 local function DefaultRole()
     local saved = Store().role
     if saved and ROLE_LABEL[saved] then return saved end
@@ -132,11 +186,10 @@ end
 -- Which page of the fight is open
 --
 -- Deliberately NOT saved. A remembered role is a preference; a
--- remembered page is a stale reading position, and opening a boss on
--- phase four because that is where you stopped last week is not what
--- anybody meant. It resets to 1 whenever the boss or difficulty changes.
+-- remembered page is a stale reading position. It resets to 1 whenever
+-- the boss or the difficulty changes.
 ------------------------------------------------------------
-local page, pageBoss, pageHeroic = 1, nil, nil
+local page, pageBoss, pageDiff = 1, nil, nil
 
 --- Set the open page. Exposed so Tools\loadcheck.py can walk all of them.
 function UI:SetPage(n)
@@ -160,10 +213,10 @@ local function AcquireFS(parent, font)
     fsIdx = fsIdx + 1
     local fs = fsPool[fsIdx]
     if not fs then
-        fs = parent:CreateFontString(nil, "OVERLAY", font or "GameFontNormalSmall")
+        fs = parent:CreateFontString(nil, "OVERLAY", font or FONT_BODY)
         fsPool[fsIdx] = fs
     else
-        fs:SetFontObject(font or "GameFontNormalSmall")
+        fs:SetFontObject(font or FONT_BODY)
     end
     fs:SetParent(parent)
     fs:ClearAllPoints()
@@ -185,7 +238,7 @@ end
 --- GetStringHeight is only correct once the text and the width are both
 --- set, which is why this exists as a helper rather than as two lines at
 --- each call site -- getting the order wrong returns the height of the
---- PREVIOUS text and the error is a few pixels, so it survives review.
+--- PREVIOUS text, and the error is a few pixels, so it survives review.
 local function Paragraph(parent, x, y, width, text, font, colourKey, gap)
     local fs = AcquireFS(parent, font)
     fs:SetWidth(width)
@@ -198,22 +251,17 @@ end
 --- A bulleted line. The bullet is a separate string so wrapped lines
 --- hang under the text rather than under the dot.
 local function Bullet(parent, x, y, width, text, colourKey, gap)
-    local dot = AcquireFS(parent, "GameFontNormalSmall")
+    local dot = AcquireFS(parent, FONT_BODY)
     dot:SetWidth(10)
     dot:SetText(W:Tint("faint", "-"))
     dot:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     return Paragraph(parent, x + 12, y, width - 12, text,
-        "GameFontNormalSmall", colourKey, gap)
+        FONT_BODY, colourKey, gap)
 end
 
---- A sub-heading inside a card: the block addressed to your role, or the
---- name of the phase you are reading.
----
---- It wraps, because a heading that cannot wrap is a heading that runs
---- off the right edge -- which is exactly what "(name unconfirmed)"
---- appended to a phase title used to do.
+--- A sub-heading inside a card.
 local function SubHead(parent, x, y, width, text, accent, font)
-    local fs = AcquireFS(parent, font or "GameFontNormalSmall")
+    local fs = AcquireFS(parent, font or FONT_HEAD)
     fs:SetWidth(width)
     fs:SetText(text or "")
     if accent then fs:SetTextColor(accent[1], accent[2], accent[3]) end
@@ -223,9 +271,6 @@ end
 
 ------------------------------------------------------------
 -- Cards
---
--- Pooled, because the page redraws whenever the boss, role, difficulty
--- or page changes and that is often.
 ------------------------------------------------------------
 local cardPool, cardIdx = {}, 0
 
@@ -249,16 +294,85 @@ end
 
 -- Handed to Tools\loadcheck.py, the same way BisUI exposes its own, so
 -- the geometry phase can measure these cards rather than trust them.
--- Cards sized around measured text is precisely the arrangement that
--- goes wrong quietly.
 UI._cards = cardPool
 
 ------------------------------------------------------------
--- The pager strip
+-- Spell icons
 --
--- Pooled buttons: the number of pages is the number of phases, which
--- changes with the boss and with the difficulty.
+-- Pooled buttons rather than plain textures, because the icon is the
+-- interactive part of a mechanic row: hovering it gives the client's own
+-- tooltip -- the real numbers, in the player's own locale -- and
+-- shift-clicking links the spell into chat, which is how a raid leader
+-- actually says "this one".
+--
+-- The tooltip is the client's, never ours. Anything we wrote about the
+-- mechanic is already on the page next to it; repeating a worse version
+-- of the game's own text in a tooltip would be the only place on this
+-- page where the addon competes with the client instead of adding to it.
 ------------------------------------------------------------
+local iconPool, iconIdx = {}, 0
+
+local function AcquireIcon(parent)
+    iconIdx = iconIdx + 1
+    local b = iconPool[iconIdx]
+    if not b then
+        b = CreateFrame("Button", nil, parent)
+        b:SetSize(MECH_ICON, MECH_ICON)
+        b.tex = b:CreateTexture(nil, "ARTWORK")
+        b.tex:SetAllPoints()
+        -- Icon art carries a border in its outer few percent; left
+        -- untrimmed it reads as a smudge at this size.
+        b.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+        b.edge = b:CreateTexture(nil, "OVERLAY")
+        b.edge:SetPoint("TOPLEFT", -1, 1)
+        b.edge:SetPoint("BOTTOMRIGHT", 1, -1)
+        b.edge:SetColorTexture(0, 0, 0, 0)
+
+        b.hl = b:CreateTexture(nil, "HIGHLIGHT")
+        b.hl:SetAllPoints()
+        b.hl:SetColorTexture(1, 1, 1, 0.16)
+
+        b:SetScript("OnEnter", function(self)
+            if not self.spellID then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            -- pcall because a spell id from a pre-launch guide may not
+            -- exist on this client, and a tooltip must cost us a hover
+            -- rather than the render.
+            local ok = pcall(GameTooltip.SetSpellByID, GameTooltip, self.spellID)
+            if not ok then
+                GameTooltip:SetText(self.spellName or "")
+            end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Shift-click to link it in chat.", 0.6, 0.6, 0.6)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        b:SetScript("OnClick", function(self)
+            if not (self.spellID and IsShiftKeyDown and IsShiftKeyDown()) then return end
+            local link = C_Spell and C_Spell.GetSpellLink
+                and C_Spell.GetSpellLink(self.spellID)
+            if link and ChatEdit_InsertLink then ChatEdit_InsertLink(link) end
+        end)
+        iconPool[iconIdx] = b
+    end
+    b:SetParent(parent)
+    b:ClearAllPoints()
+    b:Show()
+    return b
+end
+
+local function ReleaseIcons()
+    for i = 1, iconIdx do iconPool[i]:Hide() end
+    iconIdx = 0
+end
+
+------------------------------------------------------------
+-- The pager strip
+------------------------------------------------------------
+local CHIP_W, CHIP_H, CHIP_GAP = 24, 20, 3
+local STEP_W = 46
+
 local chipPool, chipIdx = {}, 0
 
 local function AcquireChip(parent)
@@ -267,7 +381,7 @@ local function AcquireChip(parent)
     if not b then
         b = CreateFrame("Button", nil, parent, "BackdropTemplate")
         b:SetSize(CHIP_W, CHIP_H)
-        b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.text = b:CreateFontString(nil, "OVERLAY", FONT_LABEL)
         b.text:SetAllPoints()
         ns.AddGlowHighlight(b, 0.10)
         b:SetScript("OnEnter", function(self)
@@ -297,12 +411,11 @@ local host, listFrame, detail, scroll
 local rowButtons = {}
 local roleButtons = {}
 local diffButtons, trainButton
-local headerName, headerLine
 local lustLabel, lustIcon, lustText, lustBaseY
 
 --- A small muted caption over a group of controls in the rail.
 local function RailLabel(parent, text, y)
-    local fs = W:Label(parent, "GameFontNormalSmall")
+    local fs = W:Label(parent, FONT_LABEL)
     fs:SetPoint("TOPLEFT", 2, y)
     fs:SetTextColor(W:Color("faint"))
     fs:SetText(text)
@@ -312,34 +425,20 @@ end
 ------------------------------------------------------------
 -- Bloodlust
 --
--- Always "Bloodlust", on both factions, with the Bloodlust icon.
---
--- This used to follow the player's faction and show Alliance players
--- "Heroism", on the reasoning that a Horde player who saw a blue hand
--- would have to translate. That reasoning was wrong about how people
--- talk: raids of both factions call the effect Bloodlust or just "lust",
--- including the Alliance ones, and every guide and every callout in the
--- data says Bloodlust. Renaming it per faction made this one row
--- disagree with the entire rest of the page.
---
--- Spell IDs in preference order, and the texture comes from whichever
--- one the client answers for. The path fallback is a classic icon name
--- rather than a file ID, because a file ID guessed from outside the
--- client is a number that is wrong silently.
+-- Always "Bloodlust", on both factions, with the Bloodlust icon. This
+-- used to follow the player's faction and show Alliance players
+-- "Heroism"; that was wrong about how people talk. Raids of both
+-- factions call it Bloodlust, and so does every line in our own data.
 ------------------------------------------------------------
 local LUST_HORDE    = 2825      -- Bloodlust
 local LUST_ALLIANCE = 32182     -- Heroism
-local LUST_OTHERS   = { 80353, 264667, 390386 }  -- Time Warp, Primal Rage, Fury of the Aspects
+local LUST_OTHERS   = { 80353, 264667, 390386 }
 local LUST_FALLBACK = "Interface\\Icons\\Spell_Nature_BloodLust"
 
---- The effect's name, and an icon to match. The same on both factions.
 local function LustLook()
     local label = "Bloodlust"
-
-    -- Bloodlust's own icon first, so the word and the picture agree.
     local order = { LUST_HORDE, LUST_ALLIANCE }
     for _, id in ipairs(LUST_OTHERS) do order[#order + 1] = id end
-
     for _, id in ipairs(order) do
         local tex = C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(id)
         if tex then return label, tex end
@@ -349,7 +448,6 @@ end
 
 function UI:BuildInto(parent)
     if host then
-        -- Rebuilt into a new parent when the shell remounts the page.
         host:SetParent(parent)
         host:ClearAllPoints()
         host:SetAllPoints(parent)
@@ -358,8 +456,7 @@ function UI:BuildInto(parent)
 
     host = CreateFrame("Frame", nil, parent)
     host:SetAllPoints(parent)
-    -- For Tools/render.py, same convention as UI._cards: the one handle
-    -- it needs to find this page and open the frames above it.
+    -- For Tools/render.py, same convention as UI._cards.
     UI._host = host
 
     ------------------------------------------------------------
@@ -370,7 +467,7 @@ function UI:BuildInto(parent)
     listFrame:SetPoint("BOTTOMLEFT", 0, 0)
     listFrame:SetWidth(LIST_W)
 
-    local listTitle = W:Label(listFrame, "GameFontNormalSmall")
+    local listTitle = W:Label(listFrame, FONT_LABEL)
     listTitle:SetPoint("TOPLEFT", 2, -2)
     listTitle:SetTextColor(W:Color("muted"))
     listTitle:SetText((ns.RaidGuide and ns.RaidGuide.instance.name) or "Raid")
@@ -378,23 +475,11 @@ function UI:BuildInto(parent)
     local G = ns.RaidGuide
     local bosses = G and G:Ordered() or {}
 
-    -- Grouped by instance, with a heading whenever it changes.
-    --
-    -- The rail lists more than one place now -- the raid, and the Lair
-    -- that is the only other source of raid gear this patch. Without a
-    -- heading the Grotto's single boss simply appeared as another "1"
-    -- under the last of the eight, which reads as a numbering bug rather
-    -- than as a second instance.
-    --
-    -- The first group's heading is the title above the list, which is
-    -- already there and already says the right thing.
-    -- The boss the source guide never covered, said out loud in the list
-    -- rather than left as a gap the player has to notice.
-    --
-    -- It belongs to the RAID, so it is emitted at the end of the raid's
-    -- rows rather than at the end of the rail -- otherwise adding the
-    -- Grotto quietly moved Ula'tek underneath a heading he has nothing
-    -- to do with.
+    -- Grouped by instance, with a heading whenever it changes. The rail
+    -- lists more than one place now -- the raid, and the Lair that is
+    -- the only other source of raid gear this patch. Without a heading
+    -- the Grotto's single boss appears as another "1" under the last of
+    -- the eight, which reads as a numbering bug.
     local gap = G and G.missing and G.missing[1]
     local vaCount = 0
     for _, b in ipairs(bosses) do
@@ -408,13 +493,13 @@ function UI:BuildInto(parent)
         row:SetPoint("TOPLEFT", 0, y)
         row:EnableMouse(true)
 
-        local num = W:Label(row, "GameFontNormalSmall", "CENTER")
+        local num = W:Label(row, FONT_LABEL, "CENTER")
         num:SetPoint("LEFT", 7, 0)
         num:SetWidth(14)
         num:SetText(tostring(vaCount + 1))
         num:SetTextColor(W:Color("faint"))
 
-        local name = W:Label(row, "GameFontNormalSmall")
+        local name = W:Label(row, FONT_LABEL)
         name:SetPoint("LEFT", 25, 0)
         name:SetPoint("RIGHT", -6, 0)
         name:SetWordWrap(false)
@@ -438,7 +523,7 @@ function UI:BuildInto(parent)
         if inst and inst.key ~= lastKey then
             if lastKey == "va" then rowsBottom = AddMissingRow(rowsBottom) end
             rowsBottom = rowsBottom - 8
-            local head = W:Label(listFrame, "GameFontNormalSmall")
+            local head = W:Label(listFrame, FONT_LABEL)
             head:SetPoint("TOPLEFT", 2, rowsBottom)
             head:SetTextColor(W:Color("muted"))
             head:SetText(inst.name)
@@ -451,13 +536,13 @@ function UI:BuildInto(parent)
         b:SetPoint("TOPLEFT", 0, rowsBottom)
         rowsBottom = rowsBottom - (ROW_H + 3)
 
-        b.num = W:Label(b, "GameFontNormalSmall", "CENTER")
+        b.num = W:Label(b, FONT_LABEL, "CENTER")
         b.num:SetPoint("LEFT", 7, 0)
         b.num:SetWidth(14)
         b.num:SetText(tostring(boss.order))
         b.num:SetTextColor(W:Color("faint"))
 
-        b.name = W:Label(b, "GameFontNormalSmall")
+        b.name = W:Label(b, FONT_BODY)
         b.name:SetPoint("LEFT", 25, 0)
         b.name:SetPoint("RIGHT", -6, 0)
         b.name:SetWordWrap(false)
@@ -471,10 +556,6 @@ function UI:BuildInto(parent)
         rowButtons[i] = b
     end
 
-    -- And if the raid was the LAST group in the rail, its gap row still
-    -- has to be emitted. A Frame rather than a Button because there is
-    -- nothing to open, and a row that highlights and then does nothing
-    -- is worse than one that plainly cannot be clicked.
     if lastKey == "va" then rowsBottom = AddMissingRow(rowsBottom) end
 
     ------------------------------------------------------------
@@ -495,7 +576,7 @@ function UI:BuildInto(parent)
         local b = CreateFrame("Button", nil, listFrame, "BackdropTemplate")
         b:SetSize(62, 20)
         b:SetPoint("TOPLEFT", x, y)
-        b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.text = b:CreateFontString(nil, "OVERLAY", FONT_LABEL)
         b.text:SetAllPoints()
         b.text:SetText(ROLE_LABEL[role])
         ns.AddGlowHighlight(b, 0.08)
@@ -512,59 +593,54 @@ function UI:BuildInto(parent)
     RailLabel(listFrame, "Difficulty", y)
     y = y - 15
 
-    -- Both difficulties on screen, rather than one button showing the
-    -- current one -- which reads either as "you are here" or as "click
-    -- for this" depending on who is looking.
+    -- All three on screen rather than one button showing the current
+    -- one, which reads either as "you are here" or as "click for this"
+    -- depending on who is looking. They fit the rail at the same width
+    -- as the role row, so the two strips line up.
     diffButtons = {}
     x = 0
-    for _, def in ipairs({
-        { heroic = false, label = "Normal" },
-        { heroic = true,  label = "Heroic" },
-    }) do
+    for _, def in ipairs((G and G.DIFFS) or {}) do
         local b = CreateFrame("Button", nil, listFrame, "BackdropTemplate")
-        b:SetSize(94, 20)
+        b:SetSize(62, 20)
         b:SetPoint("TOPLEFT", x, y)
-        b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.text = b:CreateFontString(nil, "OVERLAY", FONT_LABEL)
         b.text:SetAllPoints()
         b.text:SetText(def.label)
         ns.AddGlowHighlight(b, 0.08)
-        b.heroic = def.heroic
+        b.diff = def.key
         b.label = def.label
         b:SetScript("OnClick", function()
-            Store().heroic = def.heroic
+            Store().diff = def.key
             UI:Refresh()
         end)
-        -- The count on the button replaced a whole card.
-        --
-        -- Reading the fight on Normal used to end with a card whose only
-        -- line was "4 extra things happen on Heroic, switch the button
-        -- above" -- fifty pixels of chrome to point at a control that is
-        -- already on screen. The button can say it itself.
-        if def.heroic then
+        -- The count on the tooltip replaced a whole card. Reading the
+        -- fight on Normal used to end with a card whose only line was
+        -- "4 extra things happen on Heroic, switch the button above" --
+        -- fifty pixels of chrome to point at a control already on
+        -- screen.
+        if def.key ~= "normal" then
             b:SetScript("OnEnter", function(self)
                 if not self.count or self.count == 0 then return end
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:SetText("Heroic")
-                GameTooltip:AddLine(("%d extra mechanics on this fight. "
-                    .. "Everything on Normal still happens."):format(self.count),
+                GameTooltip:SetText(self.label)
+                GameTooltip:AddLine(("%d things on this fight change or are "
+                    .. "added. Everything below still happens."):format(self.count),
                     0.7, 0.7, 0.7, true)
                 GameTooltip:Show()
             end)
             b:SetScript("OnLeave", function() GameTooltip:Hide() end)
         end
         diffButtons[#diffButtons + 1] = b
-        x = x + 96
+        x = x + 64
     end
     y = y - 30
 
     ------------------------------------------------------------
     -- Bloodlust, under the difficulty
     --
-    -- It was one line inside the pinned card, competing with the three
-    -- rules for the same eye. It is not a rule -- it is a plan, decided
-    -- before the pull and then not thought about again -- so it belongs
-    -- with the other things you set before you read: your role and your
-    -- difficulty.
+    -- It is not a rule -- it is a plan, decided before the pull and then
+    -- not thought about again -- so it belongs with the other things you
+    -- set before you read: your role and your difficulty.
     --
     -- The block reflows: its text wraps to two or three lines in a 170px
     -- rail depending on the boss, so the button under it is anchored in
@@ -578,12 +654,9 @@ function UI:BuildInto(parent)
     lustIcon:SetSize(20, 20)
     lustIcon:SetPoint("TOPLEFT", 2, y - 16)
     lustIcon:SetTexture(lustTexture)
-    -- The same trim the battle-res timer uses: icon art carries a border
-    -- in its outer few percent, and left untrimmed it reads as a smudge
-    -- at this size.
     lustIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-    lustText = W:Label(listFrame, "GameFontNormalSmall")
+    lustText = W:Label(listFrame, FONT_LABEL)
     lustText:SetPoint("TOPLEFT", 28, y - 16)
     lustText:SetWidth(LIST_W - 32)
     lustText:SetJustifyV("TOP")
@@ -591,14 +664,16 @@ function UI:BuildInto(parent)
     trainButton = CreateFrame("Button", nil, listFrame, "BackdropTemplate")
     trainButton:SetSize(LIST_W - 4, 22)
     trainButton:SetPoint("TOPLEFT", 0, y)
-    trainButton.text = trainButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    trainButton.text = trainButton:CreateFontString(nil, "OVERLAY", FONT_LABEL)
     trainButton.text:SetAllPoints()
     trainButton.text:SetText("|cff44ff88Test my knowledge|r")
     ns.AddGlowHighlight(trainButton, 0.12)
     trainButton:SetScript("OnClick", function()
         local id = Store().boss
         if ns.RaidTrainer and id then
-            ns.RaidTrainer:Start(id, Store().heroic)
+            -- The trainer only knows two difficulties. Mythic readers
+            -- get its heroic timeline, which is the closer of the two.
+            ns.RaidTrainer:Start(id, CurrentDiff() ~= "normal")
         end
     end)
     trainButton:SetScript("OnEnter", function(self)
@@ -619,19 +694,21 @@ function UI:BuildInto(parent)
     detail:SetPoint("TOPLEFT", listFrame, "TOPRIGHT", GUTTER, 0)
     detail:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", 0, 0)
 
-    headerName = W:Label(detail, "GameFontNormalLarge")
-    headerName:SetPoint("TOPLEFT", 0, -2)
-    headerName:SetPoint("RIGHT", detail, "RIGHT", -4, 0)
-    headerName:SetWordWrap(false)
-
-    headerLine = W:Label(detail, "GameFontNormalSmall")
-    headerLine:SetPoint("TOPLEFT", headerName, "BOTTOMLEFT", 0, -3)
-    headerLine:SetPoint("RIGHT", detail, "RIGHT", -4, 0)
-    headerLine:SetTextColor(W:Color("muted"))
-    headerLine:SetWordWrap(false)
-
+    -- No header.
+    --
+    -- This column used to open with the boss's name in large type and
+    -- its one-liner under it, costing 44px before a word of the guide
+    -- was drawn. The rail on the left already names every boss and
+    -- highlights the selected one in its own accent colour, so the
+    -- header was answering a question the page had answered before the
+    -- reader looked at it -- and it was answering it in the most
+    -- expensive part of the window, the top of the reading column.
+    --
+    -- The one-liner survives; it is the only part that was ever content
+    -- rather than a label, and it moved into the pinned card where it
+    -- costs one line instead of a banner.
     scroll = W:ScrollList(detail)
-    scroll:SetPoint("TOPLEFT", 0, -44)
+    scroll:SetPoint("TOPLEFT", 0, 0)
     scroll:SetPoint("BOTTOMRIGHT", -22, 4)
 end
 
@@ -647,13 +724,24 @@ local function StyleToggle(button, on, accent)
     end
 end
 
+--- A coloured badge, for a difficulty word sitting inside a line of
+--- text. Small caps rather than a bracket, so it reads as a label and
+--- not as part of the sentence.
+local function Badge(text, tone)
+    return ("|cff%02x%02x%02x%s|r"):format(
+        math.floor(tone[1] * 255 + 0.5),
+        math.floor(tone[2] * 255 + 0.5),
+        math.floor(tone[3] * 255 + 0.5), text)
+end
+
 function UI:Refresh()
     if not host then return end
     local G = ns.RaidGuide
     if not G then return end
 
-    -- The Encounter Journal gets a chance to correct the names the
-    -- transcript was unsure about, the first time the page is looked at.
+    -- The Encounter Journal gets a chance to correct anything the
+    -- written source was unsure about, the first time the page is
+    -- looked at.
     if G.EnrichFromJournal and not G._enriched then
         pcall(G.EnrichFromJournal, G)
     end
@@ -666,14 +754,20 @@ function UI:Refresh()
     local boss = G:Get(store.boss)
     if not boss then return end
 
+    -- Let the client name this boss's mechanics and hand us their spell
+    -- ids. Per boss and once, and pcall'd for the same reason the
+    -- footnote below is: a journal that answers oddly must cost us
+    -- icons, not the render.
+    if G.ResolveMechanics then pcall(G.ResolveMechanics, G, boss) end
+
     local role = DefaultRole()
-    local heroic = store.heroic and true or false
+    local diff = CurrentDiff()
     local accent = boss.accent or { 0.45, 0.85, 1.0 }
 
     -- A different boss or difficulty is a different fight; the page you
     -- were on does not carry over to it.
-    if pageBoss ~= boss.id or pageHeroic ~= heroic then
-        page, pageBoss, pageHeroic = 1, boss.id, heroic
+    if pageBoss ~= boss.id or pageDiff ~= diff then
+        page, pageBoss, pageDiff = 1, boss.id, diff
     end
 
     ------------------------------------------------------------
@@ -689,53 +783,59 @@ function UI:Refresh()
         else
             b.name:SetTextColor(W:Color("text"))
         end
-        b.name:SetText(rowBoss and rowBoss.name or "")
+        b.name:SetText(rowBoss
+            and Flagged(rowBoss.name, rowBoss.unsure) or "")
     end
 
     ------------------------------------------------------------
-    -- Header and controls
+    -- Controls
     ------------------------------------------------------------
-    -- Said out loud rather than left as a silent risk -- a player who
-    -- calls a boss by the wrong name in chat because our page told them
-    -- to is a worse outcome than a mark on the name. But once, as a
-    -- mark, with the sentence at the foot of the page.
+    -- With the header gone the rail is the only place a boss is named,
+    -- so a name nobody could confirm has to carry its mark there.
     local flagged = boss.unsure and true or false
-    headerName:SetText(Flagged(boss.name, boss.unsure))
-    headerName:SetTextColor(accent[1], accent[2], accent[3])
-    headerLine:SetText(boss.oneLiner)
 
     for _, b in ipairs(roleButtons) do
         StyleToggle(b, b.role == role, accent)
     end
-    local heroicCount = boss.heroic and #boss.heroic or 0
+
+    -- How much a difficulty changes about THIS boss: mechanics that
+    -- only exist at it, plus mechanics it modifies, plus the boss-wide
+    -- summary lines. Counted rather than stated, so it cannot drift
+    -- from the data.
+    local function ChangeCount(key)
+        local n = #(G:ChangesFor(boss, key) or {})
+        for _, phase in ipairs(boss.phases or {}) do
+            for _, mech in ipairs(phase.mechanics or {}) do
+                if mech.diff == key then n = n + 1
+                elseif mech[key] then n = n + 1 end
+            end
+        end
+        return n
+    end
+
     for _, b in ipairs(diffButtons) do
-        StyleToggle(b, b.heroic == heroic,
-            b.heroic and { 1.0, 0.42, 0.35 } or { 0.45, 0.85, 1.0 })
-        if b.heroic then
-            b.count = heroicCount
-            b.text:SetText(heroicCount > 0
-                and (b.label .. W:Tint("faint", "  +" .. heroicCount))
+        StyleToggle(b, b.diff == diff, DiffTone(b.diff))
+        if b.diff ~= "normal" then
+            local n = ChangeCount(b.diff)
+            b.count = n
+            b.text:SetText(n > 0
+                and (b.label .. W:Tint("faint", " +" .. n))
                 or b.label)
         end
     end
+
     ------------------------------------------------------------
     -- Bloodlust, and the button that follows it down the rail
     ------------------------------------------------------------
     local railY = lustBaseY
     if boss.lust then
-        -- Capitalised here rather than in the data. The fragment reads as
-        -- a continuation of the label ("Bloodlust -- on pull") in prose
-        -- and as a sentence of its own in the rail, and the rail is now
-        -- the only place it is printed.
         lustText:SetText((boss.lust:gsub("^%l", string.upper)))
         lustText:SetTextColor(W:Color("text"))
         lustLabel:Show()
         lustIcon:Show()
         lustText:Show()
         -- Measured, not assumed: "on pull" is one line and "the
-        -- intermission, while Zul'jin takes double damage" is three, and
-        -- a fixed offset here would either overlap the button or leave a
-        -- hole above it.
+        -- intermission, while Zul'jin takes double damage" is three.
         local textH = math.max(lustText:GetStringHeight() or 12, 12)
         railY = lustBaseY - 16 - math.max(textH, 20) - 12
     else
@@ -747,22 +847,11 @@ function UI:Refresh()
 
     trainButton:ClearAllPoints()
     trainButton:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, railY)
-    -- For Tools\loadcheck.py: the rail's one reflowed anchor.
     UI._lustTop, UI._lustText, UI._railY = lustBaseY - 16, lustText, railY
-    -- PAUSED, not removed.
-    --
-    -- The arena is built and every fight in it runs, but getting a
-    -- mechanic subtly wrong there is worse than not offering it: a guide
-    -- that is vague sends you to look something up, while a trainer that
-    -- is confidently wrong teaches you the wrong reflex and you find out
-    -- in the raid. Several of them were wrong in exactly that way -- the
-    -- Frostfire explosion fired on the wrong half of the mechanic, the
-    -- Sentinels' raid ignored its own split -- and each was only caught
-    -- by somebody watching the real fight.
-    --
-    -- So the button is hidden while the written guides carry the load.
-    -- Flip this to bring it back; the scenarios, the checks and the
-    -- arena are all still here and still green.
+
+    -- PAUSED, not removed. The arena is built and every fight in it
+    -- runs, but a trainer that is confidently wrong teaches the wrong
+    -- reflex and you find out in the raid. Flip this to bring it back.
     local TRAINER_READY = false
     trainButton:SetShown(TRAINER_READY
         and ns.RaidTrainer and ns.RaidTrainer:HasScenario(boss.id) or false)
@@ -773,6 +862,7 @@ function UI:Refresh()
     ReleaseAll()
     ReleaseCards()
     ReleaseChips()
+    ReleaseIcons()
 
     local content = scroll.content
     local width = math.max((scroll:GetWidth() or 460), 200)
@@ -780,20 +870,99 @@ function UI:Refresh()
     local inner = width - PAD * 2
     local y = 0
 
-    --- Lay a card whose body is a list of BLOCKS, and advance the cursor.
+    --- Draw one mechanic and return the cursor under it.
     ---
-    --- A block is `{ head, lines, colour, plain, gap }`: an optional
-    --- sub-heading and the lines under it.
+    --- Everything is measured on the way down, because the row's height
+    --- is the sum of wrapped strings and the icon has to be placed
+    --- against the row's TOP once that top is known -- which it is,
+    --- immediately, so the icon goes down first and the text after it.
+    local function Mechanic(x, cursor, w, mech)
+        local top = cursor
+        local textX = x + MECH_TEXTX
+        local textW = w - MECH_TEXTX
+
+        -- The client's answer wins over ours, on both counts. `ejSpell`
+        -- and `ejName` are filled by RaidGuideEJ:ResolveMechanics --
+        -- see there for how confident it has to be before it renames
+        -- anything.
+        local spellID = mech.ejSpell or mech.spell
+        local mechName = mech.ejName or mech.name or ""
+
+        local icon = AcquireIcon(content)
+        icon:SetPoint("TOPLEFT", content, "TOPLEFT", x, top + 1)
+        icon.tex:SetTexture(SpellIcon(spellID))
+        icon.spellID = spellID
+        icon.spellName = mechName
+        -- No spell id means the client has nothing to show, so the
+        -- button should not pretend to be interactive.
+        icon:EnableMouse(spellID and true or false)
+
+        -- Name, with its kind after it and its difficulty badge before
+        -- the kind. One string, so a long name wraps under itself
+        -- rather than colliding with a right-anchored tag.
+        local title = mechName
+        if mech.diff then
+            title = title .. "  " .. Badge(mech.diff == "mythic"
+                and "MYTHIC ONLY" or "HEROIC+", DiffTone(mech.diff))
+        end
+        if mech.tag then
+            title = title .. W:Tint("faint", "  \194\183  " .. mech.tag)
+        end
+        local fs = AcquireFS(content, FONT_NAME)
+        fs:SetWidth(textW)
+        fs:SetText(title)
+        fs:SetTextColor(accent[1], accent[2], accent[3])
+        fs:SetPoint("TOPLEFT", content, "TOPLEFT", textX, cursor)
+        cursor = cursor - math.max(fs:GetStringHeight() or 12, 12) - MECH_TIGHT
+
+        -- The imperative. Its own line, its own colour, directly under
+        -- the name -- if a reader takes one line off a mechanic it
+        -- should be this one.
+        if mech.todo then
+            cursor = Paragraph(content, textX, cursor, textW, mech.todo,
+                FONT_BODY, "warn", MECH_LINE)
+        end
+
+        for _, line in ipairs(mech.lines or {}) do
+            cursor = Paragraph(content, textX, cursor, textW, line,
+                FONT_BODY, "muted", MECH_LINE)
+        end
+
+        -- What this difficulty changes about this mechanic, badged and
+        -- sitting with the thing it changes.
+        for _, note in ipairs(G:MechanicNotes(mech, diff)) do
+            local tone = DiffTone(note.key)
+            cursor = Paragraph(content, textX, cursor, textW,
+                Badge(note.key == "mythic" and "MYTHIC" or "HEROIC", tone)
+                .. "  " .. note.text,
+                FONT_BODY, "text", MECH_LINE)
+        end
+
+        -- The icon is 26 tall and a one-line mechanic is shorter than
+        -- that, so the row cannot end above its own icon.
+        local used = top - cursor
+        if used < MECH_ICON then cursor = top - MECH_ICON end
+        return cursor - MECH_GAP
+    end
+
+    --- Lay a card and advance the cursor.
     ---
-    --- Two passes: the lines are drawn first to find out how tall they
-    --- came out, then the card is sized around them. The alternative --
+    --- A block is `{ head, lines, mechanics, colour, plain, gap }`: an
+    --- optional sub-heading, and under it either plain lines or
+    --- mechanic rows.
+    ---
+    --- Two passes: the body is drawn first to find out how tall it came
+    --- out, then the card is sized around it. The alternative --
     --- guessing a height and hoping -- is the bug the layout checks in
-    --- Tools/loadcheck.py exist to catch, so it is not worth writing
-    --- once even carefully.
+    --- Tools/loadcheck.py exist to catch.
     local function Card(titleText, valueText, blocks)
         local drew = false
         for _, block in ipairs(blocks) do
-            if block.lines and #block.lines > 0 then drew = true; break end
+            if (block.lines and #block.lines > 0)
+                or (block.mechanics and #block.mechanics > 0) then
+                drew = true
+                break
+            end
         end
         if not drew then return end
 
@@ -803,22 +972,27 @@ function UI:Refresh()
         local startedAt = cursor
 
         for _, block in ipairs(blocks) do
-            if block.lines and #block.lines > 0 then
+            local hasLines = block.lines and #block.lines > 0
+            local hasMechs = block.mechanics and #block.mechanics > 0
+            if hasLines or hasMechs then
                 if block.head then
                     -- Air above every sub-heading but the first: the
-                    -- first one already has the card's own top padding.
+                    -- first already has the card's own top padding.
                     if cursor ~= startedAt then cursor = cursor - SUBHEAD_TOP end
                     cursor = SubHead(content, PAD + 10, cursor, inner - 20,
                         block.head, block.accent or accent)
                 end
-                for _, line in ipairs(block.lines) do
+                for _, line in ipairs(block.lines or {}) do
                     if block.plain then
                         cursor = Paragraph(content, PAD + 10, cursor, inner - 20,
-                            line, "GameFontNormalSmall", block.colour, block.gap)
+                            line, FONT_BODY, block.colour, block.gap)
                     else
                         cursor = Bullet(content, PAD + 10, cursor, inner - 20,
                             line, block.colour, block.gap)
                     end
+                end
+                for _, mech in ipairs(block.mechanics or {}) do
+                    cursor = Mechanic(PAD + 10, cursor, inner - 20, mech)
                 end
             end
         end
@@ -834,61 +1008,83 @@ function UI:Refresh()
     ------------------------------------------------------------
     -- Pinned: what you need to know before the pull.
     --
-    -- The raid-wide rules and your own job were two cards, which put a
-    -- heading and an ornament between two lists a player reads as one
-    -- thought -- "what wipes us" and "what I do about it". They stay on
-    -- screen while you page through the fight, because they are the
-    -- lines you are actually reading when the timer is running.
+    -- The raid-wide rules and your own job are one card, because a
+    -- player reads them as one thought -- "what wipes us" and "what I
+    -- do about it". They stay on screen while you page through the
+    -- fight.
+    --
+    -- The difficulty summary sits between them. It is the one piece of
+    -- heroic information that is genuinely PRE-pull rather than
+    -- in-pull, and it is two or three lines, so it costs a sub-heading
+    -- rather than the page it used to cost.
     ------------------------------------------------------------
-    -- Bloodlust used to be the last line in here. It moved to the rail:
-    -- it is a plan rather than a rule, and it was competing with the
-    -- three lines that actually stop a wipe.
-    Card("Before you pull", boss.bring, {
+    local pinned = {
+        -- The fight in one sentence, where the header used to put it.
+        -- Dim and plain, so it frames the three rules under it rather
+        -- than competing with them.
+        { lines = { boss.oneLiner }, plain = true, colour = "muted", gap = 8 },
         { lines = boss.rules, colour = "text" },
-        {
-            head = "You, as " .. ROLE_LABEL[role],
-            lines = G:RoleLines(boss, role),
-            colour = "text",
-        },
-    })
+    }
+    if boss.changesUnknown and diff ~= "normal" then
+        -- Said out loud, because the alternative is silence and silence
+        -- reads as "nothing changes" -- a claim no source has made about
+        -- this fight. Printed once rather than per difficulty: it is a
+        -- fact about the source, not about Heroic.
+        pinned[#pinned + 1] = {
+            head = "What " .. (diff == "mythic" and "Mythic" or "Heroic")
+                .. " changes",
+            accent = DiffTone(diff),
+            lines = {
+                "Not recorded. The only guide that covers this fight never "
+                    .. "separated the difficulties, so read this as unknown "
+                    .. "rather than as nothing.",
+            },
+            plain = true,
+            colour = "faint",
+        }
+    else
+        for _, key in ipairs({ "heroic", "mythic" }) do
+            if G:Rank(diff) >= G:Rank(key) then
+                local lines = G:ChangesFor(boss, key)
+                if lines then
+                    pinned[#pinned + 1] = {
+                        head = "What " .. (key == "mythic" and "Mythic" or "Heroic")
+                            .. " changes",
+                        accent = DiffTone(key),
+                        lines = lines,
+                        colour = "text",
+                    }
+                end
+            end
+        end
+    end
+    pinned[#pinned + 1] = {
+        head = "You, as " .. ROLE_LABEL[role],
+        lines = G:RoleLines(boss, role),
+        colour = "text",
+    }
+    Card("Before you pull", boss.bring, pinned)
 
     ------------------------------------------------------------
-    -- The pages: one per phase, plus Heroic at the end of it.
+    -- The pages: one per phase.
+    --
+    -- No Heroic page any more. It was a summary of differences read
+    -- after the fight it describes, and every line of it now lives on
+    -- the mechanic it changes -- except the two or three boss-wide
+    -- ones, which moved UP into the pinned card where they are read
+    -- before the pull instead of after it.
     ------------------------------------------------------------
     local pages = {}
     for _, phase in ipairs(boss.phases or {}) do
+        local shown = {}
+        for _, mech in ipairs(phase.mechanics or {}) do
+            if G:MechanicShows(mech, diff) then shown[#shown + 1] = mech end
+        end
         pages[#pages + 1] = {
             name = Flagged(phase.name, phase.unsure),
             tag = phase.tag,
-            lines = phase.lines,
+            mechanics = shown,
             unsure = phase.unsure,
-            colour = "text",
-        }
-    end
-    if heroic and heroicCount > 0 then
-        pages[#pages + 1] = {
-            name = "What Heroic adds",
-            tag = "on top of everything else",
-            lines = boss.heroic,
-            colour = "text",
-            heroic = true,
-        }
-    elseif heroic and boss.heroicUnknown then
-        -- An empty Heroic page would be a claim -- "nothing extra" --
-        -- that no source has made. Several of these fights are written
-        -- from guides covering Normal and Heroic in one pass, which
-        -- never separated them, and the honest answer is that we do not
-        -- know rather than that there is nothing.
-        pages[#pages + 1] = {
-            name = "What Heroic adds",
-            lines = {
-                "Not recorded for this fight. The guide these notes come from "
-                    .. "covers Normal and Heroic together and never separated "
-                    .. "them, so read this as unknown rather than as nothing.",
-            },
-            colour = "faint",
-            plain = true,
-            heroic = true,
         }
     end
 
@@ -921,16 +1117,13 @@ function UI:Refresh()
             local b = AcquireChip(content)
             b:SetSize(CHIP_W, CHIP_H)
             b:SetPoint("TOPLEFT", content, "TOPLEFT", cx, stripY)
-            -- The Heroic page is lettered, not numbered: it is not the
-            -- ninth phase of the fight, it is a different kind of page.
-            b.text:SetText(p.heroic and "H" or tostring(i))
+            b.text:SetText(tostring(i))
             b.tip = p.name
             b:SetEnabled(true)
             local on = (i == page)
             W:Apply(b, on and "inset" or "row")
-            local tone = p.heroic and { 1.0, 0.42, 0.35 } or accent
             if on then
-                b.text:SetTextColor(tone[1], tone[2], tone[3])
+                b.text:SetTextColor(accent[1], accent[2], accent[3])
             else
                 b.text:SetTextColor(W:Color("muted"))
             end
@@ -952,15 +1145,21 @@ function UI:Refresh()
             blocks[#blocks + 1] = {
                 lines = { W:Tint("faint", p.tag) },
                 plain = true,
-                gap = 6,
+                gap = 7,
             }
         end
-        blocks[#blocks + 1] = {
-            lines = p.lines,
-            colour = p.colour,
-            plain = p.plain,
-            gap = LINE_GAP_WIDE,
-        }
+        if #p.mechanics > 0 then
+            blocks[#blocks + 1] = { mechanics = p.mechanics }
+        else
+            -- Reachable: a phase whose every mechanic is gated above
+            -- the selected difficulty. Saying so is better than an
+            -- empty card, which reads as a rendering fault.
+            blocks[#blocks + 1] = {
+                lines = { "Nothing in this phase changes at this difficulty." },
+                plain = true,
+                colour = "faint",
+            }
+        end
         Card(p.name, ("%d of %d"):format(page, #pages), blocks)
     end
 
@@ -970,11 +1169,11 @@ function UI:Refresh()
 
     -- What the client lists and this guide does not.
     --
-    -- The guide is written from video guides, so the mechanic it is most
-    -- likely to miss is the one the video never showed. The Encounter
-    -- Journal has the real list, so the page can say out loud that there
-    -- is more -- rather than presenting its phases as if they were all
-    -- of them.
+    -- The guide is written from other people's guides, so the mechanic
+    -- it is most likely to miss is the one THEY skipped. The Encounter
+    -- Journal has the real list, so the page can say out loud that
+    -- there is more -- rather than presenting its mechanics as if they
+    -- were all of them.
     --
     -- pcall because this is the only thing on the page that reads the
     -- journal during a draw, and a client that answers oddly must cost
@@ -990,7 +1189,7 @@ function UI:Refresh()
             end
             y = Paragraph(content, PAD, y - 2, inner,
                 W:Tint("muted", "Also in the Encounter Journal:") .. "  " .. text,
-                "GameFontNormalSmall", "faint")
+                FONT_LABEL, "faint")
         end
     end
 
@@ -998,9 +1197,9 @@ function UI:Refresh()
     -- there is one.
     if flagged then
         y = Paragraph(content, PAD, y - 2, inner,
-            UNSURE .. "  --  a name taken from the video rather than from the "
-            .. "client. The mechanics are not in doubt; the spelling is.",
-            "GameFontNormalSmall", "faint")
+            UNSURE .. "  --  a name no source could confirm. The mechanics are "
+            .. "not in doubt; the spelling is.",
+            FONT_LABEL, "faint")
     end
 
     UI._cardIdx = cardIdx
@@ -1012,9 +1211,9 @@ end
 --
 -- Raid Tools was an adapted page with no sub-tabs at all, so both of
 -- these are new. The names are deliberately not ns.SetRaidTab, which
--- already exists and means something else -- it switches the standalone
--- raid window's internal view, and quietly overloading it would have
--- made the two switch each other.
+-- already exists and switches the standalone raid window's internal
+-- view -- quietly overloading it would have made the two switch each
+-- other.
 ------------------------------------------------------------
 function ns:GetRaidPageTabs()
     return {

@@ -708,52 +708,6 @@ function AD:Snapshot()
             math.ceil((ns.SEASON_RAID_START - time()) / 86400))
     end
 
-    -- How long since Folio progress actually moved.
-    --
-    -- "Stop slacking" is only fair if there has been slacking. Someone
-    -- who finished a step five minutes ago and someone who stalled at
-    -- the same step ten days ago are in identical states by any
-    -- progress-based measure, and deserve opposite lines -- so the
-    -- furthest point reached is stamped when it changes, and the nagging
-    -- scales with the gap rather than the position.
-    local function FolioMark()
-        YippYappHelperDB = YippYappHelperDB or {}
-        local f = YippYappHelperDB.folio
-        if not f then
-            f = { intro = 0, done = 0, stamp = time() }
-            YippYappHelperDB.folio = f
-        end
-        return f
-    end
-
-    -- Omnium Folio. Catch-up in 12.1 rather than one step per week, so
-    -- the whole chain is available at once -- which makes it the single
-    -- most worthwhile thing on the list in a week with no raid and no
-    -- keystones.
-    local OF = ns.OmniumFolio
-    if OF then
-        local ok, unlocked = pcall(OF.IsUnlocked, OF)
-        s.folioUnlocked = ok and unlocked or false
-        local ok2, done, total = pcall(OF.GetAccountProgress, OF)
-        if ok2 then
-            s.folioDone, s.folioTotal = done, total
-        end
-        local ok3, at = pcall(OF.GetIntroProgress, OF)
-        if ok3 then s.folioIntroAt = at end
-
-        local f = FolioMark()
-        local intro, done = s.folioIntroAt or 0, s.folioDone or 0
-        -- Furthest reached, never backwards: an alt with less progress
-        -- than the main must not reset the main's clock and hand out a
-        -- fresh grace period.
-        if intro > (f.intro or 0) or done > (f.done or 0) then
-            f.intro = math.max(intro, f.intro or 0)
-            f.done  = math.max(done, f.done or 0)
-            f.stamp = time()
-        end
-        s.folioStalledDays = math.floor((time() - (f.stamp or time())) / 86400)
-    end
-
     return s
 end
 
@@ -831,41 +785,8 @@ AD.INTRO = {
         -- Raid is not open in week one, so "go get a raid lockout" is
         -- advice you cannot act on. Says what IS there instead.
         if s.seasonWeek == 1 and not s.raidOpen then
-            return { p = 187, text = "No raid yet either — that opens next week. Which "
-                .. "leaves dungeons and the Folio, and one of those you can finish "
-                .. "tonight." }
-        end
-    end,
-
-    -- The Folio. It gated one step per week in 12.0.7; in 12.1 it is
-    -- catch-up, so the whole chain is an evening's work. That changes
-    -- the pitch completely: it is no longer "start now or be behind
-    -- forever", it is "this is the best hour you will spend this week".
-    function(s)
-        if not s.folioUnlocked and (s.folioIntroAt or 0) == 0 then
-            return { p = 186, text = "You have not touched the Omnium Folio. It is all "
-                .. "catch-up now, so the whole thing is a couple of hours, and the Runes "
-                .. "last the rest of Midnight. Best return on an evening you will get "
-                .. "this week.",
-                tips = {
-                    "Starts in Silvermoon, the floating Missive by the Ritual Site vendors",
-                    "Account-wide once one character finishes the questline",
-                } }
-        end
-    end,
-    function(s)
-        if not s.folioUnlocked and (s.folioIntroAt or 0) > 0 then
-            return { p = 185, text = "You started the Omnium Folio unlock and stopped. "
-                .. "The weeklies do not open until that chain is done, and it is the only "
-                .. "thing standing between you and the rest of it." }
-        end
-    end,
-    function(s)
-        if s.folioUnlocked and (s.folioDone or 0) == 0 then
-            return { p = 184, text = ("Folio unlocked, %d of %d steps done. They are all "
-                .. "available now — no waiting a week between them. Magister Umbric, the "
-                .. "Lycaneum, inside Magisters' Terrace.")
-                :format(s.folioDone or 0, s.folioTotal or 5) }
+            return { p = 187, text = "No raid yet either — that opens next week. "
+                .. "Dungeons and delves are the whole week until then." }
         end
     end,
 
@@ -997,73 +918,6 @@ AD.RULES = {
                     } }
             end
         end
-    end,
-
-    -- Omnium Folio, in Yeeper rather than in a page of its own. It is a
-    -- one-evening chain with a permanent reward, which makes it a thing
-    -- to be told about once and then chased -- not a tab to maintain.
-    --
-    -- Severity comes from how long progress has been stalled, not from
-    -- where it stopped. Finishing a step and being told to stop slacking
-    -- is the fastest way to make someone stop listening.
-    function(s)
-        if s.folioUnlocked or s.fresh then return end
-        local OF = ns.OmniumFolio
-        if not OF then return end
-        local stalled = s.folioStalledDays or 0
-
-        -- Never started.
-        if (s.folioIntroAt or 0) == 0 then
-            return { p = 88, text = "You have not even started the Omnium Folio. It is one "
-                .. "evening for Runes that last the rest of the expansion. Go and get it.",
-                tips = {
-                    OF.INTRO and OF.INTRO.where or
-                        "Silvermoon City, the floating Missive by the Ritual Site vendors",
-                    OF.INTRO and OF.INTRO.waypoint or nil,
-                } }
-        end
-
-        -- Started, then stopped, and long enough ago to deserve it.
-        --
-        -- Deliberately no "x of 10". That is the unlock questline's
-        -- length, but everyone thinks of the Folio as the five steps that
-        -- follow it, so a fraction out of ten reads as broken counting.
-        -- The quest they are actually stuck on is both clearer and
-        -- something they can act on.
-        if stalled >= 3 then
-            local nextStep
-            if OF.GetIntroNextStep then
-                local ok, entry = pcall(OF.GetIntroNextStep, OF)
-                if ok then nextStep = entry end
-            end
-            if nextStep and nextStep.name then
-                return { p = 87, text = ("You are still on \"%s\" in the Omnium Folio "
-                    .. "unlock and have not touched it in %d days. The whole thing is one "
-                    .. "evening. Stop slacking."):format(nextStep.name, stalled) }
-            end
-            return { p = 87, text = ("You started the Omnium Folio unlock and stopped %d "
-                .. "days ago. It is one evening from front to back. Stop slacking.")
-                :format(stalled) }
-        end
-        return nil   -- moving recently: leave them alone
-    end,
-    function(s)
-        -- Unlocked but the steps untouched, same stall rule.
-        if not s.folioUnlocked or s.fresh then return end
-        local done, total = s.folioDone or 0, s.folioTotal or 5
-        if done >= total then return end
-        local stalled = s.folioStalledDays or 0
-        if stalled < 3 then return end
-
-        if done == 0 then
-            return { p = 86, text = ("Folio unlocked %d days ago and not one step done. "
-                .. "They are all available at once now. There is no excuse left, I checked.")
-                :format(stalled),
-                tips = { "Magister Umbric, the Lycaneum, inside Magisters' Terrace" } }
-        end
-        return { p = 86, text = ("%d of %d Folio steps, and nothing for %d days. You are "
-            .. "over halfway and stopped. That is the worst place to stop.")
-            :format(done, total, stalled) }
     end,
 
     -- 90s: about to lose something, or about to walk into content

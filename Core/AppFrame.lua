@@ -1250,9 +1250,7 @@ plannerEmpty:Hide()
 --   what do I bring     Consumables    Progression   Loot Browser
 --   what am I running   Mythic+        Raid Tools    Teleports
 --
--- Nine entries, three clean rows. The Omnium Folio used to sit here as a
--- tenth; it is a one-evening chain with a permanent reward, which makes
--- it something to be chased by Yeeper rather than a tab to maintain.
+-- Nine entries, three clean rows.
 local NAV_DEFS = {
     { id = "gear",        label = "Gear Upgrades",   hex = "ff00ff00" },
     { id = "bis",         label = "Best in Slot",    hex = "ff73ff8c" },

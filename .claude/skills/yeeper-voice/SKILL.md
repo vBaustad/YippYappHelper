@@ -1,6 +1,6 @@
 ---
 name: yeeper-voice
-description: Write or review dialogue for Mr. Yeeper, the in-addon commentator in YippYapp Helper (Features/Fun/Advisor.lua, Snark.lua, WhatsNew.lua). Use this whenever writing, rewriting, or critiquing any Yeeper line, aside, rule text, tip, or What's New entry — and also whenever asked for "jokes", "snark", "roast lines", "teasing", or commentary for the addon, even if Yeeper is not named. Contains the voice rules, the register split, and a diagnosed list of failure modes that make addon humour read as generic AI output.
+description: Write or review dialogue for Mr. Yeeper, the in-addon commentator in YippYapp Helper (Features/Fun/Advisor.lua, Snark.lua). Use this whenever writing, rewriting, or critiquing any Yeeper line, aside, rule text or tip — and also whenever asked for "jokes", "snark", "roast lines", "teasing", or commentary for the addon, even if Yeeper is not named. Contains the voice rules, the register split, and a diagnosed list of failure modes that make addon humour read as generic AI output.
 ---
 
 # Mr. Yeeper's voice
