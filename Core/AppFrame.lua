@@ -1,6 +1,36 @@
 local _, ns = ...
 
 ------------------------------------------------------------
+-- AppFrame: the window that opened before the shell existed.
+--
+-- Core\Shell.lua replaced it. Both ns:OpenMain and ns:OpenTo reach for
+-- the shell first and only fall back here when it is absent, which
+-- happens in exactly one situation: somebody who updated the addon and
+-- reloaded rather than restarting the client, so their .toc predates
+-- Core\Shell.lua and that file is not loaded at all. "Nothing happens"
+-- is the worst possible answer to a key press, so the fallback stays.
+--
+-- What did not stay is the cost of it. This file built its entire home
+-- dashboard at load -- 64 frames and 209 regions, the largest single
+-- contributor in the addon -- for a window that, in any session where
+-- the shell exists, cannot be opened by any means. Now it builds
+-- nothing at all in that case.
+--
+-- The guard tests what the callers test. If ns:OpenMain and ns:OpenTo
+-- would both choose the shell, there is no path to this window, and the
+-- three conditions have to stay in agreement: a shell that can Toggle
+-- and Open is a shell that has taken over both doors.
+--
+-- Everything published here -- ns.AppFrame, ns.ShowAppPage,
+-- ns.ToggleApp, ns.currentAppPage, ns._refreshDashboard -- is read
+-- behind an `if ns.X then` by every caller, so absent reads as
+-- "this build has no old window", which is the truth.
+-- ns:ToggleDashboard is not lost either: Integrations\Dashboard.lua
+-- loads after this file and defines its own.
+------------------------------------------------------------
+if ns.Shell and ns.Shell.Toggle and ns.Shell.Open then return end
+
+------------------------------------------------------------
 -- AppFrame: unified navigation shell for YippYapp Helper
 ------------------------------------------------------------
 local FRAME_W, FRAME_H = ns:GetAppFrameSize()

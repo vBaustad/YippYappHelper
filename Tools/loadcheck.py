@@ -5959,6 +5959,75 @@ def main():
         print("  FAIL gear window lazy build: %s" % lazy)
         failures.append(("gear window lazy build", str(lazy)))
 
+    # The old window still builds when it is the only one there is.
+    #
+    # Core\AppFrame.lua now returns immediately if the shell can Toggle
+    # and Open, which in every normal session it can -- so this file,
+    # 1700 lines of it, runs zero of its own code and has no coverage at
+    # all from anything above. The one situation it exists for is the one
+    # nothing here reaches: an update installed and reloaded rather than
+    # restarted, where the .toc predates Core\Shell.lua and the shell is
+    # simply absent.
+    #
+    # So it is reached on purpose. The shell is taken away, the file is
+    # run again, and the window it is supposed to leave behind is checked
+    # for. Without this, "nothing happens when I press the key" is a bug
+    # that could only ever be found by the one person unlucky enough to
+    # update without restarting.
+    appframe = L.eval("""
+        function(ns, src)
+            local shell = ns.Shell
+            local saved = {
+                AppFrame = ns.AppFrame, ShowAppPage = ns.ShowAppPage,
+                ToggleApp = ns.ToggleApp, currentAppPage = ns.currentAppPage,
+                _refreshDashboard = ns._refreshDashboard,
+            }
+            local function restore(msg)
+                ns.Shell = shell
+                for k, v in pairs(saved) do ns[k] = v end
+                return msg
+            end
+
+            -- With the shell present it must leave nothing behind. That
+            -- is the whole saving; if it built anyway the guard is
+            -- decorative.
+            if ns.AppFrame ~= nil then
+                return restore("the old window was built even though the "
+                    .. "shell is here")
+            end
+
+            ns.Shell = nil
+            local chunk, err = load(src, "@Core/AppFrame.lua")
+            if not chunk then return restore("would not compile: " .. tostring(err)) end
+            local ok, runErr = pcall(chunk, "YippYappHelper", ns)
+            if not ok then
+                return restore("the fallback does not run: " .. tostring(runErr))
+            end
+
+            -- The three things every caller tests for before using it.
+            if not ns.AppFrame then return restore("no ns.AppFrame") end
+            if type(ns.ShowAppPage) ~= "function" then
+                return restore("no ns:ShowAppPage")
+            end
+            if type(ns.ToggleApp) ~= "function" then
+                return restore("no ns:ToggleApp")
+            end
+            -- And it lands somewhere rather than on a blank frame.
+            if ns.currentAppPage ~= "home" then
+                return restore("the fallback opens on '"
+                    .. tostring(ns.currentAppPage) .. "', not home")
+            end
+            return restore("ok")
+        end
+    """)(ns, open(os.path.join(ROOT, "Core", "AppFrame.lua"),
+                  encoding="utf-8-sig").read())
+    if appframe == "ok":
+        print("  ok   pre-shell window: builds nothing while the shell is "
+              "here, and still comes up when the shell is not")
+    else:
+        print("  FAIL pre-shell window: %s" % appframe)
+        failures.append(("pre-shell window", str(appframe)))
+
     # The character rail: section rules, and the crest track colours.
     #
     # Nothing built this offline before, so both were shipped unexecuted.
