@@ -90,8 +90,6 @@ Features\Raid\RaidUI.lua
 # the sub-tab, so it does not need any of this at its own load time.
 Features\Raid\RaidGuideData.lua
 Features\Raid\RaidGuideEJ.lua
-Features\Raid\RaidTrainerScenarios.lua
-Features\Raid\RaidTrainer.lua
 Features\Raid\RaidGuideUI.lua
 
 Features\Progression\ProgressionData.lua
@@ -137,17 +135,13 @@ Features\Interrupts\InterruptsData.lua
 Features\Interrupts\InterruptsUI.lua
 
 # ─── Integrations (must load after Features) ──────────────
-# Planner data is consumed by AppFrame's home dashboard, so it must load
-# before AppFrame.lua. Kept under Features for locality.
-Features\Fun\FunStats.lua
-Features\Fun\Snark.lua
-Features\Fun\Advisor.lua
+# Planner data backs the shell's home page. Kept under Features for
+# locality; it loads here because the pages that read it are above.
 
 Features\Delves\DelvesData.lua
 Features\Delves\DelvesUI.lua
 Features\Planner\WeeklyChecklist.lua
 Features\Planner\PlannerData.lua
-Core\AppFrame.lua
 
 # Edit Mode integration, then the Blizzard settings registration. Both
 # load after every feature they touch so their getters/setters can reach
@@ -155,6 +149,5 @@ Core\AppFrame.lua
 Core\EditMode.lua
 Core\EditModeLib.lua
 Core\BlizzSettings.lua
-Integrations\Dashboard.lua
 Integrations\PVETab.lua
 Integrations\MinimapButton.lua

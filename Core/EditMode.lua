@@ -174,7 +174,6 @@ function EM:Open()
         return false
     end
     -- Step out of the way: Edit Mode dims and locks out other UI.
-    if ns.AppFrame and ns.AppFrame:IsShown() then ns.AppFrame:Hide() end
 
     -- Both panel calls go through securecall.
     --

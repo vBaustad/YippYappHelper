@@ -8,9 +8,8 @@ available in-game.** Gear upgrade advice, what drops where and whether
 it's actually an upgrade, trinket sim rankings, keystone planning,
 consumables, and dungeon teleports — in one window.
 
-Season 2 also brings **Mr. Yeeper**, who reads your character and tells
-you what is worth doing, and moves every frame the addon owns into
-**Blizzard's Edit Mode**.
+Season 2 also moves every frame the addon owns into **Blizzard's Edit
+Mode**.
 
 ---
 
@@ -248,32 +247,6 @@ crests to chase and where.
 The character bar also carries a jump counter, which serves no purpose
 whatsoever and is not going anywhere.
 
-### Mr. Yeeper
-The dashboard's advisor. He reads your gear, crests, vault, keystones,
-raid lockouts and guild activity, works out which single fact is worth
-saying, and says it — rudely.
-
-He is a reasoning layer rather than a quote list: a snapshot gathers
-facts, rules recognise situations and compute, and the personality is
-applied last to a conclusion already reached on evidence. Priority
-decides what he says, so something actively being wasted always outranks
-entertainment. Actionable messages carry tips underneath.
-
-He is also aware of context that ought to change the joke:
-
-- **Season phase.** Keystones go live a week after the patch, so in the
-  first week he points at Mythic 0 and Heroic rather than at content that
-  does not exist yet.
-- **Whether you have a guild.** Remarks about never grouping with
-  guildmates are gated behind actually having one with people in it —
-  those lines are never generated rather than written and softened.
-
-Jokes are sourced from the community
-([Puns N Jokes](https://punsnjokes.com/world-of-warcraft/),
-[LaffGaff](https://laffgaff.com/funny-wow-jokes/),
-[PunOrbit](https://punorbit.com/wow-jokes/)) and keyed to your class,
-race and level.
-
 ---
 
 ## Slash Commands
@@ -286,17 +259,12 @@ race and level.
 | `/yh settings` | Open the options panel (also `options`, `opts`) |
 | `/yh skin [id]` | List or choose a skin |
 | `/yh guide` | Boss guide for the current raid |
-| `/yh train [boss]` | Practise a boss's mechanics |
 | `/yh test [panel]` | Show a pop-up window with sample content (`/yh test off` to dismiss) |
 | `/yh brez` | Battle Res Timer options (also `battleres`) |
 | `/yh edit` | Open Edit Mode to move frames |
 | `/yh profile [name]` | Switch profile (normal / heroic / mythic) |
 | `/yh discount <track>` | Toggle a crest discount |
 | `/yh discounts` | Show current discount status |
-| `/yh advisor` | What Mr. Yeeper would say, plus the facts behind it |
-| `/yh fun` | Fun stat counters (`/yh fun reset` to clear) |
-| `/yh introreset` | Replay Mr. Yeeper's introduction |
-| `/yh classic` | The retired pre-shell window |
 
 Pages for `/yh shell`: `home`, `gear`, `bis`, `trinkets`, `consumables`,
 `progression`, `loot`, `mythicplus`, `raid`, `teleports`, `delves`.

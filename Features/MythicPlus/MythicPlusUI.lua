@@ -35,7 +35,7 @@ ns.MythicPlusFrame = frame
 -- several Mythic+ addons register it, so whoever loaded last won.
 SLASH_YYHKEYS1 = "/yhkeys"
 SlashCmdList.YYHKEYS = function()
-    -- Keyed off OpenTo, not off the app frame: gating on ns.AppFrame
+    -- Keyed off OpenTo rather than off a specific window: gating on one
     -- meant this went nowhere in a session where the shell had loaded
     -- and the old window had not.
     if ns.OpenTo then ns:OpenTo("mythicplus") end

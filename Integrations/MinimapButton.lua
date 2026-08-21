@@ -17,17 +17,12 @@ local dataObject = LDB:NewDataObject("YippYappHelper", {
 
     OnClick = function(self, button)
         if button == "LeftButton" then
-            -- Through OpenMain, which is what "open YippYapp" means and
-            -- which prefers the shell. This used to call ToggleApp
-            -- directly, so the addon's most-clicked button was the one
-            -- door that still opened the pre-shell window.
-            if ns.OpenMain then
-                ns:OpenMain()
-            elseif ns.ToggleApp then
-                ns:ToggleApp()
-            elseif ns.ToggleDashboard then
-                ns:ToggleDashboard()
-            end
+            -- Through OpenMain, which is what "open YippYapp" means.
+            -- This used to call ToggleApp directly, so the addon's
+            -- most-clicked button was the one door that still opened the
+            -- pre-shell window. That window is gone; this stays routed
+            -- through the front door.
+            if ns.OpenMain then ns:OpenMain() end
         elseif button == "RightButton" then
             -- The shell's Gear page, not the standalone gear window.
             --

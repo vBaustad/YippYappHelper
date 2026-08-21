@@ -1025,8 +1025,6 @@ function ns:TeleportToDungeon(mapID)
     -- somebody. Shell first, then the old frame, same as everywhere else.
     if ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen() then
         ns.Shell:Open("teleports")
-    elseif ns.AppFrame and ns.AppFrame:IsShown() and ns.ShowAppPage then
-        ns:ShowAppPage("teleports")
     end
 end
 

@@ -169,7 +169,7 @@ Three consequences for the list, none of them safe to act on without a call:
 - **A row per offered quest is not the answer either.** Four are offered and
   one is completable, so four rows would report three permanent failures.
 
-### Cracked Keystone (92600) belongs to Yeeper, not to the checklist
+### Cracked Keystone (92600) does not belong in the checklist
 
 One-time, gated behind a level 11 delve, and it pays crests that do not count
 against the weekly cap. Worth telling people about; wrong shape for this list.
@@ -180,12 +180,12 @@ you something you cannot get back?* A one-time quest costs nothing this week
 on a character that has not done it or sit permanently ticked on one that
 has, and neither is a weekly chore.
 
-The advisor is the right home and the fit is exact: gate a rule on
+It wants a one-shot notice rather than a row: gate on
 `IsQuestFlaggedCompleted(92600)` being false and it appears for someone who
-has not done it and disappears for good the moment they do. Uncapped crests
-behind a one-off quest is precisely the kind of thing Yeeper exists to be
-rude about, and the delve requirement gives the line something concrete to
-tell them to go and do.
+has not done it and disappears for good the moment they do. That home used
+to be Mr. Yeeper, who has been removed along with the pre-shell window he
+lived in -- so this needs somewhere new before it can be built. The
+shell's home page is the obvious candidate.
 
 ### Still open
 
@@ -306,8 +306,8 @@ rows. Everything downstream already flows from that:
 
 - the paper doll, the list, and the equipped/collected marks
 - the "N / M collected" counter
-- Mr. Yeeper's `bisHave` / `bisTotal`, since the Advisor now counts through
-  the same bag-aware path
+- anything else counting collected pieces, since it all reads the same
+  bag-aware path
 
 So this is one insertion point, not a feature threaded through the page.
 

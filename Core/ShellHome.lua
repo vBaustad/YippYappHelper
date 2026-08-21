@@ -15,9 +15,9 @@ local _, ns = ...
 --
 -- Every number on this page comes from a function that exists. The first
 -- version called ns.GetVaultProgress(ns, key) expecting three return
--- values, ns.CountUpgradeableSlots and ns.Advisor:GetLine -- the last two
--- were invented outright and the first has a different signature
--- entirely: ns:GetVaultProgress() takes no arguments and returns a table.
+-- values, and ns.CountUpgradeableSlots -- the second was invented
+-- outright and the first has a different signature entirely:
+-- ns:GetVaultProgress() takes no arguments and returns a table.
 -- Comparing that table to a number threw on the first vault row, so the
 -- page rendered its hero and then stopped, which is why it looked empty
 -- rather than broken. The real sources are ns.Planner:GetVaultSnapshot

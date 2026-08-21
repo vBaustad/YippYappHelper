@@ -748,8 +748,8 @@ eventFrame:RegisterEvent("ITEM_UPGRADE_MASTER_UPDATE")
 -- "collected", so a piece dropping has to redraw it. DELAYED rather than
 -- BAG_UPDATE: the latter fires once per bag per change.
 eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
--- The dashboard and Mr. Yeeper both report vault progress, and the vault
--- filling is not signalled by anything else the addon listens for.
+-- The home page reports vault progress, and the vault filling is not
+-- signalled by anything else the addon listens for.
 eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
@@ -803,9 +803,8 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             ns:EnsureLauncherMacro()
         end)
 
-        -- Read from the TOC rather than hardcoded. Yeeper's introduction
-        -- keys off this value, so a hand-maintained copy would quietly
-        -- replay or suppress the intro at the wrong moment.
+        -- Read from the TOC rather than hardcoded, so a hand-maintained
+        -- copy cannot drift from the version the client loaded.
         ns.ADDON_VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata
             and C_AddOns.GetAddOnMetadata("YippYappHelper", "Version")) or "3.0.0"
 
@@ -836,10 +835,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
                 ns.MainFrame.inAppMode = nil
                 if ns.SetGearAppMode then ns:SetGearAppMode(false) end
                 ns.MainFrame:SetParent(UIParent)
-                -- Navigate the app away from the gear page
-                if ns.AppFrame and ns.AppFrame:IsShown() and ns.currentAppPage == "gear" then
-                    ns:ShowAppPage("home")
-                end
             end
             ns:RefreshAllSlots()
             ns:RefreshCrests()
@@ -889,11 +884,13 @@ end)
 --- .toc change needs a full client restart -- somebody who only reloaded
 --- after an update will not have Core/Shell.lua loaded at all, and
 --- "nothing happens" is the worst possible answer to a key press.
---- Whether the main window is on screen right now, whichever of the
---- three possible windows is the one in use.
+--- Whether the main window is on screen right now.
+---
+--- There used to be three of these and this had to ask each in turn.
+--- The pre-shell window and the dashboard are gone; the shell is the
+--- window.
 local function mainIsOpen()
     if ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen() then return true end
-    if ns.AppFrame and ns.AppFrame:IsShown() then return true end
     return false
 end
 
@@ -939,40 +936,24 @@ function ns:OpenMain()
     if not mainIsOpen() and blockedByCombat() then return end
     if ns.Shell and ns.Shell.Toggle then
         ns.Shell:Toggle()
-    elseif ns.ToggleApp then
-        ns:ToggleApp()
-    elseif ns.ToggleDashboard then
-        ns:ToggleDashboard()
     end
 end
 
 --- Opens the main window on a particular page.
 ---
---- The same front door as OpenMain, and the same fallback chain, for the
---- callers that know where they want to land.
+--- The same front door as OpenMain, for the callers that know where
+--- they want to land.
 ---
---- Everything that wanted a specific page used to reach past OpenMain and
---- drive ns.AppFrame directly. That is how a scattering of buttons -- the
---- minimap icon, the Group Finder tab, the after-key summary's "Open
---- Mythic+ window", half the slash commands -- carried on opening the
---- pre-shell window long after the shell became the addon's UI. Somebody
---- clicking one of those got a different-looking addon than the one they
---- had just been using, which reads as a bug whichever window they
---- preferred.
----
---- Every page id the old frame knew is registered with the shell too
---- (home, gear, bis, trinkets, consumables, progression, loot,
---- mythicplus, raid, teleports, and delves on top), so nothing loses its
---- destination in the move.
+--- Everything that wanted a specific page used to reach past OpenMain
+--- and drive the pre-shell window directly -- the minimap icon, the
+--- Group Finder tab, the after-key summary, half the slash commands --
+--- so clicking one handed you a different-looking addon than the one
+--- you had just been using. Routing them all through here is what fixed
+--- that; deleting the window it fell back to is what finished it.
 function ns:OpenTo(id)
     if not mainIsOpen() and blockedByCombat() then return false end
     if ns.Shell and ns.Shell.Open then
         ns.Shell:Open(id)
-        return true
-    end
-    if ns.AppFrame and ns.ShowAppPage then
-        if not ns.AppFrame:IsShown() and ns.ToggleApp then ns:ToggleApp() end
-        ns:ShowAppPage(id)
         return true
     end
     return false
@@ -1127,15 +1108,6 @@ function ns:RefreshGearViews()
             if ns.RefreshAllSlots then ns:RefreshAllSlots() end
         end
 
-        if not (ns.AppFrame and ns.AppFrame:IsShown()) then return end
-        local page = ns.currentAppPage
-
-        if page == "home" then
-            if ns._refreshDashboard then ns._refreshDashboard() end
-        elseif page == "gear" then
-            if ns.RefreshAllSlots then ns:RefreshAllSlots() end
-            if ns.RefreshCrests then ns:RefreshCrests() end
-        end
         -- The Best in Slot page is not listed here on purpose: it owns
         -- its own watcher in Features/Gear/BisUI.lua, which already
         -- covers equipment, spec and bags. Two mechanisms redrawing one
@@ -1186,9 +1158,7 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh shell <page> — open a specific page")
         print("     |cff888888pages: home, gear, bis, trinkets, consumables,|r")
         print("     |cff888888progression, loot, mythicplus, raid, teleports, delves|r")
-        print("  /yh classic — the retired pre-shell window")
         print("  /yh guide — boss guide for the current raid")
-        print("  /yh train [boss] — practise a boss's mechanics")
         print("  /yh profile — show/set player profile")
         print("  /yh profile <name> — set profile (normal, heroic, mythic)")
         print("  /yh discount <track> — toggle crest discount for a track (adventurer, veteran, champion, hero, myth)")
@@ -1196,9 +1166,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh brez — Battle Res Timer options")
         print("  /yh settings — open the options panel")
         print("  /yh skin [id] — list or choose a skin")
-        print("  /yh advisor — what Mr. Yeeper makes of your character")
-        print("  /yh fun — fun stat counters (/yh fun reset to clear)")
-        print("  /yh introreset — replay Mr. Yeeper's introduction")
         print("  /yh edit — move YippYapp frames via Edit Mode")
         print("  /yh test [panel] — show a panel with sample content (/yh test for the list)")
         return
@@ -1227,30 +1194,13 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
 
     -- /yh shell [page] — bare /yh opens this too. Kept as a named
     -- command because it is the only way to open a specific page from a
-    -- macro, and because /yh classic below needs something to contrast
-    -- with.
+    -- macro.
     if cmd == "shell" then
         if ns.Shell and ns.Shell.Toggle then
             ns.Shell:Toggle(arg ~= "" and arg or nil)
         else
             print("|cff00ff00YippYapp|r shell not loaded — restart WoW, not /reload.")
         end
-        return
-    end
-
-    -- /yh classic — the retired pre-shell window.
-    --
-    -- Retired, not removed. It is no longer reachable by accident: every
-    -- button, icon and page-specific command now goes through OpenTo or
-    -- OpenMain, which prefer the shell. What is left is this command,
-    -- the fallback rungs inside those two functions for a session where
-    -- the shell has not loaded, and the gear frame that still opens at
-    -- an upgrade vendor because that flow was built around it.
-    --
-    -- Worth keeping for now: it is the comparison for anything the shell
-    -- has not finished absorbing, and it costs nothing to leave built.
-    if cmd == "classic" then
-        if ns.ToggleApp then ns:ToggleApp() end
         return
     end
 
@@ -1265,31 +1215,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         if ns.OpenSettings then ns.OpenSettings()
         elseif ns.OpenBlizzardSettings then ns.OpenBlizzardSettings()
         else print("|cffff5555YippYapp:|r settings are not loaded.") end
-        return
-    end
-
-    -- /yh advisor — what the bot would say, plus the facts behind it
-    if cmd == "advisor" then
-        if ns.Advisor then ns.Advisor:Print() end
-        return
-    end
-
-    -- /yh introreset — replay Mr. Yeeper's introduction
-    if cmd == "introreset" then
-        if ns.Advisor and ns.Advisor.ResetIntro then
-            ns.Advisor:ResetIntro()
-            print("|cff00ff00YippYapp|r Yeeper's introduction will replay from the "
-                .. "start, one line per visit to the home screen.")
-        end
-        return
-    end
-
-    -- /yh fun — print the fun stat counters
-    if cmd == "fun" then
-        if ns.FunStats then
-            if arg and strtrim(arg) == "reset" then ns.FunStats:Reset()
-            else ns.FunStats:Print() end
-        end
         return
     end
 
@@ -1380,33 +1305,6 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     if cmd == "guide" then
         ns:OpenTo("raid")
         if ns.Shell and ns.Shell.SetSubTab then ns.Shell:SetSubTab("raid", "guide") end
-        return
-    end
-
-    -- /yh train [boss] — straight into the arena.
-    if cmd == "train" then
-        local G, T = ns.RaidGuide, ns.RaidTrainer
-        if not (G and T) then return end
-        local want = strlower(strtrim(arg or ""))
-        if want ~= "" then
-            for _, boss in ipairs(G:Ordered()) do
-                if boss.id == want or strlower(boss.name):find(want, 1, true) then
-                    if not T:Start(boss.id) then
-                        print("|cff00ff00YippYapp|r nothing to practise for " .. boss.name)
-                    end
-                    return
-                end
-            end
-            print("|cff00ff00YippYapp|r no such boss: " .. want)
-            return
-        end
-        print("|cff00ff00=== YippYapp mechanics trainer ===|r")
-        for _, boss in ipairs(G:Ordered()) do
-            if T:HasScenario(boss.id) then
-                print(("  |cff888888%d.|r %s  |cff555555/yh train %s|r")
-                    :format(boss.order, boss.name, boss.id))
-            end
-        end
         return
     end
 

@@ -410,7 +410,7 @@ end
 local host, listFrame, detail, scroll
 local rowButtons = {}
 local roleButtons = {}
-local diffButtons, trainButton
+local diffButtons
 local lustLabel, lustIcon, lustText, lustBaseY
 
 --- A small muted caption over a group of controls in the rail.
@@ -661,32 +661,6 @@ function UI:BuildInto(parent)
     lustText:SetWidth(LIST_W - 32)
     lustText:SetJustifyV("TOP")
 
-    trainButton = CreateFrame("Button", nil, listFrame, "BackdropTemplate")
-    trainButton:SetSize(LIST_W - 4, 22)
-    trainButton:SetPoint("TOPLEFT", 0, y)
-    trainButton.text = trainButton:CreateFontString(nil, "OVERLAY", FONT_LABEL)
-    trainButton.text:SetAllPoints()
-    trainButton.text:SetText("|cff44ff88Test my knowledge|r")
-    ns.AddGlowHighlight(trainButton, 0.12)
-    trainButton:SetScript("OnClick", function()
-        local id = Store().boss
-        if ns.RaidTrainer and id then
-            -- The trainer only knows two difficulties. Mythic readers
-            -- get its heroic timeline, which is the closer of the two.
-            ns.RaidTrainer:Start(id, CurrentDiff() ~= "normal")
-        end
-    end)
-    trainButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Practise this fight")
-        GameTooltip:AddLine("A small arena. WASD or the arrow keys to move, "
-            .. "aim with the mouse, hold left-click to shoot.", 0.7, 0.7, 0.7, true)
-        GameTooltip:AddLine("Dodge what is red. Stand in what is green.",
-            0.7, 0.7, 0.7, true)
-        GameTooltip:Show()
-    end)
-    trainButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
     ------------------------------------------------------------
     -- Detail column
     ------------------------------------------------------------
@@ -845,17 +819,7 @@ function UI:Refresh()
         railY = lustBaseY - 4
     end
 
-    trainButton:ClearAllPoints()
-    trainButton:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, railY)
     UI._lustTop, UI._lustText, UI._railY = lustBaseY - 16, lustText, railY
-
-    -- PAUSED, not removed. The arena is built and every fight in it
-    -- runs, but a trainer that is confidently wrong teaches the wrong
-    -- reflex and you find out in the raid. Flip this to bring it back.
-    local TRAINER_READY = false
-    trainButton:SetShown(TRAINER_READY
-        and ns.RaidTrainer and ns.RaidTrainer:HasScenario(boss.id) or false)
-
     ------------------------------------------------------------
     -- Body
     ------------------------------------------------------------
