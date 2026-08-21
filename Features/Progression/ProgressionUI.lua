@@ -60,7 +60,30 @@ local CC = {
 
 ------------------------------------------------------------
 -- Main frame  (same name / namespace hook as before)
+--
+-- Built on first open, not at load. Everything below this line used to
+-- run while the player was still looking at the loading screen: 26
+-- frames and 198 regions of card grid for a page that has to be clicked
+-- to be seen.
+--
+-- Wrapped whole rather than picked apart. The file is one long
+-- construction script -- no events, no page registration, nothing that
+-- has to happen at load -- so the honest change is to stop running it
+-- until somebody asks, and the smallest one is to make the whole thing
+-- a function body. Its locals become the function's, which is why they
+-- were counted first: Lua allows 200 per function and there are 29.
+--
+-- ns:SetProgressionAppMode is defined inside here too, and that is
+-- correct rather than a compromise. Core\ShellPages.lua looks the app
+-- mode up by NAME after running the creator, and every other caller
+-- guards on it. A page that does not exist has no app mode.
+--
+-- Core\ShellPages.lua already had `create` for exactly this; the loot
+-- browser has used it all along. This is the second of them.
 ------------------------------------------------------------
+function ns:CreateProgressionFrame()
+    if ns.ProgressionFrame then return end
+
 local f = CreateFrame("Frame", "YippYappProgressionFrame", UIParent, "BackdropTemplate")
 f:SetSize(FRAME_W, FRAME_H)
 f:SetPoint("CENTER")
@@ -564,4 +587,4 @@ for i, spark in ipairs(ns.PROGRESSION.CRAFTING_SPARK) do
     PanelLine(p2, i,
         "|c" .. spark.color .. spark.label .. "|r  " .. lo .. " \226\128\147 " .. hi)
 end
-
+end

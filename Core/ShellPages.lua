@@ -154,6 +154,7 @@ Adapt({
     id = "progression", label = "Progression", order = 50,
     accent = { 1.0, 1.0, 0.0 },
     frameKey = "ProgressionFrame",
+    create = "CreateProgressionFrame",
     appMode = "SetProgressionAppMode",
     -- Lays itself out from whatever it is parented to, and takes no
     -- dimensions.

@@ -190,6 +190,7 @@ CreateDashButton(
     "Gear sources, crests, and season reference",
     { 1.0, 1.0, 0.0 },
     function()
+        if ns.CreateProgressionFrame then ns:CreateProgressionFrame() end
         if ns.ProgressionFrame then
             ns.ProgressionFrame:Show()
         end

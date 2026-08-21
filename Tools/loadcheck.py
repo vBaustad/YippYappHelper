@@ -1490,6 +1490,9 @@ def main():
         ("BisUI.Refresh",             None, None, None),
         ("SetConsumablesAppMode",     True, 760, 520),
         ("RefreshConsumables",        None, None, None),
+        # Also built lazily now. Without this the app-mode call below
+        # reads "absent" and the whole page quietly loses its coverage.
+        ("CreateProgressionFrame",    None, None, None),
         ("SetProgressionAppMode",     True, None, None),
         ("SetTeleportAppMode",        True, 760, 520),
         ("RefreshTeleports",          None, None, None),

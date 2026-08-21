@@ -413,7 +413,13 @@ local function EnterPage(id)
         f:Show()
         if ns.RefreshRaidOverview then ns:RefreshRaidOverview() end
 
-    elseif id == "progression" and ns.ProgressionFrame then
+    elseif id == "progression" then
+        -- Same shape as the loot branch below: the page builds itself
+        -- on first open now, so this has to ask for it rather than test
+        -- for it.
+        if not ns.ProgressionFrame and ns.CreateProgressionFrame then
+            ns:CreateProgressionFrame()
+        end
         local f = ns.ProgressionFrame
         f.inAppMode = true
         f:SetParent(pages.progression)
