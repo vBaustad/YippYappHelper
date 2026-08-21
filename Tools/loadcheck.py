@@ -1418,6 +1418,22 @@ def main():
 
     print("\n%d/%d files loaded clean" % (len(files) - len(failures), len(files)))
 
+    # What the gear window cost just by the addon being loaded.
+    #
+    # Taken here and nowhere else: every check below is free to open
+    # pages, and the whole claim being made is about the state before
+    # anything does. Read late it would only ever say "built", whatever
+    # the code did.
+    at_load = L.eval("""
+        function(ns)
+            local slots, crests = 0, 0
+            for _ in pairs(ns.SlotButtons or {}) do slots = slots + 1 end
+            for _ in pairs(ns.AppCrestFrames or {}) do crests = crests + 1 end
+            return slots .. "/" .. crests .. "/" ..
+                tostring(ns._gearWindowBuilt and 1 or 0)
+        end
+    """)(ns)
+
     # ── Phase 2: actually draw the pages ────────────────────────
     #
     # Loading proves the files parse and their top-level code runs. It
@@ -5864,6 +5880,84 @@ def main():
     else:
         print("  FAIL teleports: %s" % teleports)
         failures.append(("teleports", str(teleports)))
+
+    # The gear window builds when it is opened, not when the addon loads.
+    #
+    # Sixteen slot buttons and a crest frame per track is 44 frames and
+    # 220 regions, and the window they belong to opens at an upgrade
+    # vendor -- somewhere most sessions never go. Nothing measured this
+    # for a long time because nothing could: a frame's real cost is C
+    # memory the client never attributes to the addon, and the offline
+    # memory check models frames as Lua tables, so it blamed the weight
+    # on the file rather than on the count.
+    #
+    # Both halves are checked. Building lazily is worthless if something
+    # at load quietly triggers it, and it is worse than worthless if the
+    # window opens empty.
+    lazy = L.eval("""
+        function(ns, atLoad)
+            local slots, crests, built = atLoad:match("(%d+)/(%d+)/(%d+)")
+            if built ~= "0" then
+                return "the gear window was already built at load time"
+            end
+            if slots ~= "0" or crests ~= "0" then
+                return "at load the window already had " .. slots
+                    .. " slot buttons and " .. crests .. " crest frames"
+            end
+
+            -- Opening it is what builds it. RefreshAllSlots is the path
+            -- the vendor takes, and it runs before the frame is shown.
+            ns:RefreshAllSlots()
+            if not ns._gearWindowBuilt then
+                return "a refresh did not build the window"
+            end
+            local n = 0
+            for _, si in ipairs(ns.SLOT_IDS) do
+                if ns.SlotButtons[si.slot] then n = n + 1 end
+            end
+            if n ~= #ns.SLOT_IDS then
+                return "built " .. n .. " slot buttons of " .. #ns.SLOT_IDS
+            end
+            if #ns.AppCrestFrames ~= #ns.CRESTS then
+                return "built " .. #ns.AppCrestFrames .. " crest frames of "
+                    .. #ns.CRESTS
+            end
+
+            -- Same table, still. Crests.lua holds a reference to
+            -- ns.AppCrestFrames taken at load, so replacing it on build
+            -- rather than filling it would leave that file writing into
+            -- a table nothing draws.
+            local held = ns.AppCrestFrames
+            ns:RefreshAllSlots()
+            if ns.AppCrestFrames ~= held then
+                return "the build replaced AppCrestFrames instead of "
+                    .. "filling it"
+            end
+            if #ns.AppCrestFrames ~= #ns.CRESTS then
+                return "a second build duplicated the crest frames: "
+                    .. #ns.AppCrestFrames
+            end
+
+            -- And the other door in. Showing the container must build
+            -- too, because the app-mode path shows it without going
+            -- through a refresh first.
+            ns._gearWindowBuilt = nil
+            for k in pairs(ns.SlotButtons) do ns.SlotButtons[k] = nil end
+            local onShow = ns.MainFrame._scripts and ns.MainFrame._scripts.OnShow
+            if not onShow then return "the container has no OnShow" end
+            onShow(ns.MainFrame)
+            if not ns._gearWindowBuilt then
+                return "showing the window did not build it"
+            end
+            return "ok"
+        end
+    """)(ns, at_load)
+    if lazy == "ok":
+        print("  ok   gear window: nothing built at load, and a refresh or a "
+              "show builds every slot and crest frame exactly once")
+    else:
+        print("  FAIL gear window lazy build: %s" % lazy)
+        failures.append(("gear window lazy build", str(lazy)))
 
     # The character rail: section rules, and the crest track colours.
     #

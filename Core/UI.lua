@@ -28,7 +28,24 @@ local QUALITY_COLORS = {
 
 ------------------------------------------------------------
 -- Main container (holds both panels)
+--
+-- The container is built at load; its contents are not. Sixteen slot
+-- buttons and a crest frame per track came to 44 frames and 220 regions
+-- created at login, for a window that opens at an upgrade vendor -- a
+-- place most sessions never go.
+--
+-- Invisible in every measurement anybody would think to take: a frame
+-- costs C memory the client does not attribute to the addon, so
+-- GetAddOnMemoryUsage never showed it, and the offline memory check
+-- models frames as plain Lua tables so it blamed the kilobytes on the
+-- wrong thing entirely. Counting the objects is what found it.
+--
+-- The container itself stays eager. Eleven places test `ns.MainFrame`
+-- for existence, and a nil one would read as "the gear window is not
+-- part of this build".
 ------------------------------------------------------------
+local EnsureBuilt  -- assigned below, once the pieces it builds exist
+
 local container = CreateFrame("Frame", "YippYappHelperFrame", UIParent)
 container:SetSize(EQUIP_PANEL_WIDTH + INFO_PANEL_WIDTH, FRAME_HEIGHT)
 container:SetPoint("CENTER")
@@ -49,6 +66,7 @@ ns.MainFrame = container
 -- ESC closes the frame: add/remove from UISpecialFrames dynamically
 -- so we don't eat ESC when the frame is hidden
 container:SetScript("OnShow", function()
+    EnsureBuilt()
     if container.inAppMode then return end
     tinsert(UISpecialFrames, "YippYappHelperFrame")
 end)
@@ -171,43 +189,51 @@ local GEAR_STACK_GAP = 10
 
 local APP_SCALE = math.max(1.0, 1.2 * ns:GetUIScale())  -- scale with screen, min 1.0
 
--- Create larger crest display frames for app mode (2-column layout)
+-- Larger crest display frames for app mode (2-column layout).
+--
+-- Published empty and filled on first build. Features\Gear\Crests.lua
+-- iterates this and does nothing with an empty one, which is the right
+-- answer before the window has ever been opened.
 local appCrestFrames = {}
-for i = 1, #ns.CRESTS do
-    local crestDef = ns.CRESTS[i]
-    local af = CreateFrame("Frame", nil, infoPanel, "BackdropTemplate")
-    af:SetBackdrop({
-        bgFile   = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 8,
-        insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    af:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
-    af:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.4)
-
-    af.icon = af:CreateTexture(nil, "ARTWORK")
-    af.icon:SetSize(20, 20)
-    af.icon:SetPoint("LEFT", 8, 0)
-    af.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    af.countFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    af.countFs:SetPoint("LEFT", af.icon, "RIGHT", 6, 0)
-
-    af.nameFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    af.nameFs:SetPoint("LEFT", af.countFs, "RIGHT", 4, 0)
-    af.nameFs:SetText("|c" .. crestDef.color .. crestDef.track .. "|r")
-
-    af.upgFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    af.upgFs:SetPoint("RIGHT", -8, 0)
-
-    af:Hide()
-    appCrestFrames[i] = af
-end
 ns.AppCrestFrames = appCrestFrames
+
+local function BuildCrestFrames()
+    for i = 1, #ns.CRESTS do
+        local crestDef = ns.CRESTS[i]
+        local af = CreateFrame("Frame", nil, infoPanel, "BackdropTemplate")
+        af:SetBackdrop({
+            bgFile   = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets   = { left = 2, right = 2, top = 2, bottom = 2 },
+        })
+        af:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
+        af:SetBackdropBorderColor(0.25, 0.25, 0.25, 0.4)
+
+        af.icon = af:CreateTexture(nil, "ARTWORK")
+        af.icon:SetSize(20, 20)
+        af.icon:SetPoint("LEFT", 8, 0)
+        af.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+        af.countFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        af.countFs:SetPoint("LEFT", af.icon, "RIGHT", 6, 0)
+
+        af.nameFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        af.nameFs:SetPoint("LEFT", af.countFs, "RIGHT", 4, 0)
+        af.nameFs:SetText("|c" .. crestDef.color .. crestDef.track .. "|r")
+
+        af.upgFs = af:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        af.upgFs:SetPoint("RIGHT", -8, 0)
+
+        af:Hide()
+        appCrestFrames[i] = af
+    end
+end
 
 ns._gearAppMode = false
 
 function ns:SetGearAppMode(enabled, contentWidth, contentHeight)
+    EnsureBuilt()
     ns._gearAppMode = enabled
     if enabled then
         container:SetMovable(false)
@@ -868,10 +894,35 @@ local function CreateSlotButton(parent, slotInfo)
     return btn
 end
 
-for _, slotInfo in ipairs(ns.SLOT_IDS) do
-    local btn = CreateSlotButton(equipPanel, slotInfo)
-    ns.SlotButtons[slotInfo.slot] = btn
+local function BuildSlotButtons()
+    for _, slotInfo in ipairs(ns.SLOT_IDS) do
+        local btn = CreateSlotButton(equipPanel, slotInfo)
+        ns.SlotButtons[slotInfo.slot] = btn
+    end
 end
+
+--- Build the window's contents, once.
+---
+--- Every path that can put something on screen calls this: the
+--- container's OnShow, and the two refreshes that write into the pieces
+--- it builds.
+---
+--- A refresh that ran before the build found nothing to write to and
+--- did nothing -- which is correct, and also means the panel can be a
+--- refresh behind at the moment it appears. Catching it up belongs
+--- here, once, rather than in every caller's memory of the ordering.
+EnsureBuilt = function()
+    if ns._gearWindowBuilt then return end
+    ns._gearWindowBuilt = true
+    BuildCrestFrames()
+    BuildSlotButtons()
+    if ns.RefreshCrests then ns:RefreshCrests() end
+end
+
+--- For anything that wants the pieces to exist without showing the
+--- window. Nothing needs it today; it is here so the next caller reaches
+--- for a function rather than for the flag.
+ns.EnsureGearWindowBuilt = function() EnsureBuilt() end
 
 ------------------------------------------------------------
 -- Refresh equipped gear display
@@ -886,6 +937,7 @@ local TRACK_COLORS = {
 }
 
 function ns:RefreshAllSlots()
+    EnsureBuilt()
     for _, slotInfo in ipairs(ns.SLOT_IDS) do
         local btn = ns.SlotButtons[slotInfo.slot]
         local info = ns:GetSlotInfo(slotInfo.slot)
