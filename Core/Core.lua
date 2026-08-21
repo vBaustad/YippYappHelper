@@ -1530,6 +1530,42 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         end
         print("  (run this again standing at an upgrade vendor -- if the "
             .. "numbers only appear there, the cache is the fix)")
+
+        -- Tidal Spark Dust, and whether it can answer the spark row.
+        --
+        -- The weekly checklist currently infers "this week's spark is
+        -- in" from seven quest flags, because counting Sparks of Tides
+        -- in the bags cannot tell "not collected" from "collected and
+        -- spent". This currency is residue: one per spark OBTAINED,
+        -- and it does not go down when the spark is used.
+        --
+        -- The tooltip shows a Total and a "Current Season Maximum",
+        -- which is the pair the row wants -- behind or caught up. What
+        -- the tooltip does not say is which API fields carry them, and
+        -- guessing that is how the high-water query above spent a
+        -- season silently returning zero. So: ask, print, then decide.
+        print("--- Tidal Spark Dust (currency 3509) ---")
+        local SPARK_DUST = 3509
+        if not (C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo) then
+            print("  C_CurrencyInfo.GetCurrencyInfo: MISSING")
+        else
+            local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, SPARK_DUST)
+            if not ok then
+                print("  GetCurrencyInfo: ERROR " .. tostring(info))
+            elseif type(info) ~= "table" then
+                print("  GetCurrencyInfo returned " .. tostring(info)
+                    .. " -- wrong id, or not a currency this character sees")
+            else
+                for _, k in ipairs({
+                    "name", "quantity", "maxQuantity", "totalEarned",
+                    "useTotalEarnedForMaxQty", "quantityEarnedThisWeek",
+                    "maxWeeklyQuantity", "discovered", "isAccountWide",
+                    "isAccountTransferable",
+                }) do
+                    print("  " .. k .. ": " .. tostring(info[k]))
+                end
+            end
+        end
         return
     end
 
