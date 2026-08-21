@@ -86,11 +86,6 @@ function ns:HasDiscountAchievement(crestTrack)
     return false
 end
 
--- Clear cache (call on login/reload if needed)
-function ns:ClearDiscountCache()
-    wipe(discountCache)
-end
-
 function ns:GetCrestCost(crestTrack)
     -- Manual override first (user can toggle via /yyh discount)
     local db = YippYappHelperDB or {}
@@ -238,11 +233,6 @@ function ns:GetEarnableCrests(crestTrack)
         end
     end
     return 0
-end
-
--- Total budget: current crests + still earnable this season
-function ns:GetTotalCrestBudget(crestTrack)
-    return ns:GetCrestCountByTrack(crestTrack) + ns:GetEarnableCrests(crestTrack)
 end
 
 ------------------------------------------------------------
@@ -1170,24 +1160,6 @@ function ns:GetTrackPolicyLine(crestTrack)
     return line
 end
 
---- Every crest track with something to spend on, highest track first.
---- The panel groups by this: a budget is per track, so advice about one
---- wallet belongs under that wallet and nowhere else.
-function ns:GetActiveCrestPlans()
-    local out, seen = {}, {}
-    for i = #ns.TRACK_ORDER, 1, -1 do
-        local crestTrack = ns.TRACK_CREST[ns.TRACK_ORDER[i]]
-        if crestTrack and not seen[crestTrack] then
-            seen[crestTrack] = true
-            local plan = ns:GetCrestPlan(crestTrack)
-            if plan and plan.slotCount > 0 then
-                out[#out + 1] = plan
-            end
-        end
-    end
-    return out
-end
-
 ------------------------------------------------------------
 -- Crest waste: paying a scarce crest for an item level a cheaper
 -- crest already reaches.
@@ -1642,21 +1614,6 @@ local function BagLiftAddendum(lift)
         .. lift.toIlvl .. ": " .. lift.ranks ..
         (lift.ranks == 1 and " more rank, " or " more ranks, ") ..
         lift.saved .. " " .. lift.crestTrack .. " you keep."
-end
-
---- Every slot whose next crest purchase lands inside the overlap band.
---- Returns the list, plus crestTrack -> total crests at stake.
-function ns:GetAllCrestWaste()
-    local list, totals = {}, {}
-    for _, si in ipairs(ns.SLOT_IDS) do
-        local waste = ns:GetCrestWaste(si.slot)
-        if waste then
-            waste.slotName = si.name
-            table.insert(list, waste)
-            totals[waste.crestTrack] = (totals[waste.crestTrack] or 0) + waste.wastedCrests
-        end
-    end
-    return list, totals
 end
 
 -- Achievement progress: how many slots still need upgrades to earn a discount achievement?

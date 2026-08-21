@@ -205,23 +205,6 @@ function ns:GetUncappedCrestIncome(crestTrack)
     return (src.perBox or 0) * #(src.boxes or {}), #(src.boxes or {})
 end
 
---- Crests a track can be given once per character, outside the cap.
----
---- Deliberately NOT folded into the budget: nothing the client exposes
---- says whether this character has already handed the quests in, and a
---- number that only counts down for players who never look at it is
---- worse than no number. Callers that show it must say "once per
---- character", never "you can still earn".
-function ns:GetOneShotCrestIncome(crestTrack)
-    local src = ns.UNCAPPED_CREST_SOURCES[crestTrack]
-    if not src or not src.once then return 0, 0 end
-    local total = 0
-    for _, entry in ipairs(src.once) do
-        total = total + (entry.amount or 0)
-    end
-    return total, #src.once
-end
-
 ------------------------------------------------------------
 -- Key strategic facts
 ------------------------------------------------------------
@@ -309,41 +292,6 @@ ns.DUNGEON_LOOT = {
     { key = "M11",    loot = 311, vault = 318 },
     { key = "M12",    loot = 311, vault = 318 },
 }
-
-------------------------------------------------------------
--- The key level above which gear stops improving.
---
--- Both columns above flatten before the key ceiling does: +10, +11 and
--- +12 all drop 311 and all vault 318. So past that point a higher key
--- buys rating and nothing else -- which the game never says, and which
--- is why people grind +12s believing the vault is still climbing.
---
--- Derived rather than written down, so a corrected row in DUNGEON_LOOT
--- moves the answer instead of leaving a stale constant behind it.
--- Returns keyLevel, loot, vault, or nil if the table has no M+ rows.
-------------------------------------------------------------
-function ns:GetKeyGearCeiling()
-    local maxLoot, maxVault = 0, 0
-    for _, entry in ipairs(ns.DUNGEON_LOOT or {}) do
-        if tonumber(entry.key:match("M(%d+)")) then
-            if (entry.loot or 0) > maxLoot then maxLoot = entry.loot end
-            if (entry.vault or 0) > maxVault then maxVault = entry.vault end
-        end
-    end
-    if maxLoot == 0 then return nil end
-
-    -- Lowest key that reaches both ceilings: the first level at which
-    -- pushing further stops paying in item level.
-    local best
-    for _, entry in ipairs(ns.DUNGEON_LOOT) do
-        local level = tonumber(entry.key:match("M(%d+)"))
-        if level and entry.loot == maxLoot and entry.vault == maxVault then
-            if not best or level < best then best = level end
-        end
-    end
-    if not best then return nil end
-    return best, maxLoot, maxVault
-end
 
 ------------------------------------------------------------
 -- Raid reference anchors
@@ -604,17 +552,6 @@ function ns:GetTrackFromIlvl(ilvl)
     return nil
 end
 
-function ns:GetRankInTrack(track, ilvl)
-    local levels = ns.GEAR_TRACKS[track]
-    if not levels then return nil, nil end
-    for i, lvl in ipairs(levels) do
-        if ilvl == lvl then
-            return i, #levels
-        end
-    end
-    return nil, #levels
-end
-
 function ns:GetMaxIlvlForTrack(track)
     local levels = ns.GEAR_TRACKS[track]
     if levels then
@@ -736,8 +673,6 @@ end
 ------------------------------------------------------------
 ns.HEADER_H    = 32
 ns.HEADER_GAP  = 4
-ns.HEADER_ICON = 28
-
 --- Vertical centre of the header band, as a negative offset from a
 --- frame's TOPLEFT. Anchor header widgets by their LEFT/RIGHT to this and
 --- they line up regardless of their own height.
@@ -882,44 +817,6 @@ end
 -- Coordinates in that format are percentages; UiMapPoint wants 0-1.
 ------------------------------------------------------------
 
---- mapID, x, y from a "/way #map x y" string, or nil if it doesn't parse.
-function ns.ParseWaypoint(str)
-    if type(str) ~= "string" then return nil end
-    local mapID, x, y = str:match("#(%d+)%s+([%d%.]+)%s+([%d%.]+)")
-    mapID, x, y = tonumber(mapID), tonumber(x), tonumber(y)
-    if not (mapID and x and y) then return nil end
-    return mapID, x, y
-end
-
---- Place and super-track a map pin. Returns true on success.
-function ns.SetWaypoint(mapID, x, y, label)
-    if not (mapID and x and y) then return false end
-    if InCombatLockdown() then
-        print("|cff00ff00YippYapp|r: Can't set a map pin in combat.")
-        return false
-    end
-    if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint) then return false end
-
-    -- Some maps (instances, scenarios) refuse user waypoints outright.
-    if C_Map.CanSetUserWaypointOnMap and not C_Map.CanSetUserWaypointOnMap(mapID) then
-        print(("|cff00ff00YippYapp|r: The game won't allow a pin on that map (%s). Use |cffffffff/way #%d %.1f %.1f|r.")
-            :format(label or "unknown", mapID, x, y))
-        return false
-    end
-
-    local ok = pcall(function()
-        local point = UiMapPoint.CreateFromCoordinates(mapID, x / 100, y / 100)
-        C_Map.SetUserWaypoint(point)
-        if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
-            C_SuperTrack.SetSuperTrackedUserWaypoint(true)
-        end
-    end)
-    if ok and label then
-        print(("|cff00ff00YippYapp|r: Pin set — |cffffffff%s|r"):format(label))
-    end
-    return ok
-end
-
 -- The same map-pin art Blizzard puts on a /way pin, so the chip reads as
 -- a waypoint. Falls back to the old tracking icon if the atlas is ever
 -- renamed out from under us.
@@ -932,66 +829,3 @@ end
 
 local PIN_ICON     = PinMarkup("Waypoint-MapPin-Untracked")
 local PIN_ICON_LIT = PinMarkup("Waypoint-MapPin-Tracked")
-
---- A clickable "pin" chip for a /way string. Returns the button (height
---- 16) or nil when the string doesn't parse.
----
---- The button carries a :Rebind(wayString, label) so pooled buttons can
---- be pointed at new coordinates without duplicating the scripts.
-function ns.MakeWaypointButton(parent, wayString, label)
-    local btn = CreateFrame("Button", nil, parent)
-    btn:SetHeight(18)   -- the pin art is 16 tall; give it room to click
-
-    local fs = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    fs:SetPoint("LEFT", 0, 0)
-    btn._fs = fs
-
-    local function paint(hex, icon)
-        if not btn._x then return end
-        fs:SetText(("%s|c%s %.1f, %.1f|r"):format(icon, hex, btn._x, btn._y))
-        btn:SetWidth(fs:GetStringWidth() + 16)
-    end
-
-    function btn:Rebind(str, lbl)
-        local mapID, x, y = ns.ParseWaypoint(str)
-        if not mapID then return false end
-        self._mapID, self._x, self._y, self._label = mapID, x, y, lbl
-        paint("ff66bbff", PIN_ICON)
-        return true
-    end
-
-    btn:SetScript("OnClick", function(self)
-        ns.SetWaypoint(self._mapID, self._x, self._y, self._label)
-    end)
-    btn:SetScript("OnEnter", function(self)
-        paint("ffffffff", PIN_ICON_LIT)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(self._label or "Waypoint")
-        GameTooltip:AddLine("Click to place a map pin", 1, 1, 1)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", function()
-        paint("ff66bbff", PIN_ICON)
-        GameTooltip:Hide()
-    end)
-
-    if not btn:Rebind(wayString, label) then return nil end
-    return btn
-end
-
--- Smooth fade-in for a frame (call on OnEnter, auto-stops)
-function ns.FadeIn(frame, duration)
-    duration = duration or 0.12
-    frame._fadeAlpha = frame:GetAlpha()
-    frame:SetAlpha(0)
-    frame:Show()
-    local elapsed = 0
-    frame:SetScript("OnUpdate", function(self, dt)
-        elapsed = elapsed + dt
-        local progress = math.min(elapsed / duration, 1)
-        self:SetAlpha(progress)
-        if progress >= 1 then
-            self:SetScript("OnUpdate", nil)
-        end
-    end)
-end

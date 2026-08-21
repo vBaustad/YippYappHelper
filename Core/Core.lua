@@ -803,11 +803,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             ns:EnsureLauncherMacro()
         end)
 
-        -- Read from the TOC rather than hardcoded, so a hand-maintained
-        -- copy cannot drift from the version the client loaded.
-        ns.ADDON_VERSION = (C_AddOns and C_AddOns.GetAddOnMetadata
-            and C_AddOns.GetAddOnMetadata("YippYappHelper", "Version")) or "3.0.0"
-
         -- Suppress CharacterFrame when upgrade vendor is open
         -- (our slot buttons handle equipping instead)
         if CharacterFrame and not characterFrameHooked then

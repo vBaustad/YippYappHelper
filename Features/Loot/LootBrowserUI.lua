@@ -472,21 +472,6 @@ local function AcquireIcon(parent)
     return icon
 end
 
-local function AcquireLabel(parent)
-    local label = table.remove(labelPool)
-    if not label then
-        label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    end
-    label:SetParent(parent)
-    label:ClearAllPoints()
-    label:SetText("")
-    label:SetWidth(0)
-    label:SetWordWrap(false)
-    label:Show()
-    table.insert(activeLabels, label)
-    return label
-end
-
 -- Section headings, pooled.
 --
 -- These were 18px rows filled with a hardcoded purple and purple text --
@@ -503,10 +488,6 @@ local function AcquireSection(parent)
     s:SetValue("")
     s:Show()
     table.insert(activeSections, s)
-    -- Exposed for Tools/loadcheck.py, as the Consumables pool is: it is
-    -- what lets the harness check layering and geometry on this page
-    -- rather than only on that one.
-    ns.__lootSections = activeSections
     return s
 end
 

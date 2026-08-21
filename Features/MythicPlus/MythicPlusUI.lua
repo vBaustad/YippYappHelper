@@ -500,12 +500,6 @@ local function GetGroupMembers()
     return members
 end
 
-local function ColorRating(score)
-    if not score or score == 0 then return ns.Widgets:Tint("faint", "-") end
-    local r, g, b = ns:GetRatingColor(score)
-    return string.format("|cff%02x%02x%02x%d|r", r * 255, g * 255, b * 255, score)
-end
-
 --- The dungeon's own art, with the teleport spell icon only as a
 --- fallback.
 ---

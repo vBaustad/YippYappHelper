@@ -144,20 +144,6 @@ end
 local texPool = {}
 local texPoolIdx = 0
 
-local function AcquireTex(parent)
-    texPoolIdx = texPoolIdx + 1
-    local tex = texPool[texPoolIdx]
-    if not tex then
-        tex = parent:CreateTexture(nil, "ARTWORK")
-        texPool[texPoolIdx] = tex
-    else
-        tex:SetParent(parent)
-    end
-    tex:ClearAllPoints()
-    tex:Show()
-    return tex
-end
-
 -- Group sections.
 --
 -- Each expansion sits on its own surface rather than under a rule. A

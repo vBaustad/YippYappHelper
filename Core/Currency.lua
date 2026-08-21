@@ -153,9 +153,3 @@ function ns:FindCurrencyByName(name)
     end
     return nil
 end
-
-function ns:GetCurrencyCapProgress(entry)
-    if not entry or (entry.maxQuantity or 0) <= 0 then return nil end
-    local have = entry.useTotalEarned and entry.totalEarned or entry.quantity
-    return have or 0, entry.maxQuantity
-end

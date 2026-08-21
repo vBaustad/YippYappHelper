@@ -699,19 +699,6 @@ local function linkIlvl(link)
     return nil
 end
 
---- itemID -> best item level held in bags. Built once per render, not
---- once per row: this walks every bag slot the character has, and the
---- page asks about thirty-odd items.
----
---- Keeps the HIGHEST copy. Two of the same item in bags at different
---- ranks is normal after a catalyst or a vault pick, and the lower one
---- is not the answer to "how far along am I".
---- Exported: the Advisor wants a bag-aware view too, and two scanners
---- walking the same bags with different rules is how they drift.
-function ns:ScanBagItems()
-    return ScanBags()
-end
-
 function ScanBags()
     local found = {}
     local C = C_Container

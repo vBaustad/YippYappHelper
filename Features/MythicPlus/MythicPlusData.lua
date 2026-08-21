@@ -1011,23 +1011,6 @@ function ns:CanTeleportToDungeon(mapID)
     return known or false
 end
 
-function ns:TeleportToDungeon(mapID)
-    local entry = GetTeleportCache()[mapID]
-    if not entry then return end
-    if not ns:CanTeleportToDungeon(mapID) then
-        print("|cff00ff00YippYapp|r: Teleport not unlocked for this dungeon")
-        return
-    end
-    -- CastSpellByID is protected; use the Teleports page instead
-    print("|cff00ff00YippYapp|r: Use the |cff88ccffTeleports|r page to teleport (secure button required)")
-    -- Only redirects a window that is already open -- this is a nudge
-    -- after a refused teleport, not a reason to throw a window at
-    -- somebody. Shell first, then the old frame, same as everywhere else.
-    if ns.Shell and ns.Shell.IsOpen and ns.Shell:IsOpen() then
-        ns.Shell:Open("teleports")
-    end
-end
-
 ------------------------------------------------------------
 -- Keystone sharing via addon comms
 ------------------------------------------------------------

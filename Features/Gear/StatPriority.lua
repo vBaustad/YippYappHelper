@@ -261,21 +261,6 @@ function ns:StatPriorityCandidates(specKey)
     return list
 end
 
---- The single stat priority entry that applies to the player, or nil.
----
---- Nil rather than a best guess when the guide lists several builds and
---- the client will not say which one is active. The difference is not
---- academic: Blood wants Haste under San'layn and Critical Strike under
---- Deathbringer, so picking the first entry would tell half of Blood
---- death knights to stack the wrong stat, in the styling the addon uses
---- for things it actually knows.
----
---- @return table|nil entry, string|nil buildName
-function ns:StatPriorityEntry(specKey)
-    local _, entry, build = self:StatPriorityCandidates(specKey)
-    return entry, build
-end
-
 --- Ranks for the four secondaries, for the build the player is in.
 ---
 --- Where the build cannot be pinned down, this falls back to what every

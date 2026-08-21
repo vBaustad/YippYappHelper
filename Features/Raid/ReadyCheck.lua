@@ -114,75 +114,14 @@ local function DB()
     return YippYappHelperDB.readyCheck
 end
 
-------------------------------------------------------------
--- Buff detection
-------------------------------------------------------------
-local function UnitHasAuraByName(unit, name)
-    if not unit or not UnitExists(unit) then return false end
-    return C_UnitAuras.GetAuraDataBySpellName(unit, name, "HELPFUL") ~= nil
-end
-
--- Returns the matching aura table (or nil). Lets callers show details in tooltip.
-local function FindAura(unit, predicate)
-    if not unit or not UnitExists(unit) then return nil end
-    local i = 1
-    while true do
-        local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
-        if not aura then return nil end
-        if predicate(aura) then return aura end
-        i = i + 1
-    end
-end
-
--- Finds the "Well Fed" aura (post-eating buff). Returns the aura table so
--- callers can use its actual food-item icon instead of a generic one.
-local function FindWellFed(unit)
-    return FindAura(unit, function(a)
-        if a.spellId and foodSet[a.spellId] then return true end
-        return a.name == "Well Fed"
-    end)
-end
-
--- Returns true if the unit is currently channelling a food/drink aura.
--- The channel aura is literally named "Food" or "Drink" in English; most
--- food items cast one of a handful of well-known channel spells.
+-- The auras a unit carries while actually eating or drinking, as opposed
+-- to the Well Fed buff that follows. The channel aura is literally named
+-- "Food" or "Drink" in English.
+--
+-- Read by the batched aura scan further down, which is all that is left
+-- of the buff-detection section that used to live here: a per-buff
+-- FindAura helper each, replaced by one pass over the aura list.
 local EATING_AURA_NAMES = { Food = true, Drink = true, Refreshment = true }
-local function IsEating(unit)
-    return FindAura(unit, function(a)
-        return a.name and EATING_AURA_NAMES[a.name]
-    end) ~= nil
-end
-
--- Food column state. Returns one of:
---   { state = "wellfed", aura = <auraTable> }  — show aura.icon, steady
---   { state = "eating",  aura = nil }          — show generic food icon, pulsing
---   { state = "missing" }                      — empty square
-local function EvalFood(unit)
-    local wf = FindWellFed(unit)
-    if wf then return { state = "wellfed", aura = wf } end
-    if IsEating(unit) then return { state = "eating" } end
-    return { state = "missing" }
-end
-
-local function FindFlask(unit)
-    return FindAura(unit, function(a)
-        if a.spellId and flaskSet[a.spellId] then return true end
-        if not a.name then return false end
-        return a.name:find("^Phial of ") or a.name:find("^Flask of ")
-    end)
-end
-
-local function FindVantus(unit)
-    return FindAura(unit, function(a)
-        return a.name and a.name:find("^Vantus Rune:")
-    end)
-end
-
--- Blessing of the Bronze grants a per-class spellID; any of them counts.
-local function FindBronze(unit)
-    return FindAura(unit, function(a) return a.spellId and bronzeSet[a.spellId] end)
-end
-
 ------------------------------------------------------------
 -- Durability
 -- GetInventoryItemDurability only reports the player's own gear, so we
@@ -381,23 +320,6 @@ local WAITING_TEX  = "Interface\\RaidFrame\\ReadyCheck-Waiting"
 -- it survives unitID churn across READY_CHECK_CONFIRM ticks. Reset on each
 -- fresh READY_CHECK. Values: "ready" | "notready" | nil (pending).
 local readyStatus = {}
-
-local function GetReadyFor(unit)
-    local raw = UnitName(unit)
-    local name = raw and Ambiguate(raw, "short")
-    return name and readyStatus[name] or nil
-end
-
-local function ApplyStatusTexture(texture, unit)
-    local status = GetReadyCheckStatus(unit)
-    if status == "ready" then
-        texture:SetTexture(READY_TEX); return true
-    elseif status == "notready" then
-        texture:SetTexture(NOTREADY_TEX); return false
-    else
-        texture:SetTexture(WAITING_TEX); return nil
-    end
-end
 
 ------------------------------------------------------------
 -- Full-view row pool (status + name + icon strip)

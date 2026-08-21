@@ -233,33 +233,6 @@ local function TrackerSlider(name, key, minV, maxV, step, fmt)
         function(v) S:Set(key, v) end, fmt)
 end
 
---- Scale/opacity sliders for a frame, driving SetScale/SetAlpha directly.
-local function FrameScale(key, frame)
-    return {
-        name = "Scale", kind = Kind("Slider"), default = 100,
-        minValue = 50, maxValue = 200, valueStep = 5,
-        formatter = function(v) return ("%d%%"):format(math.floor(v)) end,
-        get = function() return (optDB(key).scale or 1) * 100 end,
-        set = function(_, value)
-            optDB(key).scale = value / 100
-            if frame then frame:SetScale(value / 100) end
-        end,
-    }
-end
-
-local function FrameAlpha(key, frame)
-    return {
-        name = "Opacity", kind = Kind("Slider"), default = 100,
-        minValue = 20, maxValue = 100, valueStep = 5,
-        formatter = function(v) return ("%d%%"):format(math.floor(v)) end,
-        get = function() return (optDB(key).alpha or 1) * 100 end,
-        set = function(_, value)
-            optDB(key).alpha = value / 100
-            if frame then frame:SetAlpha(value / 100) end
-        end,
-    }
-end
-
 --- Leading caption for a frame's dialog. These windows appear on their
 --- own schedule and cannot be opened manually, so "when does this show
 --- up" is the first thing worth saying -- and a tooltip you have to

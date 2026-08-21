@@ -91,7 +91,6 @@ function ns:ResolveCrestIDs()
         end
         if best then crest.id = best end
     end
-    ns._crestsResolved = true
 end
 
 local resolver = CreateFrame("Frame")

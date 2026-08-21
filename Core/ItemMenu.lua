@@ -216,7 +216,3 @@ function ns:ShowItemMenu(anchor, itemID, opts)
     menu:SetPoint("TOPLEFT", anchor or UIParent, "BOTTOMLEFT", 0, -2)
     menu:Show()
 end
-
-function ns:HideItemMenu()
-    menu:Hide()
-end

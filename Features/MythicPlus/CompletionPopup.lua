@@ -378,10 +378,6 @@ local function showTest()
 end
 ns.ShowCompletionPopupTest = showTest
 
-function ns.HideCompletionPopup()
-    if win then win:Hide() end
-end
-
 ------------------------------------------------------------
 -- Event plumbing
 ------------------------------------------------------------

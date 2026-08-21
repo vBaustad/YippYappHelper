@@ -178,7 +178,6 @@ local suggestContent = CreateFrame("Frame", nil, suggestScroll)
 suggestContent:SetSize(GetInfoWidth() - 42, 1)
 suggestScroll:SetScrollChild(suggestContent)
 
-ns.SuggestContent = suggestContent
 ns.SuggestEntries = {}
 
 ------------------------------------------------------------
@@ -536,30 +535,6 @@ local function HexToRGB(hex)
     return r / 255, g / 255, b / 255
 end
 
-local function CrestColor(track)
-    for _, c in ipairs(ns.CRESTS or {}) do
-        if c.track == track then return c.color end
-    end
-    return "ffbbbbbb"
-end
-
--- Advice that is decided without reference to any budget, so it sits
--- above the track sections rather than inside one.
-local function IsBudgetFree(rec)
-    return rec == ns.RECOMMEND.FREE_UPGRADE
-        or rec == ns.RECOMMEND.WASTED_CREST
-        or rec == ns.RECOMMEND.USE_LOWER_TRACK
-end
-
--- Advice that means "no crest decision to make here".
-local function IsWaiting(rec)
-    return rec == ns.RECOMMEND.WAIT_BETTER
-        or rec == ns.RECOMMEND.SAVE_FOR_DROP
-        or rec == ns.RECOMMEND.CREST_CAPPED
-        or rec == ns.RECOMMEND.CRAFT_INSTEAD
-        or rec == ns.RECOMMEND.BAD_INVESTMENT
-end
-
 function ns:RefreshSuggestions()
     for i = 1, suggestFontPoolIdx do suggestFontPool[i]:Hide() end
     suggestFontPoolIdx = 0
@@ -576,17 +551,6 @@ function ns:RefreshSuggestions()
     local recommendations = ns:GetAllRecommendations()
     local w = GetInfoWidth() - 42
     local yOffset = 0
-
-    local function Caption(text, r, g, b)
-        local fs = AcquireFontString("GameFontNormal")
-        fs:SetPoint("TOPLEFT", 0, -yOffset)
-        fs:SetWidth(w)
-        fs:SetJustifyH("LEFT")
-        fs:SetTextColor(r or 0.9, g or 0.9, b or 0.9)
-        fs:SetText(text)
-        table.insert(ns.SuggestEntries, fs)
-        yOffset = yOffset + fs:GetStringHeight() + 5
-    end
 
     --- One slot card. `dim` greys the whole row for entries the current
     --- crests do not reach, so the funded/unfunded split is visible
@@ -918,11 +882,6 @@ EnsureBuilt = function()
     BuildSlotButtons()
     if ns.RefreshCrests then ns:RefreshCrests() end
 end
-
---- For anything that wants the pieces to exist without showing the
---- window. Nothing needs it today; it is here so the next caller reaches
---- for a function rather than for the flag.
-ns.EnsureGearWindowBuilt = function() EnsureBuilt() end
 
 ------------------------------------------------------------
 -- Refresh equipped gear display

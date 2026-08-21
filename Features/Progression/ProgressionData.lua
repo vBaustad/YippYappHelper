@@ -79,14 +79,6 @@ ns.PROGRESSION.MYTHIC_PLUS_POOL = {
     { name = "Ruby Life Pools",      mapID = 2521, timer = 28 * 60 },
 }
 
---- Season 2 pool entry for an instance map ID, or nil when the player is
---- somewhere outside the pool.
-function ns.GetSeasonDungeon(mapID)
-    for _, d in ipairs(ns.PROGRESSION.MYTHIC_PLUS_POOL) do
-        if d.mapID == mapID then return d end
-    end
-end
-
 ------------------------------------------------------------
 -- Raid: The Venomous Abyss (8 bosses)
 --
