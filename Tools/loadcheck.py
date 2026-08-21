@@ -6030,6 +6030,49 @@ def main():
         print("  FAIL sub-tabs before build: %s" % subtabs)
         failures.append(("sub-tabs before build", str(subtabs)))
 
+    # Which sub-tab a page opens on is decided by list ORDER.
+    #
+    # Shell:InitialSubTab falls back to tabs[1].id when nothing is
+    # remembered, so a page's default is wherever its first tab is --
+    # there is no separate default field to set, and reordering the list
+    # for looks silently changes which view opens.
+    #
+    # Raid leads with Boss Guide because that is the half of the page
+    # that works alone; the overview needs a group before it has
+    # anything to say. A page whose own internal default disagrees with
+    # its first tab lights one and draws the other, which is the desync
+    # Shell:Mount already carries a comment about.
+    taborder = L.eval("""
+        function(ns)
+            local tabs = ns.GetRaidPageTabs and ns:GetRaidPageTabs()
+            if not (tabs and #tabs == 2) then return "no raid sub-tabs" end
+            if tabs[1].id ~= "guide" then
+                return "the raid page opens on '" .. tostring(tabs[1].id)
+                    .. "', not the boss guide"
+            end
+
+            if tabs[2].id ~= "overview" then
+                return "the second tab is '" .. tostring(tabs[2].id)
+                    .. "', so this is not the pair the check assumes"
+            end
+
+            -- And the page does not throw when handed no tab at all,
+            -- which is the path its own default answers on. Whether that
+            -- default MATCHES tabs[1] is not observable from out here --
+            -- pageTab is a file local -- so the two are kept in
+            -- agreement by being read together, not by this check.
+            ns:SetRaidPageTab(nil)
+            ns:SetRaidPageTab(tabs[1].id)
+            return "ok"
+        end
+    """)(ns)
+    if taborder == "ok":
+        print("  ok   raid sub-tabs: Boss Guide is first, and first is what "
+              "the shell opens on")
+    else:
+        print("  FAIL raid sub-tabs: %s" % taborder)
+        failures.append(("raid sub-tabs", str(taborder)))
+
 
     # The character rail: section rules, and the crest track colours.
     #

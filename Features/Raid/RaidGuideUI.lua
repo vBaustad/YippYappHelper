@@ -1179,9 +1179,17 @@ end
 -- view -- quietly overloading it would have made the two switch each
 -- other.
 ------------------------------------------------------------
+--- Boss Guide first, and first means default: Shell:InitialSubTab
+--- falls back to tabs[1].id when there is no remembered tab, so the
+--- order of this list decides both where the tabs sit and which one
+--- opens.
+---
+--- The guide is the half of this page that works alone. The overview
+--- needs a group before it has anything to say, so leading with it
+--- meant most visits opened on an empty state.
 function ns:GetRaidPageTabs()
     return {
-        { id = "overview", label = "Overview", width = 100 },
         { id = "guide",    label = "Boss Guide", width = 110 },
+        { id = "overview", label = "Overview", width = 100 },
     }
 end

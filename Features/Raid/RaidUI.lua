@@ -247,10 +247,10 @@ end
 -- the tab drawn inside it. Merging them would mean the standalone
 -- window grew a Boss Guide tab it has no room to draw.
 ------------------------------------------------------------
-local pageTab = "overview"
+local pageTab = "guide"
 
 function ns:SetRaidPageTab(id)
-    pageTab = id or "overview"
+    pageTab = id or "guide"
     if pageTab == "guide" then
         overviewContainer:Hide()
         guideContainer:Show()
@@ -591,13 +591,6 @@ local function OverviewEmptyState()
     e.body:SetText("Join a party or raid and this fills in with your roster and "
         .. "roles, the group composition, which raid buffs nobody is bringing, "
         .. "and who still has no food or flask.")
-
-    e.hint = W:Label(e, "GameFontNormalSmall", "CENTER")
-    e.hint:SetPoint("TOP", e.body, "BOTTOM", 0, -14)
-    e.hint:SetPoint("LEFT", e, "LEFT", 24, 0)
-    e.hint:SetPoint("RIGHT", e, "RIGHT", -24, 0)
-    e.hint:SetTextColor(W:Color("faint"))
-    e.hint:SetText("The Boss Guide tab works on your own.")
 
     overviewContainer._empty = e
     return e
