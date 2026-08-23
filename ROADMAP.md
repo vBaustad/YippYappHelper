@@ -443,11 +443,40 @@ that never pays Champion. The advice is never "run M0s for Champion" — it is
   hovers sees only the verdict. The track's finish line — "3 pieces and you
   are done with Champion" — is the strongest sentence the addon produces and
   it is hidden behind a mouse.
-- **The whole-set view is only half wired.** `ns:GetGearCensus`,
-  `ns:GetTrackPolicy` and `ns:GetTrackPolicyLine` exist and the hover prints
-  the policy line, but nothing above the list says it. A track budget is a
-  fact about sixteen slots and one wallet, and it belongs at the top of the
-  page, not inside a tooltip on one row.
+- ~~**The whole-set view is only half wired.**~~ Built, and it was worse than
+  half: `ns:GetTrackPolicyLine` had no caller at all — not the hover either,
+  whatever this said. `ns:GetTrackOutlook` now picks the three highest tracks
+  with something left to buy and both renderers of the improvements list draw
+  them above it. The budget it reads is crests held *plus what the season cap
+  still allows*, which is the half a balance cannot show, and the two are
+  stated apart: "you hold 40 and the cap allows 200 more" rather than one
+  summed figure described as income. The same `funded` flag now splits the
+  per-slot advice into farmable this week, waiting on a reset, and — only on
+  an outgrown track — wants a drop.
+  - Still measured against *this week's* cap, which rises every reset. So a
+    slot outside it says "waits on a reset", never "out of reach".
+    `GetTrackCompletion` is the one that counts the weeks; the outlook does
+    not, and the two have not been joined up.
+- ~~**Demand is counted over worn pieces, not over slots.**~~ Built:
+  `ns:GetSeasonDemand` prices a crest tier across all sixteen slots off the
+  watermark — ranks above a slot's mark, whatever is in it now and whether or
+  not anything is. A slot wearing a higher track, or marked past this track's
+  cap, drops off the bill entirely, which is why collecting Myth pieces shrinks
+  the Hero one. `abundant` (budget covers the whole bill) stands the reserve
+  and the hold-for-a-drop bet down.
+  - An upper bound in three places — every unfilled slot assumed to take a
+    piece at the *bottom* of the track, every slot assumed to get a piece at
+    all, an unread mark charging for ranks that may already be paid — and
+    deliberately not one in a fourth: a slot holding a lower-track piece is
+    priced from that track's CAP, because the piece is going to be maxed
+    first and doing so lifts the slot's mark. That is what makes the Champion
+    slot in "500 hero + 100 champion + 80 hero" cost four Hero ranks rather
+    than five. A player who ignores the cheap upgrade is short by the overlap
+    — one rank, only where two bands meet.
+  - What it still cannot do is weight a slot by how likely its drop is. Six
+    bare slots on a character running +10s are not six equal bets, and the bill
+    treats them as such. Wants the per-slot drop-likelihood table that is
+    already on this list.
 - **No per-slot drop LEVEL.** The band is one pair of numbers for the whole
   character, but raid item level is per boss: the same slot comes off an early
   boss low and a late one high, and which bosses a player kills decides whether

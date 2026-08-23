@@ -96,17 +96,9 @@ local ACCENT_HEX = "ff73ff8c"
 local DOLL = ns.DOLL_LAYOUT
 
 -- Which inventory slots a guide's slot wording can land in, in order.
--- The guides say "Ring" twice rather than "Ring 1" and "Ring 2", so the
--- first unclaimed slot wins and the second Ring falls through to 12.
-local SLOT_INV = {
-    ["Head"] = { 1 }, ["Neck"] = { 2 }, ["Shoulders"] = { 3 },
-    ["Back"] = { 15 }, ["Chest"] = { 5 }, ["Wrist"] = { 9 },
-    ["Hands"] = { 10 }, ["Waist"] = { 6 }, ["Legs"] = { 7 },
-    ["Feet"] = { 8 },
-    ["Ring"] = { 11, 12 }, ["Ring 1"] = { 11 }, ["Ring 2"] = { 12 },
-    ["Trinket"] = { 13, 14 }, ["Trinket 1"] = { 13 }, ["Trinket 2"] = { 14 },
-    ["Weapon"] = { 16, 17 }, ["Main Hand"] = { 16 }, ["Off Hand"] = { 17 },
-}
+-- Shared with the crest advisor, which reads the same rows to find the
+-- slots a craft is meant for; see ns.GUIDE_SLOT_INV in Core/Data.lua.
+local SLOT_INV = ns.GUIDE_SLOT_INV
 
 ------------------------------------------------------------
 -- Which spec are we looking at
@@ -608,15 +600,9 @@ local function itemLink(entry)
 end
 
 --- Whether the guide says you make this rather than kill something for
---- it.
----
---- The guide has no flag for it; what it has is a source string, and
---- depending on which page a spec was scraped from that reads
---- "Crafting", "Crafted", "Crafting/Misc", "Crafting Blacksmithing" or
---- "Jewelcrafting". All five contain "craft", and all five mean the same
---- thing to the person reading the doll.
+--- it. Shared with the crest advisor -- see ns:IsCraftedGuideEntry.
 local function isCrafted(entry)
-    return (entry and entry.source or ""):lower():find("craft", 1, true) ~= nil
+    return ns:IsCraftedGuideEntry(entry)
 end
 
 --- The item level this row tops out at, and its track rank -- "334",

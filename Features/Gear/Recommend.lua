@@ -383,10 +383,488 @@ local function MarkRebate(track, bandLow, bandHigh)
 end
 
 local planCache = {}
+local seasonCache = {}
+-- Filled by ns:GetCraftPlan below, declared up here so
+-- InvalidateCrestPlans can clear it with the rest.
+local craftCache = nil
+
+-- A slot's mark does not depend on which crest is asking, and reading it
+-- does: ns:GetFreeUpgradeIlvl falls through to a bag scan per slot. Five
+-- tracks each walking sixteen slots is eighty of those for one panel
+-- draw, of which seventy-five are the same answer again. Cleared with
+-- the plans, which the suggestions panel does at the top of every
+-- refresh -- so this is a per-render cache, not a session-long one that
+-- would outlive the bag it read.
+local markCache = {}
 
 --- Drop memoised plans. Cheap, and a stale plan is worse than a slow one.
 function ns:InvalidateCrestPlans()
     wipe(planCache)
+    wipe(seasonCache)
+    wipe(markCache)
+    -- The craft plan reads the bags for sparks and the doll for what is
+    -- already made, so it goes stale on exactly the same events.
+    craftCache = nil
+end
+
+--- A slot's mark, and whether the client actually answered for it.
+---
+--- The second return matters to anything quoting a price: with no answer
+--- the mark falls back to what the bags can prove, which is a lower
+--- bound, and a lower bound used as the line charges for ranks that may
+--- already be paid for. See ns:GetMarkRead / ns:GetFreeUpgradeIlvl.
+local function SlotMark(slotID)
+    local hit = markCache[slotID]
+    if hit then return hit[1], hit[2] end
+    local mark = ns.GetFreeUpgradeIlvl and ns:GetFreeUpgradeIlvl(slotID) or 0
+    local read = (ns.GetMarkRead and ns:GetMarkRead(slotID) or 0) > 0
+    markCache[slotID] = { mark, read }
+    return mark, read
+end
+
+------------------------------------------------------------
+-- The crafts the list wants, and what they cost the wallet.
+--
+-- Everything else in this file prices ONE route to item level: pay a
+-- crest, move a rank. The best-in-slot list has always known about a
+-- second one -- several specs are told to make a piece rather than kill
+-- something for it -- and the crest advisor had never heard of it, so
+-- it happily talked a player into spending the exact 80 Hero the craft
+-- they are saving for needs.
+--
+-- What a craft is, in the only terms this file cares about:
+--
+--   * A Spark of Tides, which the season hands out a fixed number of.
+--     That is the real limit -- crests refill, sparks do not -- so
+--     nothing here reserves crests for a craft the player cannot
+--     actually start today.
+--   * ns.CRAFT_CREST_COST of ONE tier's crests, all at once. Not a
+--     ladder: the 80 buys the whole piece, which is why it competes
+--     with a RUN of upgrades rather than with a single rank.
+--   * A landing item level from ns.CRAFTED_RANGES, decided by the
+--     crafter's quality rather than by anything the player holds. The
+--     advice quotes the top of the range and says "at max quality",
+--     because a number without that caveat is a promise about somebody
+--     else's profession skill.
+--
+-- Deliberately NOT a claim about which profession, which recipe, or
+-- what the reagents cost in gold. The addon can see the guide's slot,
+-- the bags' sparks and the wallet; everything past that belongs to the
+-- crafting UI.
+------------------------------------------------------------
+
+--- Sparks in the bags: how many crafts the player could start tonight.
+---
+--- The bags, not Tidal Spark Dust. The dust counts sparks OBTAINED and
+--- never goes down, which is exactly what the weekly checklist wants
+--- and exactly the wrong number here -- a player who already spent all
+--- four would be told to hold crests for a craft they cannot make.
+local function SparksInBags()
+    if C_Item and C_Item.GetItemCount then
+        local ok, n = pcall(C_Item.GetItemCount, ns.SPARK_ITEM_ID)
+        if ok and n then return n end
+    end
+    if GetItemCount then
+        local ok, n = pcall(GetItemCount, ns.SPARK_ITEM_ID)
+        if ok and n then return n end
+    end
+    return 0
+end
+
+--- The highest track whose max-quality craft would beat `ilvl`, subject
+--- to a budget test. Returns nil when no tier clears both.
+local function BestCraftTrack(ilvl, affordable)
+    for i = #ns.TRACK_ORDER, 1, -1 do
+        local track = ns.TRACK_ORDER[i]
+        local range = ns.CRAFTED_RANGES[track]
+        if range and range.max > ilvl and affordable(track) then
+            return track
+        end
+    end
+    return nil
+end
+
+--- The addon's own name for an inventory slot.
+local function SlotName(slotID)
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        if si.slot == slotID then return si.name end
+    end
+    return nil
+end
+
+--- Every slot the player's own best-in-slot list says to CRAFT, with
+--- what a craft would land there and whether it has already happened.
+---
+--- Memoised with the crest plans, because it walks the guide, sixteen
+--- slots and the bags, and every row on the panel asks for it.
+function ns:GetCraftPlan()
+    if craftCache then return craftCache end
+
+    local out = {
+        sparks  = SparksInBags(),
+        wanted  = {},   -- guide says craft, nothing crafted there yet
+        done    = {},   -- guide says craft, and you made it
+        byTrack = {},   -- crestTrack -> the one craft that tier pays for
+    }
+    craftCache = out
+
+    local key = ns.PlayerSpecKey and ns:PlayerSpecKey()
+    local guide = key and ns.ClassGuideData and ns.ClassGuideData[key]
+    if not (guide and guide.bis) then return out end
+
+    -- Placed the way the Best in Slot page places them, so "the second
+    -- Ring" means the same slot on both pages. A guide that lists more
+    -- pieces than the character has slots simply runs out of room, and
+    -- the overflow is not a craft anyone can act on.
+    local taken = {}
+    for _, entry in ipairs(guide.bis) do
+        local placed = nil
+        for _, invSlot in ipairs(ns.GUIDE_SLOT_INV[entry.slot] or {}) do
+            if not taken[invSlot] then
+                taken[invSlot], placed = entry, invSlot
+                break
+            end
+        end
+
+        if placed and ns:IsCraftedGuideEntry(entry) then
+            local info = ns:GetSlotInfo(placed)
+            local worn = (info and info.ilvl) or 0
+            local row = {
+                slotID   = placed,
+                slotName = SlotName(placed) or entry.slot,
+                itemID   = entry.itemID,
+                wornIlvl = worn,
+                crafted  = (info and info.crafted) or false,
+            }
+
+            if row.crafted then
+                out.done[#out.done + 1] = row
+            else
+                -- Three answers to "which tier", and they are three
+                -- different pieces of advice. `now` is a craft to go and
+                -- do; `soon` is what this season's cap still allows,
+                -- which is the one worth holding crests toward; `best`
+                -- is the ceiling, and is only ever quoted as a target.
+                row.now = BestCraftTrack(worn, function(t)
+                    return ns:GetCrestCountByTrack(t) >= ns.CRAFT_CREST_COST
+                end)
+                row.soon = BestCraftTrack(worn, function(t)
+                    return ns:GetCrestCountByTrack(t) + ns:GetEarnableCrests(t)
+                        >= ns.CRAFT_CREST_COST
+                end)
+                row.best = BestCraftTrack(worn, function() return true end)
+                -- `soon` first, deliberately. Picking the tier the
+                -- wallet can already pay for spends the season's
+                -- scarcest thing -- the spark, which does not refill --
+                -- on whatever happened to be affordable tonight. The
+                -- tier worth aiming at is the best one this season's cap
+                -- can still reach; whether the crests are in hand yet is
+                -- a different question, and `ready` answers it.
+                row.track = row.soon or row.now or row.best
+                local range = row.track and ns.CRAFTED_RANGES[row.track]
+                row.ilvl = range and range.max or 0
+                out.wanted[#out.wanted + 1] = row
+            end
+        end
+    end
+
+    ------------------------------------------------------------
+    -- Which wallet each craft is a claim on.
+    --
+    -- One per tier, and only the best of them: two crafts on the same
+    -- track is 160 crests held back, and a reserve that size stops
+    -- being advice and starts being a wallet the player is not allowed
+    -- to spend. ns.CRAFT_RESERVE_MAX caps the total the same way.
+    --
+    -- Sparks gate the whole thing. Holding crests for a craft with no
+    -- spark to start it is the paralysis this file spends the rest of
+    -- its length avoiding.
+    ------------------------------------------------------------
+    table.sort(out.wanted, function(a, b)
+        local pa = ns.SLOT_PRIORITY[a.slotID] or 2
+        local pb = ns.SLOT_PRIORITY[b.slotID] or 2
+        if pa ~= pb then return pa > pb end
+        -- The emptier slot first: a craft into a bare slot is worth more
+        -- than one replacing something already decent.
+        if a.wornIlvl ~= b.wornIlvl then return a.wornIlvl < b.wornIlvl end
+        return a.slotID < b.slotID
+    end)
+
+    local budget = math.min(out.sparks, ns.CRAFT_RESERVE_MAX or 2)
+    for _, row in ipairs(out.wanted) do
+        if budget <= 0 then break end
+        if row.track and not out.byTrack[row.track] then
+            out.byTrack[row.track] = row
+            budget = budget - 1
+        end
+    end
+
+    return out
+end
+
+--- What a track has to keep back for a craft, and which craft.
+---
+--- nil unless the player is holding a spark: see ns:GetCraftPlan.
+function ns:GetCraftReserve(crestTrack)
+    if not crestTrack then return nil end
+    local row = ns:GetCraftPlan().byTrack[crestTrack]
+    if not row then return nil end
+    return {
+        amount   = ns.CRAFT_CREST_COST,
+        slotID   = row.slotID,
+        slotName = row.slotName,
+        ilvl     = row.ilvl,
+        wornIlvl = row.wornIlvl,
+        held     = ns:GetCrestCountByTrack(crestTrack),
+        -- Whether the 80 is already in the wallet, or something the cap
+        -- still allows. The two are different sentences.
+        ready    = row.now == crestTrack,
+    }
+end
+
+--- The "make this one instead" verdict for a slot, or nil.
+---
+--- `reachIlvl` is the highest item level crests could take whatever is
+--- in the slot NOW -- its track cap, or 0 for a bare or off-season slot.
+--- The craft has to beat that or it is not advice, it is a preference.
+---
+--- Requires a spark in the bags. Without one the craft is a plan rather
+--- than a decision, and a row saying "make this instead" above a slot
+--- the player cannot make anything for is worse than silence: they stop
+--- spending, and nothing replaces the spend.
+function ns:GetCraftAdvice(slotID, reachIlvl)
+    local plan = ns:GetCraftPlan()
+    if plan.sparks < 1 then return nil end
+
+    local row
+    for _, r in ipairs(plan.wanted) do
+        if r.slotID == slotID then row = r break end
+    end
+    if not (row and row.track and row.ilvl > 0) then return nil end
+    if row.ilvl <= (reachIlvl or 0) then return nil end
+
+    local track = row.track
+    local held  = ns:GetCrestCountByTrack(track)
+    local cost  = ns.CRAFT_CREST_COST
+    local short = math.max(cost - held, 0)
+    local range = ns.CRAFTED_RANGES[track]
+
+    ------------------------------------------------------------
+    -- The line, in the order the decision is made: what it costs, what
+    -- it makes, and why it beats the alternative sitting in the slot.
+    ------------------------------------------------------------
+    local reason
+    if short == 0 then
+        reason = cost .. " " .. track .. " crafts the piece your list wants here — "
+            .. row.ilvl .. " at max quality"
+    else
+        reason = "Hold " .. short .. " more " .. track .. " for the craft your "
+            .. "list wants here — " .. cost .. " makes it, " .. row.ilvl
+            .. " at max quality"
+    end
+    if (reachIlvl or 0) > 0 then
+        reason = reason .. ", past the " .. reachIlvl .. " crests reach on what is in the slot"
+    end
+    reason = reason .. "."
+
+    local detail = {
+        "Your best-in-slot list names a crafted piece for this slot, so "
+            .. "every crest spent on what is in it now buys item level the "
+            .. "craft throws away.",
+    }
+
+    if range and range.min < row.ilvl then
+        detail[#detail + 1] = "A max-quality craft lands at " .. row.ilvl ..
+            "; a lower-quality one lands as low as " .. range.min ..
+            ". That is the crafter's skill, not your wallet — ask for the "
+            .. "rank before you hand over the spark."
+    end
+
+    detail[#detail + 1] = "Crafted gear takes no crest upgrades afterwards, "
+        .. "so the " .. cost .. " is the whole bill for the slot rather "
+        .. "than the first rung of a ladder."
+
+    if short > 0 then
+        local earnable = ns:GetEarnableCrests(track)
+        if earnable >= short then
+            detail[#detail + 1] = "You hold " .. held .. ". The other " ..
+                short .. " is still inside this season's cap, so it is "
+                .. "content to run rather than a wait."
+        else
+            detail[#detail + 1] = "You hold " .. held .. ", and the cap "
+                .. "allows " .. earnable .. " more this season — " ..
+                math.max(short - earnable, 0) .. " of it waits on a reset."
+        end
+    end
+
+    local spares = plan.sparks - 1
+    detail[#detail + 1] = plan.sparks .. (plan.sparks == 1
+        and " Spark of Tides in the bags, and this is what it is for."
+        or (" Sparks of Tides in the bags, so this one costs you nothing you "
+            .. "were saving — " .. spares .. " left after it."))
+
+    return reason, detail
+end
+
+------------------------------------------------------------
+-- What a crest tier will cost this CHARACTER, not this wardrobe.
+--
+-- Every demand figure in this file counts the pieces a player is wearing
+-- on the track RIGHT NOW. That is the wrong set, and it is wrong in the
+-- direction that makes the addon hoard.
+--
+-- A Champion crest is not spent on "my four Champion pieces". Over a
+-- season it is spent on every slot that will ever hold a Champion item,
+-- which on a character with two Veteran pieces and an empty back is
+-- those slots too -- their Champion drop has simply not arrived yet.
+-- Counting only what is worn today made the total look small, the wallet
+-- look scarce, and every rule downstream reach for "hold".
+--
+-- Counted forward instead, and the number a player actually needs falls
+-- out of the watermark. A slot's mark is the highest item level it has
+-- held, ranks at or under it are free, so the cost of taking a slot to a
+-- track's cap is the ranks ABOVE its mark -- whatever is in it now, and
+-- whether or not anything is. Which is why a Myth piece subtracts a
+-- whole slot from the Hero bill: the mark it sets is past the Hero cap,
+-- so no Hero crest will ever be spent there again. Ten Myth pieces leave
+-- six slots at five ranks each, and 600 Hero crests covers the lot.
+--
+-- The point of the number is the comparison. If everything this tier
+-- could ever want is already inside what the player can still get, the
+-- tier is not scarce, and every rule that rations it -- the reserve, the
+-- hold-for-a-drop bet, "these slots first" -- is solving a problem that
+-- does not exist. Spend it as it arrives.
+--
+-- Deliberately an UPPER bound, in three places at once: it assumes every
+-- unfilled slot takes a piece at the bottom of the track, it assumes
+-- every one of them gets a piece at all, and where the client has not
+-- answered for a slot's mark it charges for ranks that may well be paid
+-- for already. Over-stating demand can only ever withhold the
+-- spend-freely verdict, never hand it out wrongly, which is the only
+-- direction an error here is allowed to run.
+------------------------------------------------------------
+function ns:GetSeasonDemand(crestTrack)
+    if not crestTrack then return nil end
+    if seasonCache[crestTrack] then return seasonCache[crestTrack] end
+
+    local levels = ns.GEAR_TRACKS[crestTrack]
+    if not levels then return nil end
+
+    local capIlvl = levels[#levels]
+    local cost    = ns:GetCrestCost(crestTrack)
+    local myRank  = ns.TRACK_RANK[crestTrack] or 0
+
+    local out = {
+        track   = crestTrack,
+        cost    = cost,
+        capIlvl = capIlvl,
+        slots   = 0,   -- every slot on the doll
+        settled = 0,   -- ...that will never want this crest again
+        wanting = 0,   -- ...that still could, worn or not
+        demand  = 0,   -- to take every one of those to the cap
+        unread  = 0,   -- marks the client has not answered for
+        pieces  = {},
+    }
+
+    for _, si in ipairs(ns.SLOT_IDS or {}) do
+        out.slots = out.slots + 1
+
+        local info     = ns:GetSlotInfo(si.slot)
+        local curIlvl  = info and info.ilvl or 0
+        local curTrack = info and info.track
+        local wornRank = curTrack and ns.TRACK_RANK[curTrack] or 0
+
+        -- Past the cap by any route, or wearing something from a higher
+        -- track. Either way this crest has nothing left to buy here --
+        -- nobody puts a Hero piece into a slot holding a Myth one.
+        if curIlvl >= capIlvl or wornRank > myRank then
+            out.settled = out.settled + 1
+        else
+            local mark, read = SlotMark(si.slot)
+            if not read then out.unread = out.unread + 1 end
+
+            -- The mark this slot will have, not the one it has.
+            --
+            -- Read literally, a slot wearing a Champion 1/6 is on the
+            -- Hero bill for five ranks. But the piece in it is going to
+            -- be taken to the Champion cap first -- that is what the
+            -- rest of the addon advises, and Champion is the cheap
+            -- crest -- which lifts the slot's mark to 308. A Hero drop
+            -- landing there then costs four ranks, not five.
+            --
+            -- Reported as exactly that arithmetic: ten Myth, five Hero
+            -- and one Champion, all at 1/6, is "500 hero + 100 champion
+            -- + 80 hero". The 80 is this. Pricing it at 100 had the
+            -- addon quietly disagreeing with the player's own maths
+            -- about an upgrade it had already told them to buy.
+            --
+            -- The one place this stops being a pure upper bound: it
+            -- assumes the lower piece does get maxed. It is the cheapest
+            -- advice on the page and the tier below is almost always the
+            -- looser one, but a player who ignores it is short by the
+            -- overlap -- one rank, on the tracks where the bands meet.
+            if curTrack and curTrack ~= crestTrack then
+                local ownCap = ns:GetMaxIlvlForTrack(curTrack)
+                if ownCap > mark then mark = ownCap end
+            end
+
+            -- Where the climb starts. A piece already on this track
+            -- starts from its own rank; anything else -- a lower track,
+            -- an off-season piece, a bare slot -- is assumed to take a
+            -- drop at the bottom, which is the worst it can be.
+            local from = (curTrack == crestTrack) and (info.rank or 1) or 1
+
+            local ranks, free = 0, 0
+            for r = from + 1, #levels do
+                if levels[r] > mark then
+                    ranks = ranks + 1
+                else
+                    free = free + 1
+                end
+            end
+
+            if ranks > 0 then
+                out.wanting = out.wanting + 1
+                out.demand  = out.demand + ranks * cost
+                out.pieces[#out.pieces + 1] = {
+                    slotID   = si.slot,
+                    slotName = si.name,
+                    worn     = curTrack == crestTrack,
+                    -- A slot whose drop has not landed yet. The bill is
+                    -- real; the piece it is for is hypothetical, and any
+                    -- sentence quoting this has to be able to say so.
+                    awaited  = curTrack ~= crestTrack,
+                    ranks    = ranks,
+                    free     = free,
+                    cost     = ranks * cost,
+                    mark     = mark,
+                }
+            else
+                -- Every rank this track has is already under the slot's
+                -- mark: the drop lands and climbs to the cap for free.
+                out.settled = out.settled + 1
+            end
+        end
+    end
+
+    out.held     = ns:GetCrestCountByTrack(crestTrack)
+    out.earnable = ns:GetEarnableCrests(crestTrack)
+    out.budget   = out.held + out.earnable
+    out.short    = math.max(out.demand - out.budget, 0)
+    out.surplus  = math.max(out.budget - out.demand, 0)
+    -- The verdict the whole function exists for. Nothing to ration:
+    -- everything this tier could ever want is inside what is already
+    -- gettable, so there is no ordering decision left to make.
+    out.abundant = out.demand > 0 and out.budget >= out.demand
+    -- Cheapest first, so a caller naming names starts where the crests
+    -- go furthest.
+    table.sort(out.pieces, function(a, b)
+        if a.cost ~= b.cost then return a.cost < b.cost end
+        return a.slotID < b.slotID
+    end)
+
+    seasonCache[crestTrack] = out
+    return out
 end
 
 do
@@ -548,8 +1026,18 @@ function ns:GetCrestPlan(crestTrack)
     -- with nowhere else to go. On the panel that prompted this it held
     -- back exactly the 40 Champion that would have finished a second
     -- piece to its track cap.
+    --
+    -- And none when the tier is not scarce in the first place. The
+    -- reserve rations a stock; a stock big enough to cover every slot
+    -- this crest could ever be spent on is not being rationed, it is
+    -- being sat on. See ns:GetSeasonDemand.
+    local season = ns.GetSeasonDemand and ns:GetSeasonDemand(crestTrack)
+    plan.abundant = (season and season.abundant) or false
+    plan.seasonDemand = season and season.demand or 0
+
     local reserve = 0
-    if plan.seasonCapped and uncapped <= 0 and cost > 0 and not outgrown then
+    if plan.seasonCapped and uncapped <= 0 and cost > 0
+        and not outgrown and not plan.abundant then
         local atRisk = 0
         for _, c in ipairs(candidates) do
             if c.risk == "high" then atRisk = atRisk + 1 end
@@ -562,6 +1050,42 @@ function ns:GetCrestPlan(crestTrack)
             reserve = math.max(held - cost, 0)
         end
     end
+    ------------------------------------------------------------
+    -- And the crests a craft has already spoken for.
+    --
+    -- A separate reserve from the one above, because it protects
+    -- something else. That one keeps a rank back for a drop that has
+    -- not landed yet; this one keeps 80 back for a piece the player's
+    -- own best-in-slot list told them to MAKE -- and a craft, unlike a
+    -- drop, cannot be brought forward by getting lucky. Spend the 80 on
+    -- a rank tonight and the spark sits in the bags until the cap moves.
+    --
+    -- The same three exemptions as above, for the same reasons: no
+    -- reserve while the tier still has income to spend twice, none on a
+    -- track the content has outgrown, and none on a tier with enough for
+    -- everything anyway. See ns:GetCraftReserve for the fourth and
+    -- strongest one -- no spark, no reserve.
+    --
+    -- NOT capped at "leave one rank buyable" the way the drop reserve
+    -- is. That guard exists so a reserve cannot paralyse a wallet; here
+    -- freezing the wallet is the entire advice, and a craft half paid
+    -- for buys nothing at all.
+    --
+    -- `craft.ready` is what makes this safe on a tier that still earns.
+    -- A wallet already holding the 80 is one misclick from spending it,
+    -- and that is the mistake worth naming; a wallet holding 20 toward
+    -- an 80 is not being tempted by anything, so it only gets frozen
+    -- once the season cap says the other 60 are not coming this week.
+    local craft = ns.GetCraftReserve and ns:GetCraftReserve(crestTrack)
+    plan.craftReserve = 0
+    if craft and not outgrown and not plan.abundant
+        and (craft.ready or (plan.seasonCapped and uncapped <= 0)) then
+        plan.craftReserve = math.min(craft.amount, held)
+        reserve = math.min(reserve + plan.craftReserve, held)
+        plan.craftSlot = craft.slotID
+        plan.craftSlotName = craft.slotName
+    end
+
     plan.reserve   = reserve
     plan.spendable = math.max(held - reserve, 0)
     plan.ceiling   = ceiling
@@ -842,6 +1366,12 @@ end
 --- a prerequisite the very slot the panel had just said not to spend on.
 function ns:IsHeldForDrops(plan, slotID)
     if not plan or not plan.outgrown then return false end
+    -- The bet this rule makes is a scarcity bet: the same crests can
+    -- finish one piece now or whichever piece the next drop lands on, so
+    -- hold and let the drop choose. With enough crests for every slot on
+    -- the track there is nothing to choose between -- both happen -- and
+    -- holding is just an item level not being worn.
+    if plan.abundant then return false end
     if (plan.markRanks or 0) <= 0 then return false end
     local mine = plan.slots and plan.slots[slotID]
     if not mine then return false end
@@ -953,9 +1483,20 @@ end
 ------------------------------------------------------------
 function ns:GetTrackPolicy(crestTrack)
     if not crestTrack then return nil end
+    local season = ns.GetSeasonDemand and ns:GetSeasonDemand(crestTrack)
     local census = ns:GetGearCensus()
     local t = census.tracks[crestTrack]
-    if not t or t.count == 0 then return nil end
+    if not t or t.count == 0 then
+        -- Wearing nothing on this track used to end the answer here, and
+        -- that is the case the whole season-demand idea is about: a
+        -- character with 600 Hero crests and no Hero piece yet has the
+        -- most useful thing in the addon to be told, which is that the
+        -- crests are already sorted and only the drops are missing. The
+        -- old code called that "no track" and said nothing.
+        if not (season and season.wanting > 0) then return nil end
+        t = { track = crestTrack, pieces = {}, count = 0,
+              ranksLeft = 0, demand = 0 }
+    end
 
     local plan   = ns:GetCrestPlan(crestTrack)
     local held   = ns:GetCrestCountByTrack(crestTrack)
@@ -991,9 +1532,28 @@ function ns:GetTrackPolicy(crestTrack)
         demand      = t.demand,
         held        = held,
         budget      = budget,
+        -- Held and earnable kept apart, not just summed.
+        --
+        -- `budget` is the two added together, and every sentence built
+        -- on it read as though the whole figure were future income --
+        -- "480 to finish them all and 520 coming" describes crests
+        -- mostly already in the wallet as though none of them were
+        -- there. The player is deciding between spending and farming,
+        -- and that decision needs the two halves named separately.
+        earnable    = math.max(budget - held, 0),
+        -- The whole-character bill, which is a different and much larger
+        -- number than `demand` above: that one prices the pieces being
+        -- worn on this track today, this one prices every slot the crest
+        -- could ever be spent on. See ns:GetSeasonDemand.
+        season      = season,
         outgrown    = ns:IsCrestOutgrown(crestTrack),
         canFinish   = canFinish,
         finishCost  = spend,
+        -- What the shallowest unfinished piece costs. `order` is sorted
+        -- cheapest first, so this is the lowest price at which anything
+        -- at all on this track can be carried home -- the number that
+        -- decides whether farming is worth starting.
+        cheapestCost = order[1] and (order[1].left * cost) or 0,
         -- The deepest piece the wallet can still afford to carry home,
         -- which is the threshold a player can actually apply to a drop:
         -- "anything at 4/6 or better is worth finishing".
@@ -1002,10 +1562,34 @@ function ns:GetTrackPolicy(crestTrack)
         untracked   = #census.untracked,
     }
 
-    if #order == 0 then
+    ------------------------------------------------------------
+    -- "Can I max this track" has two yeses and they are not the same
+    -- answer.
+    --
+    -- One is "the crests are in your bags, go and click" and the other
+    -- is "the season cap still allows enough, go and run keys". A single
+    -- max_all verdict collapsed them, so a player holding a third of
+    -- what the track wants was told to max everything on it -- true
+    -- eventually, useless tonight, and indistinguishable from the case
+    -- where it was true right now.
+    ------------------------------------------------------------
+    -- Nothing to ration beats every other verdict, because the others
+    -- are all answers to "which of these can I afford" -- a question
+    -- that stops existing once the answer is all of them, including the
+    -- slots whose pieces have not dropped yet.
+    if policy.season and policy.season.abundant then
+        policy.verdict = "abundant"
+    elseif t.count == 0 then
+        -- Slots want this crest, but no piece of the track has landed in
+        -- one yet. Not "done" -- there is nothing to be done with -- and
+        -- not a shortfall either until there is something to spend on.
+        policy.verdict = "awaiting"
+    elseif #order == 0 then
         policy.verdict = "done"
+    elseif held >= t.demand then
+        policy.verdict = "max_now"
     elseif budget >= t.demand then
-        policy.verdict = "max_all"
+        policy.verdict = "max_farm"
     elseif #canFinish > 0 then
         policy.verdict = "finish_close"
     else
@@ -1123,25 +1707,117 @@ function ns:GetTrackCompletion(crestTrack)
     return out
 end
 
---- One line a player can act on, for a whole track.
+--- One line a player can act on, for a whole track, plus a second line
+--- when something has already claimed part of the wallet.
+---
+--- Written WITHOUT the track's name in front of it, because the only
+--- thing that draws it is the crest tile's own tooltip and that tooltip
+--- is already headed by the currency. It used to lead with "Champion: "
+--- for a strip of lines above the improvements list, and the player
+--- read a paragraph about wallets before reaching the slots it was
+--- about. Per-slot advice belongs on the per-slot rows; a fact about a
+--- whole wallet belongs on the wallet.
 function ns:GetTrackPolicyLine(crestTrack)
     local p = ns:GetTrackPolicy(crestTrack)
     if not p then return nil end
 
     local pieces = p.count .. (p.count == 1 and " piece" or " pieces")
 
-    if p.verdict == "done" then
-        return crestTrack .. ": " .. pieces .. ", all at the cap."
+    -- What a craft has already taken off the top. Said here rather than
+    -- folded into the sentences below because it is true of every one of
+    -- them and would have to be written eight times.
+    --
+    -- Gated on the PLAN, not on the craft alone. A wanted craft whose
+    -- tier is outgrown or awash in crests is exempt from the reserve --
+    -- and a tile promising that 80 are spoken for, over rows that go on
+    -- spending them, is the two halves of the addon contradicting each
+    -- other about the same wallet.
+    local claim = nil
+    local plan = ns:GetCrestPlan(crestTrack)
+    local craft = (plan and (plan.craftReserve or 0) > 0)
+        and ns:GetCraftReserve(crestTrack) or nil
+    if craft then
+        claim = craft.amount .. " of them are spoken for by the " ..
+            craft.slotName .. " your list says to craft — " .. craft.ilvl ..
+            " at max quality" ..
+            (craft.ready and ", and you are holding the crests for it."
+                or ", once the crests are there.")
     end
-    if p.verdict == "max_all" then
-        return crestTrack .. ": " .. pieces .. ", " .. p.demand ..
-            " to finish them all and " .. p.budget ..
-            " coming. Max everything on this track."
+
+    if p.verdict == "done" then
+        return pieces .. ", all at the cap.", claim
+    end
+    if p.verdict == "awaiting" then
+        local sd = p.season
+        -- Nothing worn on this track, so there is no "pieces" count to
+        -- lead with and the sentence has to be about slots and drops.
+        -- The bill is still worth stating: it is what the player is
+        -- saving toward, and on most characters it is smaller than the
+        -- hoarding instinct assumes.
+        local slots = sd.wanting .. (sd.wanting == 1 and " slot" or " slots")
+        return "Nothing on this track yet. " .. slots ..
+            " could take one, " .. sd.demand .. " to carry them all to " ..
+            sd.capIlvl .. " — you hold " .. sd.held ..
+            (sd.short > 0
+                and (", " .. sd.short .. " short of that.")
+                or ", and the drops are the only thing missing."), claim
+    end
+    if p.verdict == "abundant" then
+        local sd = p.season
+        -- Led with the verdict, not the arithmetic.
+        --
+        -- The numbers are the evidence and they were the whole sentence:
+        -- a player reading "580 to take every one of them to 321" has to
+        -- do the comparison themselves to find out it is good news. What
+        -- they asked for is the conclusion first -- there is enough, stop
+        -- worrying about running out -- with the figures behind it.
+        --
+        -- Held and available are different reassurances and the sentence
+        -- says which one it means. "Enough in hand" is spend it tonight;
+        -- "enough available" is you will not be short by the time the
+        -- drops land, which on a wallet holding 345 of a 580 bill is the
+        -- claim being made and it would be a lie stated as the other.
+        local slots = sd.wanting .. (sd.wanting == 1 and " slot" or " slots")
+        local inHand = sd.held >= sd.demand
+        if inHand then
+            return "Enough in hand to max all " .. slots ..
+                " without worrying about running short — " .. sd.demand ..
+                " needed, " .. sd.held .. " held.", claim
+        end
+        return "Enough available to max all " .. slots ..
+            " without worrying about running short — " .. sd.demand ..
+            " needed, " .. sd.budget .. " available (" .. sd.held ..
+            " held, " .. sd.earnable .. " still under the cap).", claim
+    end
+    if p.verdict == "max_now" then
+        return pieces .. ", " .. p.demand ..
+            " to finish them all and you hold " .. p.held ..
+            ". Max everything on this track.", claim
+    end
+    if p.verdict == "max_farm" then
+        -- The earnable half is stated as what the cap ALLOWS, not as
+        -- crests "coming". Nothing arrives on its own: that number is
+        -- content the player has not run yet, and it is only this
+        -- week's allowance -- the cap rises again at reset.
+        return pieces .. ", " .. p.demand ..
+            " to finish them all. You hold " .. p.held ..
+            " and the cap allows " .. p.earnable ..
+            " more — earn it and every piece maxes.", claim
     end
     if p.verdict == "nothing_reachable" then
-        return crestTrack .. ": " .. pieces .. ", " .. p.demand ..
+        local line = pieces .. ", " .. p.demand ..
             " to finish them all, you hold " .. p.held ..
-            ". Not enough to carry even one home — hold, or take a drop."
+            ". Not enough to carry even one home"
+        -- Whether that is a dead end or an evening's work is decided by
+        -- the cap, not the wallet, and the two read identically without
+        -- this. "Hold, or take a drop" on a track with 300 crests still
+        -- earnable is advice to sit on hands for no reason.
+        if not p.outgrown and p.budget >= p.cheapestCost then
+            return line .. " — but " .. p.cheapestCost ..
+                " finishes the cheapest, and the cap allows " ..
+                p.earnable .. " more. Go and earn it.", claim
+        end
+        return line .. " — hold, or take a drop.", claim
     end
 
     local names = {}
@@ -1150,14 +1826,26 @@ function ns:GetTrackPolicyLine(crestTrack)
         names[#names + 1] = piece.slotName
     end
     local rest = p.wanting - #p.canFinish
-    local line = crestTrack .. ": " .. pieces .. ", " .. p.demand ..
+    local line = pieces .. ", " .. p.demand ..
         " to finish them all, you hold " .. p.held .. ". Enough for " ..
         #p.canFinish .. " — " .. table.concat(names, ", ") .. "."
     if rest > 0 then
-        line = line .. " The other " .. rest ..
-            (p.outgrown and " want drops, not crests." or " will have to wait.")
+        if p.outgrown then
+            line = line .. " The other " .. rest .. " want drops, not crests."
+        elseif p.earnable > 0 then
+            -- "Will have to wait" was the whole answer, and it is the
+            -- one thing a player cannot act on. Farming is the obvious
+            -- next move and the only question about it is whether it is
+            -- enough -- so say how far it gets, and where it stops.
+            line = line .. " The other " .. rest .. ": the cap allows " ..
+                p.earnable .. " more, still " .. (p.demand - p.budget) ..
+                " short of finishing them."
+        else
+            line = line .. " The other " .. rest ..
+                ": the cap is reached, so drops do the rest."
+        end
     end
-    return line
+    return line, claim
 end
 
 ------------------------------------------------------------
@@ -1910,6 +2598,14 @@ end
 function ns:GetRecommendation(slotID)
     local info = ns:GetSlotInfo(slotID)
     if not info then
+        -- A bare slot the guide says to CRAFT is the strongest version
+        -- of this advice and the one the panel used to drop on the
+        -- floor: GetRankedRecommendations filters NO_ITEM out, so the
+        -- slot with nothing in it said nothing at all.
+        local bareReason, bareDetail = ns:GetCraftAdvice(slotID, 0)
+        if bareReason then
+            return ns.RECOMMEND.CRAFT_INSTEAD, bareReason, bareDetail
+        end
         return ns.RECOMMEND.NO_ITEM, ""
     end
 
@@ -1919,6 +2615,14 @@ function ns:GetRecommendation(slotID)
         -- Crafted items: show as maxed with crafted note
         if info.crafted then
             return ns.RECOMMEND.MAXED, "Crafted — no crest upgrades"
+        end
+        -- A slot no crest can touch is exactly where a craft is the
+        -- whole answer, and this used to be the one place the panel had
+        -- nothing to say. Off-season gear and an empty slot both reach
+        -- 0 with crests, so anything the guide says to make beats it.
+        local bareReason, bareDetail = ns:GetCraftAdvice(slotID, 0)
+        if bareReason then
+            return ns.RECOMMEND.CRAFT_INSTEAD, bareReason, bareDetail
         end
         if why == "mismatch" then
             return ns.RECOMMEND.NO_ITEM,
@@ -2213,6 +2917,24 @@ function ns:GetRecommendation(slotID)
     end
 
     -- ============================================================
+    -- RULE 3.5: The list says make this one, not upgrade it
+    --
+    -- Ahead of the drop and spend rules because it settles the same
+    -- question they do -- should crests go here -- and settles it
+    -- harder. Those two say wait, or say how much; this one says the
+    -- item in this slot is not the item you are going to wear, so
+    -- nothing bought for it survives.
+    --
+    -- Behind the free-rank rules, because free is free: a rank that
+    -- costs nothing is worth taking even on a piece a craft replaces.
+    -- ============================================================
+    local craftReason, craftDetail =
+        ns:GetCraftAdvice(slotID, ns:GetMaxIlvlForTrack(track))
+    if craftReason then
+        return ns.RECOMMEND.CRAFT_INSTEAD, craftReason, craftDetail
+    end
+
+    -- ============================================================
     -- RULE 4: Save for drops — content drops higher rank or track
     -- If content drops a HIGHER TRACK entirely, don't spend crests
     -- on this item at all — wait for a replacement drop.
@@ -2378,6 +3100,24 @@ function ns:GetRecommendation(slotID)
         -- covers this one too" on a slot that plainly was not covered.
         local short = math.max((mine.crestsBefore or 0) + crestCost - plan.spendable, 0)
 
+        ------------------------------------------------------------
+        -- Is the shortfall this week's problem or the season's?
+        --
+        -- Every rank in the plan is stamped `funded` against the full
+        -- budget -- crests held PLUS what the season cap still allows --
+        -- and that flag was recorded and never read. So a slot two keys
+        -- away from affordable and a slot the season cannot reach both
+        -- said "Need 80 more Champion", and the player had no way to
+        -- tell which. Those are opposite instructions: go and run
+        -- content, versus stop looking at crests for this slot.
+        --
+        -- "Farmable" here means this week's allowance covers it. The cap
+        -- rises again at every reset, so a slot outside it is waiting on
+        -- a reset rather than out of reach forever -- which is why only
+        -- the outgrown case below is allowed to say "wants a drop".
+        ------------------------------------------------------------
+        local farmable = mine.fundedRanks > 0
+
         -- Where the shortfall is going to come from.
         --
         -- "80 more Champion covers this one too" reads as an instruction
@@ -2387,18 +3127,52 @@ function ns:GetRecommendation(slotID)
         -- arrives -- capping a higher track spills its income down a
         -- tier -- but as a by-product of content that pays something
         -- else, which is a different plan for the week.
+        --
+        -- This is the one case where crests really are the wrong thing
+        -- to be looking at, so it is the only one that says so, and it
+        -- goes above the affordability branches: a slot the season will
+        -- not pay for is not made reachable by taking crests off a
+        -- better slot.
+        if plan.outgrown and not farmable then
+            return ns.RECOMMEND.SAVE_FOR_DROP,
+                "More " .. crestTrack .. " than the season pays out — it "
+                .. "only arrives as overflow now. Wants a drop"
+        end
+
         if plan.spendable >= crestCost then
             -- Affordable on its own, but only by taking the crests off a
             -- slot worth more. This is the case the old "Hold crests"
             -- fired on; it now names which slot, and what closing the
             -- gap would cost.
+            -- Not a shortage, an order. With crests enough for every
+            -- slot on the track nothing is being kept back and nothing
+            -- is at risk of missing out, so "hold" is the wrong word for
+            -- "later" -- and it is the word that makes a player sit on a
+            -- wallet they have been told twice is full.
+            if plan.abundant then
+                return ns.RECOMMEND.UPGRADE_LATER,
+                    who .. " first — this one is covered too"
+            end
+
+            local line = who .. " first — " .. short .. " more " .. crestTrack
             return ns.RECOMMEND.HOLD_CRESTS,
-                who .. " first — " .. short .. " more " .. crestTrack ..
-                " covers this"
+                farmable and (line .. " covers this")
+                    -- Past the allowance, "80 more Champion" is a number
+                    -- with nowhere to come from this week, and left bare
+                    -- it reads as a farming target.
+                    or (line .. ", past this week's cap")
+        end
+
+        if farmable then
+            return ns.RECOMMEND.UPGRADE_LATER,
+                "Need " .. short .. " more " .. crestTrack .. " — the cap "
+                .. "allows " .. plan.seasonEarnable .. " more, so this is "
+                .. "farmable. " .. who .. " first"
         end
         return ns.RECOMMEND.UPGRADE_LATER,
-            "Need " .. short .. " more " .. crestTrack .. " — " ..
-            who .. " first"
+            "Need " .. short .. " more " .. crestTrack .. " — past this "
+            .. "week's cap, so it waits on a reset or a drop. " .. who
+            .. " first"
     end
 
     local finish = ns.GetTrackCompletion and ns:GetTrackCompletion(crestTrack)
@@ -2727,6 +3501,22 @@ function ns:GetRecommendation(slotID)
         end
     end
 
+    -- 3.5. What the wallet is already promised to.
+    --
+    -- The reserve is subtracted from `spendable` above, so a row can
+    -- read "not enough" while the balance on the tile says otherwise --
+    -- and without this line the player is looking at a contradiction
+    -- rather than at a decision. Only on the OTHER slots: the craft's
+    -- own row is a CRAFT_INSTEAD and says all of this in full.
+    local craftHold = ns.GetCraftReserve and ns:GetCraftReserve(crestTrack)
+    if craftHold and (plan.craftReserve or 0) > 0 and craftHold.slotID ~= slotID then
+        detail[#detail + 1] = craftHold.amount .. " " .. crestTrack ..
+            " is spoken for by the " .. craftHold.slotName ..
+            " your list says to craft — " .. craftHold.ilvl ..
+            " at max quality, and the spark for it is already in your bags. "
+            .. "That is what this slot is being counted against."
+    end
+
     -- 4. The trap, and only when it is actually set.
     --
     -- Spending down to nothing on a deep climb while a piece two ranks
@@ -2807,10 +3597,10 @@ ns.RECOMMEND_ORDER = {
     [ns.RECOMMEND.FREE_UPGRADE]    = 1,  -- yes, and it costs nothing
     [ns.RECOMMEND.UPGRADE_NOW]     = 2,  -- yes, spend here
     [ns.RECOMMEND.SAFE_TEMP]       = 3,  -- yes, but a drop overtakes it
+    [ns.RECOMMEND.CRAFT_INSTEAD]   = 4,  -- yes, but at the crafting table
     ------------------------------------------------ divider falls here
-    [ns.RECOMMEND.HOLD_CRESTS]     = 4,  -- not yet, something first
-    [ns.RECOMMEND.UPGRADE_LATER]   = 5,  -- not yet, cannot afford it
-    [ns.RECOMMEND.CRAFT_INSTEAD]   = 6,
+    [ns.RECOMMEND.HOLD_CRESTS]     = 5,  -- not yet, something first
+    [ns.RECOMMEND.UPGRADE_LATER]   = 6,  -- not yet, cannot afford it
     [ns.RECOMMEND.USE_LOWER_TRACK] = 7,  -- no, a cheaper crest reaches it
     [ns.RECOMMEND.WASTED_CREST]    = 8,  -- no, and spending here burns a crest
     [ns.RECOMMEND.BAD_INVESTMENT]  = 9,
@@ -2825,7 +3615,20 @@ ns.RECOMMEND_ORDER = {
 --- divider after it. Named rather than written as a literal in each
 --- caller: the two drifted apart once already, and a divider in the
 --- wrong place silently reclassifies advice.
-ns.RECOMMEND_ACTIONABLE_MAX = 3
+---
+--- Craft instead sits INSIDE it, which is the one place this list is not
+--- about the vendor. It is still a spend, still tonight, and still the
+--- best use of that tier -- the 80 crests just go through a crafting
+--- table rather than an upgrade window. Drawn under "keep crests out of
+--- these for now" it would say the opposite of what it means.
+ns.RECOMMEND_ACTIONABLE_MAX = 4
+
+--- The last rank drawn at full strength. Past it a row is something to
+--- know rather than something to do, and the vendor panel greys it.
+--- Was a bare `ord >= 6` at the one call site, which is a divider
+--- written in a magic number: inserting a label above it silently
+--- reclassified two rows that had not changed meaning.
+ns.RECOMMEND_LIT_MAX = 6
 
 --- Sorts `list` (entries from ns:GetAllRecommendations) in place, best
 --- first, and returns it.

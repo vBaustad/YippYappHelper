@@ -516,7 +516,20 @@ local function Refresh(ctx)
     -- two cannot disagree about what comes first.
     local list = ns.GetRankedRecommendations and ns:GetRankedRecommendations() or {}
 
+    ------------------------------------------------------------
+    -- The rows, and nothing above them.
+    --
+    -- Three per-wallet sentences used to head this list -- what each
+    -- crest tier could do, before the first slot it would be spent on.
+    -- They were true and they were in the wrong place: a list titled
+    -- Improvements is read for the next thing to click, and a paragraph
+    -- about Champion is not a thing to click. Everything they said
+    -- about a SLOT is on that slot's row and its hover; what is only
+    -- true of a wallet is on the crest tile beside the doll, where the
+    -- balance already is.
+    ------------------------------------------------------------
     local y = 0
+
     for i, r in ipairs(list) do
         local row = AcquireImproveRow(i)
         row:ClearAllPoints()

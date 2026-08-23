@@ -794,6 +794,12 @@ function Shell:RefreshRail()
                 -- Stashed per refresh, not captured at build: which crest
                 -- a tile shows can change when ResolveCrestIDs settles.
                 tile._currencyID = data.currencyID or (def and def.id)
+                -- Which wallet this is, so the hover can say what the
+                -- whole tier can still do. A balance is what you have;
+                -- that sentence is what it reaches, which is the half no
+                -- number on the tile can show. Built on hover -- see
+                -- W:IconTile -- because it costs a plan per track.
+                tile._track = def and def.track or nil
                 tile:Show()
             else
                 tile:Hide()

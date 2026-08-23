@@ -1325,8 +1325,18 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
     end
 
     if event == "GROUP_ROSTER_UPDATE" then
-        InvalidateAllAuras()
-        if frame:IsShown() then QueueRefresh(0.3) end
+        -- Named for the tracer. Both of these are locals, and this fires
+        -- on every roster change -- so on a twenty-man raid forming, it
+        -- fires a great many times in a row.
+        if ns.Trace and ns.Trace.on then
+            ns.Trace:Section("readycheck: roster", function()
+                InvalidateAllAuras()
+                if frame:IsShown() then QueueRefresh(0.3) end
+            end)
+        else
+            InvalidateAllAuras()
+            if frame:IsShown() then QueueRefresh(0.3) end
+        end
         return
     end
 

@@ -372,21 +372,42 @@ local function AcquireIcon(parent)
                         RewriteTooltipIlvl(GameTooltip, u.expected, u.rank, u.diffLabel)
                     end
                     local at = u.diffLabel and (" on " .. u.diffLabel) or ""
-                    -- Show the upgrade track rank too: "Champion 3/6" is
-                    -- how players actually reason about a drop's worth.
-                    local rank = u.rank and ("  |cff888888(%s)|r"):format(u.rank) or ""
+                    ------------------------------------------------------------
+                    -- Each track rank sits beside the item level it
+                    -- belongs to.
+                    --
+                    -- The drop's rank used to be appended after the whole
+                    -- sentence -- "Drops at 311 on M+10 - +3 over your
+                    -- 308.  (Hero 3/6)" -- where the clause it lands
+                    -- next to is the one about the player's OWN item. It
+                    -- reads as though their 308 is Hero 3/6, and 308 is
+                    -- Champion 6/6; a player checked their weapon against
+                    -- it and could not make the two agree.
+                    --
+                    -- Naming both ranks is what settles it. The
+                    -- comparison is between two tracks as much as two
+                    -- numbers, and the tracks were the half left out.
+                    ------------------------------------------------------------
+                    local dropAt = ("%d%s%s"):format(u.expected,
+                        u.rank and (" " .. u.rank) or "", at)
+                    local yours = u.equipped
+                    local yourRank = ns.DescribeIlvlRank and ns:DescribeIlvlRank(yours)
+                    local mine = ("%d%s"):format(yours,
+                        yourRank and (" " .. yourRank) or "")
+
                     GameTooltip:AddLine(" ")
                     if u.equipped == 0 then
-                        GameTooltip:AddLine(("|cff40ff40Drops at %d%s|r%s — that slot is empty.")
-                            :format(u.expected, at, rank))
+                        GameTooltip:AddLine(("|cff40ff40Drops at %s|r — that slot is empty.")
+                            :format(dropAt))
                     elseif u.isUpgrade then
-                        GameTooltip:AddLine(("|cff40ff40Drops at %d%s — +%d over your %d.|r%s")
-                            :format(u.expected, at, u.delta, u.equipped, rank))
+                        GameTooltip:AddLine(("|cff40ff40Drops at %s — +%d over your %s.|r")
+                            :format(dropAt, u.delta, mine))
                     elseif u.delta == 0 then
-                        GameTooltip:AddLine(("|cffffcc00Drops at %d%s — same as equipped.|r%s")
-                            :format(u.expected, at, rank))
+                        GameTooltip:AddLine(("|cffffcc00Drops at %s — same as your %s.|r")
+                            :format(dropAt, mine))
                     else
-                        GameTooltip:AddLine(("|cff%sDrops at %d%s — %d below your %d.|r%s"):format(ns.Widgets:Hex("muted"), u.expected, at, -u.delta, u.equipped, rank))
+                        GameTooltip:AddLine(("|cff%sDrops at %s — %d below your %s.|r")
+                            :format(ns.Widgets:Hex("muted"), dropAt, -u.delta, mine))
                     end
                     if u.journalIlvl then
                         GameTooltip:AddLine(("|cff%sEncounter Journal says %d for this key level.|r"):format(ns.Widgets:Hex("muted"), u.journalIlvl))
@@ -491,8 +512,44 @@ local function AcquireSection(parent)
     return s
 end
 
+------------------------------------------------------------
+-- Hide the tooltip only when it is ours to hide.
+--
+-- This used to be a bare GameTooltip:Hide(). GameTooltip is one shared
+-- frame for the entire UI, so that hid whatever the player happened to
+-- be reading -- a bag item, a spell, another addon's panel -- every time
+-- this list redrew. And it redraws on ITEM_DATA_LOAD_RESULT, which fires
+-- once per item as data streams in, so after a loading screen it fired
+-- in batches for as long as the client took to catch up.
+--
+-- Caught by a hook that printed a stack whenever a tooltip was hidden
+-- within 0.3s of being shown. Worth remembering that the same probe
+-- first pointed at a different addon doing exactly this, and this addon
+-- was cleared on the evidence available then -- both were true.
+--
+-- The parent walk is bounded rather than a while: an ownership chain
+-- that loops would hang the client, and today is not the day to write
+-- another unbounded loop.
+------------------------------------------------------------
+local function ReleaseOwnTooltip()
+    local owner = GameTooltip and GameTooltip.GetOwner and GameTooltip:GetOwner()
+    if not owner then return end
+    local mine = ns.LootBrowserFrame
+    if not mine then return end
+    local node = owner
+    for _ = 1, 8 do
+        if node == mine then
+            GameTooltip:Hide()
+            return
+        end
+        if type(node.GetParent) ~= "function" then return end
+        node = node:GetParent()
+        if not node then return end
+    end
+end
+
 local function ReleaseAll()
-    GameTooltip:Hide()
+    ReleaseOwnTooltip()
     for _, s in ipairs(activeSections) do
         s:Hide(); s:ClearAllPoints(); table.insert(sectionPool, s)
     end

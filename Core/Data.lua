@@ -122,8 +122,62 @@ ns.CRAFTED_RANGES = {
 ------------------------------------------------------------
 -- Crafting constants
 ------------------------------------------------------------
-ns.CRAFT_CREST_COST = 80              -- crests to craft a spark item (equivalent to 5/6)
+--- Crests to craft a spark item, equivalent to 5/6 on the ladder.
+---
+--- A FLAT price, and deliberately not ns:GetCrestCost. The upgrade
+--- discount -- the account-wide achievement that takes a rank from 20
+--- crests to 10 -- does not touch a craft. Settled by the user on
+--- 2026-08-23; before that this was an open question and the obvious
+--- "consistency" fix is to route it through GetCrestCost, which would
+--- halve every craft bill the advisor quotes. Do not.
+ns.CRAFT_CREST_COST = 80
 ns.VETERAN_EMBELLISH_RESERVE = 160    -- save this many Veteran crests for embellishment crafts
+
+--- The reagent a Spark craft consumes. One per crafted piece, and the
+--- season hands out a fixed number of them, which is what makes the 80
+--- crests a decision rather than a purchase: spend the spark on the
+--- wrong slot and the crests went with it.
+ns.SPARK_ITEM_ID = 274476             -- Spark of Tides
+
+--- How many crafts the advisor will hold crests for at once.
+---
+--- Not a rule of the game -- sparks are the real limit and the bags say
+--- how many are left. This is the ceiling on how much of a wallet the
+--- advice is willing to freeze. Two is what a season normally comes to
+--- by the time the sparks are in hand, and a reserve of three or four
+--- crafts is a wallet nobody is allowed to spend.
+ns.CRAFT_RESERVE_MAX = 2
+
+------------------------------------------------------------
+-- Which inventory slots a guide's slot wording can land in, in order.
+--
+-- Shared because two features now read the same guide rows and would
+-- otherwise each invent this map. The guides say "Ring" twice rather
+-- than "Ring 1" and "Ring 2", so the first unclaimed slot wins and the
+-- second Ring falls through to 12.
+------------------------------------------------------------
+ns.GUIDE_SLOT_INV = {
+    ["Head"] = { 1 }, ["Neck"] = { 2 }, ["Shoulders"] = { 3 },
+    ["Back"] = { 15 }, ["Chest"] = { 5 }, ["Wrist"] = { 9 },
+    ["Hands"] = { 10 }, ["Waist"] = { 6 }, ["Legs"] = { 7 },
+    ["Feet"] = { 8 },
+    ["Ring"] = { 11, 12 }, ["Ring 1"] = { 11 }, ["Ring 2"] = { 12 },
+    ["Trinket"] = { 13, 14 }, ["Trinket 1"] = { 13 }, ["Trinket 2"] = { 14 },
+    ["Weapon"] = { 16, 17 }, ["Main Hand"] = { 16 }, ["Off Hand"] = { 17 },
+}
+
+--- Whether the guide says you MAKE this one rather than kill something
+--- for it.
+---
+--- The guide has no flag for it; what it has is a source string, and
+--- depending on which page a spec was scraped from that reads
+--- "Crafting", "Crafted", "Crafting/Misc", "Crafting Blacksmithing" or
+--- "Jewelcrafting". All five contain "craft", and all five mean the same
+--- thing to the person reading the doll -- and to the wallet, which has
+--- to keep 80 crests back for it.
+function ns:IsCraftedGuideEntry(entry)
+    return (entry and entry.source or ""):lower():find("craft", 1, true) ~= nil
+end
 
 ------------------------------------------------------------
 -- Crest income the season cap does not measure.
@@ -580,6 +634,19 @@ function ns:GetCurrentProfile()
 end
 
 function ns:IsCrestPrecious(crestTrack)
+    -- Measured before assumed.
+    --
+    -- The profile lists the crests a player at this content level is
+    -- expected to be short of. That is a good default and a bad answer
+    -- once the wallet says otherwise: a tier holding enough for every
+    -- slot it could ever be spent on is not precious, whatever the
+    -- profile thinks, and everything gated on this -- spend a cheaper
+    -- crest here, that overlap rank is wasteful, go and find a Champion
+    -- piece to skip the first Hero rank -- is advice for saving
+    -- something that does not need saving.
+    local season = ns.GetSeasonDemand and ns:GetSeasonDemand(crestTrack)
+    if season and season.abundant then return false end
+
     local profile = ns:GetCurrentProfile()
     for _, t in ipairs(profile.preciousCrests) do
         if t == crestTrack then return true end

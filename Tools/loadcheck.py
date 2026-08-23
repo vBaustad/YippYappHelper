@@ -476,6 +476,21 @@ function Region.CreateAnimationGroup(self) return NewRegion("AnimationGroup", se
 -- one that never stops look identical, and every `if not
 -- anim:IsPlaying() then anim:Play() end` in the addon reads as correct
 -- whatever it does.
+-- Tooltip ownership, really recorded.
+--
+-- GameTooltip is one frame shared by the whole UI, so "is this mine to
+-- hide" is a question the addon has to be able to ask -- and with
+-- SetOwner falling through to the CamelCase no-op, GetOwner answered nil
+-- forever and every ownership guard read as "not mine, leave it alone".
+-- A guard that can never fire and a guard that is correct look identical
+-- from here, which is the same trap the watermark stub set.
+function Region.SetOwner(self, owner, anchor)
+    self._owner = owner
+    return self
+end
+function Region.GetOwner(self) return self._owner end
+function Region.IsOwned(self, frame) return self._owner == frame end
+
 function Region.Play(self) self._playing = true; return self end
 function Region.Stop(self) self._playing = false; return self end
 function Region.Pause(self) self._playing = false; return self end
@@ -503,9 +518,9 @@ end
 --- The unit-filtered form, which is a different registration entirely.
 ---
 --- It used to fall through to the CamelCase no-op, so anything
---- registered this way -- the interrupt tracker's whole cast feed, for
---- one -- was invisible here: FireEvent had nothing listening and a
---- check could not tell that apart from a module that ignored the event.
+--- registered this way was invisible here: FireEvent had nothing
+--- listening, and a check could not tell that apart from a module that
+--- ignored the event.
 ---
 --- The filter is honoured rather than waved through, because "does this
 --- frame hear about party1" is exactly the question worth asking.
@@ -621,6 +636,10 @@ end })
 -- ── Plain function stubs ────────────────────────────────────
 function UnitClass() return "Druid", "DRUID" end
 function UnitName() return "Tester" end
+-- The name without a realm and without the "(*)" a cross-realm unit
+-- carries. LibKeystone reads it at file scope, so a missing stub is not
+-- a failing test, it is the library failing to load at all.
+function UnitNameUnmodified() return "Tester" end
 function UnitLevel() return 80 end
 -- overall, equipped, pvp. Equipped is deliberately BELOW the fixture's
 -- vault rewards (282-302) so the "not an upgrade" branch is reachable
@@ -637,6 +656,30 @@ function GetInventoryItemLink() return nil end
 function UnitFactionGroup() return "Alliance" end
 function GetDetailedItemLevelInfo() return 0 end
 function InCombatLockdown() return false end
+
+-- Which game this is. Retail is 1, and embedded libraries gate on it:
+-- LibKeystone's very first line is `if WOW_PROJECT_ID ~= 1 then return
+-- end`, so without this the library loads to a no-op and every test of
+-- it passes by testing nothing.
+WOW_PROJECT_ID = 1
+WOW_PROJECT_MAINLINE = 1
+
+-- Milliseconds since the client started, used by anything that measures
+-- itself: the loot scanner's frame budget and Core/Trace.lua. Held at
+-- zero so nothing in the harness ever reads as slow -- a test that
+-- tripped a "this took too long" warning would be reporting on the
+-- machine it ran on. The one test that needs a moving clock stubs its
+-- own on top of this.
+function debugprofilestop() return 0 end
+
+-- Call a function without letting the caller's taint follow it. From
+-- here it is an ordinary call; the point is that it EXISTS, because
+-- LibKeystone dispatches every callback through it and a missing stub is
+-- the library erroring rather than a test failing.
+function securecallfunction(fn, ...) return fn(...) end
+function securecall(fn, ...)
+    if type(fn) == "function" then return fn(...) end
+end
 -- In a guild, so the Guild tab draws its "waiting for replies" empty
 -- state rather than the "you're not in a guild" one -- the branch with
 -- something in it. Nothing had called this: that tab was unreachable
@@ -3274,7 +3317,23 @@ def main():
                 local pol = ns:GetTrackPolicy(crest.track)
                 if pol then
                     checked = checked + 1
-                    if pol.demand ~= c.tracks[crest.track].demand then
+                    local seen = c.tracks[crest.track]
+                    -- A policy with no census entry is the "slots want
+                    -- this crest, no piece of it has landed yet" case,
+                    -- which the census cannot see because it counts worn
+                    -- pieces. Its worn demand has to be zero, or it is
+                    -- pricing pieces that do not exist.
+                    if not seen then
+                        if pol.count ~= 0 or pol.demand ~= 0 then
+                            return crest.track .. ": priced " .. pol.demand
+                                .. " against " .. pol.count .. " worn pieces "
+                                .. "the census never saw"
+                        end
+                        if not (pol.season and pol.season.wanting > 0) then
+                            return crest.track .. ": a policy with neither a "
+                                .. "worn piece nor a slot that wants one"
+                        end
+                    elseif pol.demand ~= seen.demand then
                         return crest.track .. ": policy and census disagree on demand"
                     end
                     if #pol.canFinish > pol.wanting then
@@ -3461,6 +3520,1843 @@ def main():
     else:
         print("  FAIL shortfall timing: %s" % timing)
         failures.append(("shortfall timing", str(timing)))
+
+    # Can I max this track, and does farming change the answer?
+    #
+    # The plan has always carried the two halves of a crest budget --
+    # what is in the wallet and what the season cap still allows -- and
+    # every sentence a player could actually read was written against the
+    # wallet alone. So "need 80 more Champion" covered both a slot two
+    # keys away and one the season will never pay for, and the panel that
+    # knew the difference never said it.
+    #
+    # This pins the split: same gear, same demand, three wallets, and the
+    # verdict has to move with the cap rather than only with the balance.
+    outlook = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot  = ns.GetSlotInfo
+            local realCount = ns.GetCrestCountByTrack
+            local realEarn  = ns.GetEarnableCrests
+            local realCap   = ns.IsCrestCapped
+            local realOut   = ns.IsCrestOutgrown
+
+            -- Two Champion pieces, each three ranks from the cap.
+            -- 6 ranks at 20 = 120 to finish the track.
+            local bySlot = {}
+            for _, slot in ipairs({ 5, 10 }) do
+                bySlot[slot] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = T.Champion[3], quality = 4, icon = 134400,
+                    track = "Champion", rank = 3, maxRank = 6, crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+
+            local wallet, earnable = 0, 0
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and wallet or 0
+            end
+            ns.GetEarnableCrests = function(self, track)
+                return track == "Champion" and earnable or 0
+            end
+            ns.IsCrestCapped = function(self, track)
+                return track == "Champion" and earnable <= 0 or false
+            end
+
+            -- The harness character is handed 305-311, which puts
+            -- Champion behind what its content drops -- so the whole
+            -- track reads outgrown by default and every unfunded slot
+            -- would take the "wants a drop" branch. Pinned false for the
+            -- runs that are about the cap, and set true deliberately for
+            -- the run that is about being outgrown.
+            local outgrown = false
+            ns.IsCrestOutgrown = function(self, track)
+                return track == "Champion" and outgrown or false
+            end
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns.GetEarnableCrests, ns.IsCrestCapped   = realEarn, realCap
+                ns.IsCrestOutgrown = realOut
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+            local function at(held, earn)
+                wallet, earnable = held, earn
+                ns:InvalidateCrestPlans()
+                return ns:GetTrackPolicy("Champion"),
+                       ns:GetTrackPolicyLine("Champion")
+            end
+
+            -- Crests in hand for the whole track: act tonight.
+            local p, line = at(120, 0)
+            if p.demand ~= 120 then
+                return restore("fixture wants " .. p.demand .. " to finish, not 120")
+            end
+            if p.verdict ~= "max_now" then
+                return restore("120 held against 120 demand reads " .. p.verdict)
+            end
+
+            -- Same demand, a third of the crests, but the cap allows the
+            -- rest. This is the case the addon could not express: the
+            -- answer is yes, and it is a farm rather than a purchase.
+            p, line = at(40, 200)
+            if p.verdict ~= "max_farm" then
+                return restore("40 held + 200 earnable against 120 reads " .. p.verdict)
+            end
+            if p.earnable ~= 200 then
+                return restore("earnable reads " .. p.earnable .. ", not 200")
+            end
+            -- The half that prompted this: budget stated as one number
+            -- described crests already in the bags as though they were
+            -- income. Both halves have to appear, separately.
+            if not (line:find("40", 1, true) and line:find("200", 1, true)) then
+                return restore("max_farm line names neither half: " .. line)
+            end
+            if line:find("coming", 1, true) then
+                return restore("max_farm line still calls held crests income")
+            end
+            local farmLine = line
+
+            -- Same wallet, no allowance left. Crests cannot finish the
+            -- track at all and the line must stop promising it.
+            p, line = at(40, 0)
+            if p.verdict == "max_now" or p.verdict == "max_farm" then
+                return restore("40 held and a reached cap still reads " .. p.verdict)
+            end
+            if line:find("every piece maxes", 1, true) then
+                return restore("capped track still promises every piece")
+            end
+
+            ------------------------------------------------------------
+            -- The same split, per slot.
+            --
+            -- Two identical pieces and a wallet that reaches one of
+            -- them. The unfunded one is either "go and earn it" or "stop
+            -- looking at crests for this", and which depends entirely on
+            -- the cap -- the balance is the same in both runs.
+            ------------------------------------------------------------
+            local function unpaid(held, earn)
+                at(held, earn)
+                local plan = ns:GetCrestPlan("Champion")
+                for _, slot in ipairs({ 5, 10 }) do
+                    local mine = plan.slots[slot]
+                    if mine and mine.paidRanks == 0 then
+                        local rec, reason = ns:GetRecommendation(slot)
+                        return rec, reason or ""
+                    end
+                end
+                return nil, ""
+            end
+
+            -- Farmable: the cap still allows the crests this slot
+            -- wants, so the shortfall is content to run.
+            local rec, reason = unpaid(40, 200)
+            if not rec then
+                return restore("40 crests funded both pieces, so the split "
+                    .. "is untested")
+            end
+            if not (reason:find("covers this", 1, true)
+                or reason:find("farmable", 1, true)) then
+                return restore("farmable slot does not say so: " .. reason)
+            end
+
+            -- Same balance, allowance spent. Nothing the player runs
+            -- this week closes the gap, and the line must stop reading
+            -- as a farming target.
+            rec, reason = unpaid(40, 0)
+            if not rec then
+                return restore("capped run funded both pieces, so the split "
+                    .. "is untested")
+            end
+            if not reason:find("cap", 1, true) then
+                return restore("slot past the cap does not say so: " .. reason)
+            end
+            if reason:find("covers this", 1, true)
+                or reason:find("farmable", 1, true) then
+                return restore("a slot past the cap reads as farmable: "
+                    .. reason)
+            end
+
+            -- And on a track the content has outgrown, crests are the
+            -- wrong thing to be looking at entirely.
+            outgrown = true
+            rec, reason = unpaid(40, 0)
+            outgrown = false
+            if rec ~= ns.RECOMMEND.SAVE_FOR_DROP then
+                return restore("an outgrown track past its cap reads "
+                    .. ((rec and rec.label) or "?"))
+            end
+            if not reason:find("overflow", 1, true) then
+                return restore("outgrown slot does not name its income: "
+                    .. reason)
+            end
+
+            -- The wallet sentence itself, which is now drawn by the
+            -- crest tile's tooltip and by nothing else.
+            --
+            -- It must NOT lead with the track's name. The tooltip it
+            -- hangs under is already headed by the currency, and the
+            -- prefix is a leftover from the strip that used to sit above
+            -- the improvements list -- the thing this replaced.
+            at(40, 0)
+            local line = ns:GetTrackPolicyLine("Champion")
+            if not line then
+                return restore("Champion has a policy but no sentence")
+            end
+            if line:find("^Champion") then
+                return restore("the wallet line still leads with its "
+                    .. "track name: " .. line)
+            end
+            if line:sub(1, 1):match("%l") then
+                return restore("the wallet line does not start a "
+                    .. "sentence: " .. line)
+            end
+            return restore("ok:" .. line .. "|" .. farmLine)
+        end
+    """)(ns)
+    if outlook and str(outlook).startswith("ok:"):
+        line, farm_line = str(outlook)[3:].split("|", 1)
+        print("  ok   wallet sentence: %s" % line)
+        print("  ok   farmable reads — %s" % farm_line)
+    else:
+        print("  FAIL wallet sentence: %s" % outlook)
+        failures.append(("wallet sentence", str(outlook)))
+
+
+    # The second route to item level, which the advisor had never heard of.
+    #
+    # Several specs are told by their own best-in-slot list to MAKE a
+    # piece rather than kill something for it. That costs a spark and
+    # ns.CRAFT_CREST_COST of one tier's crests, all at once -- and every
+    # rule in Recommend.lua priced the vendor route only, so it would
+    # happily talk a player into spending the exact 80 Hero the craft
+    # they are saving for needs.
+    #
+    # The harness character is a Balance Druid, whose shipped guide names
+    # two crafted pieces, so this runs against the real data rather than
+    # a stub of it. Sparks are the gate: ITEM_COUNTS is empty by default,
+    # which is why every check above still sees the old behaviour.
+    craft = L.eval("""
+        function(ns)
+            local function restore(msg)
+                ITEM_COUNTS[ns.SPARK_ITEM_ID] = nil
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            -- No spark, no advice. A row saying "make this instead"
+            -- above a slot the player cannot make anything for is worse
+            -- than silence: they stop spending and nothing replaces the
+            -- spend.
+            ITEM_COUNTS[ns.SPARK_ITEM_ID] = nil
+            ns:InvalidateCrestPlans()
+            local dry = ns:GetCraftPlan()
+            if dry.sparks ~= 0 then
+                return restore("the bags report " .. dry.sparks
+                    .. " sparks with none in them")
+            end
+            if #dry.wanted == 0 then
+                return restore("the shipped Balance guide names no craft")
+            end
+            for _, row in ipairs(dry.wanted) do
+                if ns:GetCraftAdvice(row.slotID, 0) then
+                    return restore(row.slotName .. " is told to craft with "
+                        .. "no spark to craft it with")
+                end
+            end
+            for track in pairs(dry.byTrack) do
+                return restore(track .. " holds crests back for a craft "
+                    .. "nothing can start")
+            end
+
+            -- One spark, and the same slot becomes a decision.
+            ITEM_COUNTS[ns.SPARK_ITEM_ID] = 1
+            ns:InvalidateCrestPlans()
+            local plan = ns:GetCraftPlan()
+            if plan.sparks ~= 1 then
+                return restore("one spark in the bags reads as "
+                    .. plan.sparks)
+            end
+
+            -- Exactly one wallet is asked to hold, whatever the guide
+            -- lists: a second craft needs a second spark.
+            local claimed, track = 0, nil
+            for t in pairs(plan.byTrack) do claimed, track = claimed + 1, t end
+            if claimed ~= 1 then
+                return restore("one spark reserved against " .. claimed
+                    .. " tracks")
+            end
+
+            local row = plan.byTrack[track]
+            local reason, detail = ns:GetCraftAdvice(row.slotID, 0)
+            if not reason then
+                return restore(row.slotName .. " is the reserved craft and "
+                    .. "still has nothing to say")
+            end
+            -- The price, the currency and what it makes -- in that
+            -- order, because that is the order the decision is made in.
+            if not (reason:find(track, 1, true)
+                and reason:find(tostring(ns.CRAFT_CREST_COST), 1, true)
+                and reason:find(tostring(row.ilvl), 1, true)) then
+                return restore("the craft line hides its price or its "
+                    .. "result: " .. reason)
+            end
+            -- Never a flat promise about item level. Where in the range
+            -- a craft lands is the crafter's skill, not the wallet's.
+            if not reason:find("max quality", 1, true) then
+                return restore("the craft line promises an item level "
+                    .. "without the quality caveat: " .. reason)
+            end
+            local joined = table.concat(detail or {}, " ")
+            if not joined:find("no crest upgrades afterwards", 1, true) then
+                return restore("the hover never says the 80 is the whole "
+                    .. "bill: " .. joined)
+            end
+            if not joined:find("Spark", 1, true) then
+                return restore("the hover never mentions the spark it spends")
+            end
+
+            -- And the verdict reaches the panel, above the divider.
+            -- "Craft instead" is still a spend and still tonight; drawn
+            -- under "keep crests out of these for now" it would say the
+            -- opposite of what it means.
+            local rec = ns:GetRecommendation(row.slotID)
+            if rec ~= ns.RECOMMEND.CRAFT_INSTEAD then
+                return restore(row.slotName .. " reads "
+                    .. ((rec and rec.label) or "?") .. ", not Craft instead")
+            end
+            local ord = ns.RECOMMEND_ORDER[ns.RECOMMEND.CRAFT_INSTEAD]
+            if ord > (ns.RECOMMEND_ACTIONABLE_MAX or 0) then
+                return restore("Craft instead sorts below the divider")
+            end
+            if ord > (ns.RECOMMEND_LIT_MAX or 0) then
+                return restore("Craft instead is drawn greyed out")
+            end
+
+            -- A craft slot is in the ranked list even when the slot is
+            -- BARE. GetRankedRecommendations drops NO_ITEM, which is how
+            -- the strongest version of this advice used to fall on the
+            -- floor.
+            local seen = false
+            for _, r in ipairs(ns:GetRankedRecommendations()) do
+                if r.slotID == row.slotID then seen = true break end
+            end
+            if not seen then
+                return restore(row.slotName .. " never reaches the list")
+            end
+
+            ------------------------------------------------------------
+            -- The 80 comes off what the panel is allowed to spend, and
+            -- says so on the rows it is taken from.
+            --
+            -- Without the sentence the player is looking at a
+            -- contradiction rather than a decision: the tile says 140
+            -- Champion and the row underneath says it cannot afford a
+            -- 60-crest rank.
+            --
+            -- Outgrown is pinned off for this run. The harness character
+            -- is handed 305-311, which puts every tier under Hero behind
+            -- its own content, and an outgrown wallet is exempt from
+            -- every reserve in the file -- so the exemption would hide
+            -- the thing being tested.
+            ------------------------------------------------------------
+            local realOutgrown = ns.IsCrestOutgrown
+            ns.IsCrestOutgrown = function(self, t)
+                if t == track then return false end
+                return realOutgrown(self, t)
+            end
+            ns:InvalidateCrestPlans()
+            local held = ns:GetCrestCountByTrack(track)
+            local plan2 = ns:GetCrestPlan(track)
+            local reserved = plan2.craftReserve or 0
+            local spendable = plan2.spendable or 0
+
+            local spoken = nil
+            for _, si in ipairs(ns.SLOT_IDS) do
+                if si.slot ~= row.slotID then
+                    local _, _, d = ns:GetRecommendation(si.slot)
+                    for _, ln in ipairs(d or {}) do
+                        if ln:find("spoken for", 1, true) then spoken = ln end
+                    end
+                end
+            end
+            -- And the wallet's own hover says what has been taken off
+            -- the top, so the tile and the rows agree.
+            local _, claim = ns:GetTrackPolicyLine(track)
+
+            ns.IsCrestOutgrown = realOutgrown
+            ns:InvalidateCrestPlans()
+
+            if reserved ~= ns.CRAFT_CREST_COST then
+                return restore(track .. " holds " .. reserved
+                    .. " back for a craft costing " .. ns.CRAFT_CREST_COST
+                    .. " out of " .. held .. " in hand")
+            end
+            if spendable > held - reserved then
+                return restore("the reserve is counted but not subtracted: "
+                    .. spendable .. " spendable of " .. held)
+            end
+            if not spoken then
+                return restore("no row says where the " .. reserved .. " "
+                    .. track .. " went")
+            end
+            if not spoken:find(row.slotName, 1, true) then
+                return restore("the reserve line does not name the craft "
+                    .. "it is for: " .. spoken)
+            end
+            if not (claim and claim:find(row.slotName, 1, true)) then
+                return restore("the " .. track .. " tile says nothing about "
+                    .. "the craft holding its crests")
+            end
+
+            ------------------------------------------------------------
+            -- The tier it aims at is the best one the SEASON can reach,
+            -- not the first one the wallet can already pay for.
+            --
+            -- Sparks are the scarce half of a craft and they do not
+            -- refill. Spending one on whatever happened to be affordable
+            -- tonight is the mistake; the crests come back, the spark
+            -- does not.
+            ------------------------------------------------------------
+            local realEarn = ns.GetEarnableCrests
+            local higher = nil
+            for i = #ns.TRACK_ORDER, 1, -1 do
+                local t = ns.TRACK_ORDER[i]
+                if t ~= track and ns.TRACK_RANK[t] > ns.TRACK_RANK[track] then
+                    higher = t
+                end
+            end
+            if not higher then
+                return restore("no tier above " .. track .. " to aim at")
+            end
+            ns.GetEarnableCrests = function(self, t)
+                if t == higher then return ns.CRAFT_CREST_COST end
+                return realEarn(self, t)
+            end
+            ns:InvalidateCrestPlans()
+            local aimed = ns:GetCraftPlan().byTrack[higher]
+            ns.GetEarnableCrests = realEarn
+            ns:InvalidateCrestPlans()
+            if not aimed then
+                return restore("the cap allows a " .. higher .. " craft and "
+                    .. "the advice still points at " .. track)
+            end
+
+            return restore("ok:" .. row.slotName .. ":" .. track .. ":"
+                .. higher .. ":" .. reason)
+        end
+    """)(ns)
+    if craft and str(craft).startswith("ok:"):
+        slot, track, higher, reason = str(craft)[3:].split(":", 3)
+        print("  ok   craft advice: %s is a %s craft — no spark means no "
+              "reserve, and a reachable %s cap moves the target up"
+              % (slot, track, higher))
+        print("  ok   craft wording: %s" % reason)
+    else:
+        print("  FAIL craft advice: %s" % craft)
+        failures.append(("craft advice", str(craft)))
+
+    # A crest tier is spent on SLOTS, not on the pieces worn today.
+    #
+    # Reported: a player with 6 Hero pieces and 10 Champion ones needs
+    # Hero crests for all sixteen slots, and every Myth piece collected
+    # takes one off that bill -- so ten Myth pieces leave six slots at a
+    # hundred crests each, and six hundred Hero crests buys the lot.
+    #
+    # Every demand figure in the addon counted the pieces worn ON the
+    # track, so the total looked small, the wallet looked scarce, and the
+    # advice reached for "hold" on a character with nothing left to
+    # ration. A slot whose Hero drop has not landed yet was invisible to
+    # it, and those are most of the bill.
+    season = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot  = ns.GetSlotInfo
+            local realCount = ns.GetCrestCountByTrack
+            local realEarn  = ns.GetEarnableCrests
+            local realMark  = ns.GetFreeUpgradeIlvl
+            local realRead  = ns.GetMarkRead
+
+            local bySlot, marks = {}, {}
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            ns.GetFreeUpgradeIlvl = function(self, slotID) return marks[slotID] or 0 end
+            ns.GetMarkRead        = function(self, slotID) return marks[slotID] or 0 end
+
+            local wallet, earnable = 0, 0
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Hero" and wallet or 0
+            end
+            ns.GetEarnableCrests = function(self, track)
+                return track == "Hero" and earnable or 0
+            end
+
+            local function restore(msg)
+                ns.GetSlotInfo, ns.GetCrestCountByTrack = realSlot, realCount
+                ns.GetEarnableCrests   = realEarn
+                ns.GetFreeUpgradeIlvl  = realMark
+                ns.GetMarkRead         = realRead
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local function put(slotID, track, rank)
+                bySlot[slotID] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = T[track][rank], quality = 4, icon = 134400,
+                    track = track, rank = rank, maxRank = #T[track],
+                    crafted = false,
+                }
+            end
+            local function at(held, earn)
+                wallet, earnable = held, earn
+                ns:InvalidateCrestPlans()
+                return ns:GetSeasonDemand("Hero")
+            end
+
+            local cost = ns:GetCrestCost("Hero")
+            -- Five ranks from the bottom of a track to its cap.
+            local perSlot = 5 * cost
+
+            local slots = {}
+            for _, si in ipairs(ns.SLOT_IDS) do slots[#slots + 1] = si.slot end
+            if #slots ~= 16 then
+                return restore(#slots .. " slots on the doll, not 16")
+            end
+
+            -- Ten Myth pieces. Nothing below Myth is ever spent in those
+            -- slots again, so each one takes itself off the Hero bill.
+            for i = 1, 10 do put(slots[i], "Myth", 1) end
+            -- The other six left bare: no Hero piece has landed in them
+            -- yet, and the old code could not price a slot it could not
+            -- see a piece in. That is the whole point -- the drop is
+            -- coming, and the crests for it are the question.
+
+            local sd = at(6 * perSlot, 0)
+            if sd.settled ~= 10 then
+                return restore(sd.settled .. " slots settled by a Myth piece, not 10")
+            end
+            if sd.wanting ~= 6 then
+                return restore(sd.wanting .. " slots still want Hero, not 6")
+            end
+            if sd.demand ~= 6 * perSlot then
+                return restore("6 bare slots priced at " .. sd.demand
+                    .. ", not " .. (6 * perSlot))
+            end
+            if not sd.abundant then
+                return restore(sd.held .. " against a " .. sd.demand
+                    .. " bill still reads scarce")
+            end
+
+            -- One crest short and the verdict has to go the other way,
+            -- or "abundant" is just a label on a large number.
+            sd = at(6 * perSlot - 1, 0)
+            if sd.abundant then
+                return restore("one crest short of the bill still reads abundant")
+            end
+            -- ...and the cap covers the gap, because what the player can
+            -- still earn is part of the budget, not a separate question.
+            sd = at(6 * perSlot - 1, 1)
+            if not sd.abundant then
+                return restore("the cap's last crest is not counted in the budget")
+            end
+
+            -- The mark is what makes the bill shrink. A bare slot that
+            -- has HELD a 315 before pays only for the ranks above it.
+            marks[slots[11]] = T.Hero[4]
+            local above = 0
+            for r = 2, #T.Hero do
+                if T.Hero[r] > T.Hero[4] then above = above + 1 end
+            end
+            sd = at(0, 0)
+            local want = 5 * perSlot + above * cost
+            if sd.demand ~= want then
+                return restore("a slot marked at " .. T.Hero[4] .. " prices "
+                    .. sd.demand .. " for the set, not " .. want)
+            end
+
+            -- A slot whose mark is already past the track's cap wants
+            -- nothing at all, even bare: the drop lands and climbs free.
+            marks[slots[11]] = ns:GetMaxIlvlForTrack("Hero")
+            sd = at(0, 0)
+            if sd.wanting ~= 5 then
+                return restore(sd.wanting .. " slots want Hero with one marked "
+                    .. "at the cap, not 5")
+            end
+            marks[slots[11]] = nil
+
+            -- Lower-track pieces are on the bill too. This is the second
+            -- half of the report: "not just the items you currently
+            -- have, but also lower tier items". A Champion piece worn in
+            -- a slot does not excuse that slot from the Hero bill -- its
+            -- Hero drop simply has not arrived.
+            put(slots[11], "Champion", 1)
+            sd = at(0, 0)
+            if sd.wanting ~= 6 then
+                return restore("a Champion piece took its slot off the Hero bill")
+            end
+
+            ------------------------------------------------------------
+            -- The reported arithmetic, in full: ten Myth, five Hero and
+            -- one Champion, everything at 1/6, is "500 hero + 100
+            -- champion + 80 hero".
+            --
+            -- The 80 is the Champion slot. Read literally it is five
+            -- Hero ranks like any other, but that piece gets taken to
+            -- the Champion cap first -- the addon says so on its own
+            -- row -- which marks the slot at 308 and leaves four Hero
+            -- ranks above it. Pricing it at five had the addon
+            -- disagreeing with the player about an upgrade it had
+            -- already recommended.
+            ------------------------------------------------------------
+            local overlap = 0
+            for r = 2, #T.Hero do
+                if T.Hero[r] > T.Champion[#T.Champion] then
+                    overlap = overlap + 1
+                end
+            end
+            if overlap >= 5 then
+                return restore("fixture: Champion's cap frees no Hero rank, so "
+                    .. "the overlap case is untested")
+            end
+            local bill = 5 * perSlot + overlap * cost
+            if sd.demand ~= bill then
+                return restore("ten Myth, five bare and one Champion prices "
+                    .. sd.demand .. ", not " .. bill)
+            end
+
+            -- And with nothing to ration, every rule that rations stands
+            -- down. This is what the report actually asked for: stop
+            -- saying hold.
+            at(bill, 0)
+            local plan = ns:GetCrestPlan("Hero")
+            if not plan.abundant then
+                return restore("the plan does not know the tier is abundant")
+            end
+            if (plan.reserve or 0) ~= 0 then
+                return restore("the reserve holds " .. plan.reserve
+                    .. " back on a tier with crests to spare")
+            end
+            for _, si in ipairs(ns.SLOT_IDS) do
+                if ns:IsHeldForDrops(plan, si.slot) then
+                    return restore(si.name .. " is still held for a drop with "
+                        .. "crests enough for every slot")
+                end
+            end
+
+            local pol  = ns:GetTrackPolicy("Hero")
+            local line = ns:GetTrackPolicyLine("Hero")
+            if pol.verdict ~= "abundant" then
+                return restore("the policy reads " .. tostring(pol.verdict)
+                    .. " with the whole track paid for")
+            end
+            -- Crests enough in hand, so the sentence may promise
+            -- tonight. Matched case-insensitively: the line no longer
+            -- leads with the track name, so "enough" is now the first
+            -- word of a sentence rather than the third word of one.
+            if not line:lower():find("enough in hand", 1, true) then
+                return restore("a covered wallet does not say so: " .. line)
+            end
+
+            ------------------------------------------------------------
+            -- Held and available are different promises.
+            --
+            -- The same bill against a wallet holding well under it, with
+            -- the cap making up the rest: still nothing to ration, but
+            -- "enough in hand" would be a lie and the reassurance has to
+            -- be the weaker, true one.
+            ------------------------------------------------------------
+            local part = math.floor(bill * 0.6)
+            at(part, bill - part)
+            line = ns:GetTrackPolicyLine("Hero")
+            if line:find("in hand", 1, true) then
+                return restore("holding " .. part .. " of a " .. bill
+                    .. " bill still claims it is in hand: " .. line)
+            end
+            if not line:lower():find("enough available", 1, true) then
+                return restore("a coverable wallet does not say so: " .. line)
+            end
+            if not (line:find(tostring(part), 1, true)
+                and line:find(tostring(bill - part), 1, true)) then
+                return restore("available line hides the split: " .. line)
+            end
+
+            -- One crest off the cap and the promise has to go away
+            -- entirely, or "enough" means nothing.
+            at(part, bill - part - 1)
+            line = ns:GetTrackPolicyLine("Hero")
+            if line:find("without worrying", 1, true) then
+                return restore("one crest short and it still says do not worry")
+            end
+
+            -- Nothing precious about a tier that covers itself, so the
+            -- overlap warnings -- go and find a Champion piece to skip
+            -- the first Hero rank -- stop firing. That trick is for
+            -- saving crests, and there is nothing to save.
+            at(bill, 0)
+            if ns:IsCrestPrecious("Hero") then
+                return restore("Hero still reads precious with the whole "
+                    .. "track paid for")
+            end
+            at(part, bill - part)
+            return restore("ok:" .. ns:GetTrackPolicyLine("Hero"))
+        end
+    """)(ns)
+    if season and str(season).startswith("ok:"):
+        print("  ok   season demand: counted over slots, not worn pieces \u2014 %s"
+              % str(season)[3:])
+    else:
+        print("  FAIL season demand: %s" % season)
+        failures.append(("season demand", str(season)))
+
+    # Keys arrive on everyone else's channel, not ours.
+    #
+    # The Guild tab shared keystones over YippYapp's own addon prefix,
+    # so it only ever listed people who also ran YippYapp -- in practice
+    # nobody, and the empty state told the player to go and evangelise.
+    # LibKeystone is the library BigWigs, DBM and EllesmereUI all embed;
+    # its frame answers a request as soon as the file loads, so a guild
+    # full of BigWigs users answers.
+    #
+    # Two things have to hold and neither is visible from reading the
+    # page: the library actually loaded from the .toc, and something
+    # registered against it. A callback nobody registers is a tab that
+    # stays as empty as it was before.
+    keystone = L.eval("""
+        function(ns)
+            local LKS = LibStub and LibStub("LibKeystone", true)
+            if not LKS then
+                return "LibKeystone did not load -- check the .toc line"
+            end
+            local registered = 0
+            for _ in pairs(LKS.callbackMap or {}) do
+                registered = registered + 1
+            end
+            if registered == 0 then
+                return "the library loaded but nothing registered for keys"
+            end
+
+            local guild = ns:GetGuildKeystones()
+            local party = ns:GetPartyKeystones()
+            local function count(t)
+                local n = 0
+                for _ in pairs(t) do n = n + 1 end
+                return n
+            end
+            local function feed(level, mapID, rating, who, channel)
+                for _, f in pairs(LKS.callbackMap) do
+                    f(level, mapID, rating, who, channel)
+                end
+            end
+
+            local maps = ns.GetSeasonMaps and ns:GetSeasonMaps() or {}
+            local mapID = maps[1] and (maps[1].mapID or maps[1].id or maps[1])
+            if type(mapID) ~= "number" then
+                return "no season map to key a fixture against"
+            end
+
+            -- A real key from a guildie who has never heard of us.
+            local before = count(guild)
+            feed(12, mapID, 2500, "Bigwigsuser", "GUILD")
+            if count(guild) ~= before + 1 then
+                return "a guild key on the shared channel was not recorded"
+            end
+            local rec = guild["Bigwigsuser"]
+            if rec.level ~= 12 or rec.mapID ~= mapID then
+                return "the recorded key does not match what was sent"
+            end
+            -- Free from this channel and not from ours, so it has to
+            -- survive the trip or there was no point reading it.
+            if rec.rating ~= 2500 then
+                return "the rating arrived as " .. tostring(rec.rating)
+            end
+
+            -- "No key" is 0,0 and a guildie hiding theirs is -1,-1.
+            -- Neither is a keystone, and both would otherwise render as
+            -- a dungeon called Unknown at level -1.
+            before = count(guild)
+            feed(0, 0, 1200, "Keyless", "GUILD")
+            feed(-1, -1, 1800, "Hidden", "GUILD")
+            if count(guild) ~= before then
+                return "a sentinel key was recorded as a real one"
+            end
+
+            -- LibKeystone hands us our OWN key on every Request so we
+            -- show up when ungrouped. The party list is about the other
+            -- four, and the page draws the player separately.
+            before = count(party)
+            feed(10, mapID, 2000, UnitName("player"), "PARTY")
+            if count(party) ~= before then
+                return "our own key was added to the party list"
+            end
+            feed(9, mapID, 1900, "Groupmate", "PARTY")
+            if count(party) ~= before + 1 then
+                return "a party key on the shared channel was not recorded"
+            end
+
+            guild["Bigwigsuser"] = nil
+            party["Groupmate"] = nil
+            return "ok:" .. registered
+        end
+    """)(ns)
+    if keystone and str(keystone).startswith("ok:"):
+        print("  ok   shared keystone channel: LibKeystone loaded, %s consumer "
+              "registered, sentinels rejected, own key kept out of the party list"
+              % str(keystone)[3:])
+    else:
+        print("  FAIL shared keystone channel: %s" % keystone)
+        failures.append(("shared keystone channel", str(keystone)))
+
+    # Never send to a group you are no longer in.
+    #
+    # Every keystone send is fired from a timer, and the group you were
+    # in when it was scheduled is not the group you are in when it goes
+    # off. Sending to PARTY without a party makes the client answer
+    # "You aren't in a party." in chat -- and GROUP_ROSTER_UPDATE fires
+    # once per member, so a twenty-man raid dissolving scheduled twenty
+    # of them and printed a screenful.
+    sends = L.eval("""
+        function(ns)
+            local realSend = C_ChatInfo.SendAddonMessage
+            local realGroup, realGuild = IsInGroup, IsInGuild
+            local sent = {}
+            C_ChatInfo.SendAddonMessage = function(prefix, msg, channel)
+                sent[#sent + 1] = channel
+                return 0
+            end
+            local function done(msg)
+                C_ChatInfo.SendAddonMessage = realSend
+                IsInGroup, IsInGuild = realGroup, realGuild
+                return msg
+            end
+
+            -- Out of everything: not one message should leave.
+            IsInGroup = function() return false end
+            IsInGuild = function() return false end
+            ns:BroadcastKeystone()
+            for _, ch in ipairs(sent) do
+                return done("sent to " .. ch .. " while in neither a group "
+                    .. "nor a guild")
+            end
+
+            -- In a party: PARTY is fair game, GUILD is not.
+            IsInGroup = function() return true end
+            sent = {}
+            ns:BroadcastKeystone()
+            local sawGuild = false
+            for _, ch in ipairs(sent) do
+                if ch == "GUILD" then sawGuild = true end
+            end
+            if sawGuild then
+                return done("sent to GUILD while not in a guild")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if sends and str(sends) == "ok":
+        print("  ok   keystone sends: nothing goes to a party or guild the "
+              "player is no longer in")
+    else:
+        print("  FAIL keystone sends: %s" % sends)
+        failures.append(("keystone sends", str(sends)))
+
+    # /yh trace, which only earns its place if it wraps something.
+    #
+    # A freeze throws no error, so !BugGrabber has nothing to catch, and
+    # SavedVariables are only flushed on a clean exit -- so a post-mortem
+    # written for the next login is lost the moment the client has to be
+    # killed. Counting as it happens is what is left.
+    #
+    # The failure mode to guard is the quiet one: names in the wrap list
+    # that no longer exist, so tracing switches on, reports nothing, and
+    # reads as "the addon is innocent".
+    trace = L.eval("""
+        function(ns)
+            local T = ns.Trace
+            if not T then return "Core/Trace.lua did not load" end
+            if FireEvent("PLAYER_LOGIN") == 0 then
+                return "nothing listened for PLAYER_LOGIN"
+            end
+            if (T._wrapped or 0) < 10 then
+                return "only " .. tostring(T._wrapped) .. " functions wrapped -- "
+                    .. "the target list has drifted off the real names"
+            end
+
+            -- Off means off: no counting, and the return value is
+            -- whatever the real function said.
+            T:SetEnabled(false)
+            T:Reset()
+            ns:GetCrestPlan("Champion")
+            local counted = 0
+            for _ in pairs(T.stats) do counted = counted + 1 end
+            if counted ~= 0 then
+                return "something was counted while tracing was off"
+            end
+
+            -- On, it counts -- and the count is the half that mattered:
+            -- the slot read was never slow, it was asked for 1285 times.
+            T:SetEnabled(true)
+            T:Reset()
+            ns:InvalidateCrestPlans()
+            ns:GetCrestPlan("Champion")
+            local plan = T.stats["crest: plan"]
+            if not plan or plan.calls < 1 then
+                return "a traced call recorded nothing"
+            end
+            local slot = T.stats["gear: slot read"]
+            if not slot or slot.calls < 1 then
+                return "the slot read is in the list but never counted, so "
+                    .. "the wrapper is not on the function being called"
+            end
+
+            -- Multiple returns have to survive the wrapper. ns:CanUpgradeItem
+            -- hands back two, and a wrapper that drops the second turns
+            -- every upgrade question into "no".
+            local rawCan = ns._realCanUpgradeItem
+            local a, b = ns:CanUpgradeItem(16)
+            if a and b == nil then
+                return "the wrapper dropped CanUpgradeItem's second return"
+            end
+
+            ------------------------------------------------------------
+            -- Naming work that is not a function on `ns`.
+            --
+            -- The first real stall this caught was 9.6 seconds and said
+            -- "not inside anything we wrap" -- true, because the loot
+            -- sweep runs in a coroutine driven by an OnUpdate script and
+            -- the cache it builds is a file-local. Neither is reachable
+            -- from the wrap list, so both are named by hand now.
+            ------------------------------------------------------------
+            if type(T.Section) ~= "function" or type(T.Mark) ~= "function" then
+                return "no way to name work that is not on the namespace"
+            end
+            T:Reset()
+            local a, b = T:Section("probe: block", function(x) return x, x * 2 end, 21)
+            if a ~= 21 or b ~= 42 then
+                return "Section did not hand back what the block returned"
+            end
+            local rec = T.stats["probe: block"]
+            if not rec or rec.calls ~= 1 then
+                return "Section ran the block without recording it"
+            end
+
+            -- Mark names a stretch that yields, so it must NOT time it --
+            -- a coroutine's elapsed time is the wall clock it was parked
+            -- across, not the work it did.
+            local outer = T:Mark("probe: parked")
+            if T.current ~= "probe: parked" then
+                return "Mark did not set the current stretch"
+            end
+            T:Unmark(outer)
+            if T.current ~= outer then
+                return "Unmark did not put the previous stretch back"
+            end
+
+            ------------------------------------------------------------
+            -- How much of a stalled frame was ours.
+            --
+            -- The watchdog used to print `current` -- what we were
+            -- inside -- and that is nil every single time it runs: an
+            -- OnUpdate fires BETWEEN frames, after every wrapped call
+            -- has already returned and restored it. So it reported "not
+            -- inside anything we wrap" by construction, and an afternoon
+            -- of real stalls was read as the addon being innocent.
+            --
+            -- A running total cannot fail that way, so the total is what
+            -- is guarded here: work must land in it, and it must clear
+            -- between frames or every stall inherits the last one's.
+            ------------------------------------------------------------
+            T:Reset()
+            T.frameOurs, T.frameTop, T.frameTopMs = 0, nil, 0
+            if T.frameOurs ~= 0 then return "the frame total does not start empty" end
+
+            T:Section("probe: charged", function() end)
+            if T.frameOurs == nil then
+                return "a completed call contributed nothing to the frame total"
+            end
+
+            -- Nested work must not be counted twice: the inner call is
+            -- already inside the outer one's clock.
+            T.frameOurs, T.frameTop, T.frameTopMs = 0, nil, 0
+            T:Section("probe: outer", function()
+                T:Section("probe: inner", function() end)
+            end)
+            local outerOnly = T.stats["probe: inner"]
+            if not outerOnly or outerOnly.calls ~= 1 then
+                return "the nested call was not recorded at all"
+            end
+            if T.frameTop == "probe: inner" then
+                return "a nested call was charged to the frame on its own"
+            end
+
+            -- And the report must survive being asked with data in it.
+            local ok, err = pcall(function() T:Report() end)
+            if not ok then return "the report errored: " .. tostring(err) end
+
+            T:SetEnabled(false)
+            T:Reset()
+            return "ok:" .. T._wrapped
+        end
+    """)(ns)
+    if trace and str(trace).startswith("ok:"):
+        print("  ok   trace harness: %s of our own functions wrapped, counted "
+              "only while on, multiple returns intact" % str(trace)[3:])
+    else:
+        print("  FAIL trace harness: %s" % trace)
+        failures.append(("trace harness", str(trace)))
+
+    # The six-second freeze, measured.
+    #
+    # ns:RefreshWatermarks took 5911ms of a 6314ms frame -- 94% of it --
+    # on a player zoning between a dungeon and the world. Sixteen slots
+    # in one pass, each up to three C_ItemUpgrade calls, and those are
+    # not cheap while the item data behind them is still loading, which
+    # is exactly the state after a loading screen. It runs from the
+    # UNIT_INVENTORY_CHANGED handler, which fires when you zone.
+    #
+    # Two properties keep it from coming back: it asks about one slot per
+    # frame, and it only asks about slots whose item actually changed.
+    #
+    # This test PASSED while the freeze was still happening, and the
+    # reason is worth keeping: it stubs ns.GetSlotInfo, and GetSlotInfo
+    # was the expensive half. It counted only the C_ItemUpgrade calls, so
+    # it proved the cheap half was spread and said nothing at all about
+    # the sixteen synchronous slot reads RefreshWatermarks opened with --
+    # each one a cold SetInventoryItem tooltip build, because the handler
+    # that drives this wipes the scan cache immediately before.
+    #
+    # So `reads` is counted now as well as `asked`. A stub that is cheap
+    # in the harness and expensive in the client has to be counted, or
+    # the check quietly measures the wrong thing and reports success.
+    watermark = L.eval("""
+        function(ns)
+            if not (ns.RefreshWatermarks and ns.WatermarkRunner) then
+                return "no watermark sweep to drive"
+            end
+            local realSlot = ns.GetSlotInfo
+            local realGet = C_ItemUpgrade.GetHighWatermarkForItem
+
+            local links, asked, reads = {}, 0, 0
+            for _, si in ipairs(ns.SLOT_IDS) do
+                links[si.slot] = "|Hitem:" .. si.slot .. "|h[Thing]|h"
+            end
+            ns.GetSlotInfo = function(_, slotID)
+                reads = reads + 1
+                return links[slotID] and { link = links[slotID], ilvl = 300 } or nil
+            end
+            C_ItemUpgrade.GetHighWatermarkForItem = function(...)
+                asked = asked + 1
+                return 300, 300
+            end
+
+            local drive = ns.WatermarkRunner:GetScript("OnUpdate")
+            local function done(msg)
+                ns.GetSlotInfo = realSlot
+                C_ItemUpgrade.GetHighWatermarkForItem = realGet
+                ns.WatermarkRunner:Hide()
+                if ns.InvalidateWatermarkQueries then
+                    ns:InvalidateWatermarkQueries()
+                end
+                return msg
+            end
+            if not drive then return done("the runner has no OnUpdate") end
+
+            -- Nothing may happen in the calling frame. This is the whole
+            -- fix: sixteen slots must not be asked before the caller
+            -- gets its frame back.
+            ns:InvalidateWatermarkQueries()
+            asked, reads = 0, 0
+            ns:RefreshWatermarks()
+            if asked > 0 then
+                return done("asked the client " .. asked .. " times in the "
+                    .. "frame that called it")
+            end
+            if reads > 0 then
+                return done("read " .. reads .. " slots in the frame that "
+                    .. "called it -- that is the half that stalls")
+            end
+
+            -- One slot per frame, until they are all done.
+            local frames, guard = 0, 0
+            while ns.WatermarkRunner:IsShown() and guard < 200 do
+                guard = guard + 1
+                local before, readsBefore = asked, reads
+                drive(ns.WatermarkRunner)
+                if asked - before > 1 then
+                    return done("asked about " .. (asked - before)
+                        .. " slots in one frame")
+                end
+                if reads - readsBefore > 1 then
+                    return done("read " .. (reads - readsBefore)
+                        .. " slots in one frame")
+                end
+                if asked > before then frames = frames + 1 end
+            end
+            if frames < 2 then
+                return done("the whole sweep fitted in " .. frames
+                    .. " frame(s), so it is not spread at all")
+            end
+            local firstPass = asked
+
+            -- Same gear: nothing to ask. This is the case that matters on
+            -- a zone, where the equipment has not changed at all.
+            asked, reads = 0, 0
+            ns:RefreshWatermarks()
+            if reads > 0 then
+                return done("read " .. reads .. " slots up front to decide "
+                    .. "there was nothing to do")
+            end
+            local g2 = 0
+            while ns.WatermarkRunner:IsShown() and g2 < 200 do
+                g2 = g2 + 1
+                drive(ns.WatermarkRunner)
+            end
+            if asked > 0 then
+                return done("re-asked about " .. asked .. " unchanged slots")
+            end
+
+            ------------------------------------------------------------
+            -- And a reload asks nothing at all.
+            --
+            -- A reload cannot change what is equipped, so a mark recorded
+            -- last session against the piece still in the slot is still
+            -- the client's answer. The marks always survived; what did
+            -- not was the record of WHICH item each one was about, so
+            -- every session re-asked all sixteen from scratch.
+            ------------------------------------------------------------
+            if not (YippYappHelperDB.watermarkLinks
+                and YippYappHelperDB.watermarkLinks[1]) then
+                return done("the answered item was not written down, so the "
+                    .. "next session cannot know what the mark was about")
+            end
+            -- A fresh session: in-memory state gone, disk state kept.
+            ns:InvalidateWatermarkQueries()
+            ns:LoadWatermarks()
+            asked = 0
+            ns:RefreshWatermarks()
+            local g4 = 0
+            while ns.WatermarkRunner:IsShown() and g4 < 200 do
+                g4 = g4 + 1
+                drive(ns.WatermarkRunner)
+            end
+            if asked > 0 then
+                return done("a reload re-asked about " .. asked
+                    .. " slots that had not changed")
+            end
+
+            -- One piece swapped: exactly one question.
+            links[1] = "|Hitem:999|h[New]|h"
+            asked = 0
+            ns:RefreshWatermarks()
+            local g3 = 0
+            while ns.WatermarkRunner:IsShown() and g3 < 200 do
+                g3 = g3 + 1
+                drive(ns.WatermarkRunner)
+            end
+            if asked ~= 1 then
+                return done("one gear change asked " .. asked .. " questions")
+            end
+            return done("ok:" .. firstPass)
+        end
+    """)(ns)
+    if watermark and str(watermark).startswith("ok:"):
+        print("  ok   watermark sweep: %s slots asked one per frame, none "
+              "re-asked while the gear is unchanged, one change asks once"
+              % str(watermark)[3:])
+    else:
+        print("  FAIL watermark sweep: %s" % watermark)
+        failures.append(("watermark sweep", str(watermark)))
+
+    # The load gate, which is only worth having if it holds anything.
+    #
+    # A freeze cannot be investigated after the fact: SavedVariables are
+    # flushed on a clean exit and a killed client never has one, so
+    # nothing this session learns about its own death survives it. What
+    # does survive is a flag set BEFORE the freeze, because the /reload
+    # that triggers it writes the file on the way out.
+    #
+    # So the addon can be told to start quiet, and the expensive jobs
+    # that normally run themselves a few seconds after a loading screen
+    # get names and are run by hand instead -- the whole bisect in one
+    # session rather than a restart per guess. The failure to guard is
+    # the quiet one: a gate nobody registered against holds nothing and
+    # reads as "none of this is the problem".
+    gate = L.eval("""
+        function(ns)
+            if not ns.LoadGateOpen then return "the load gate did not load" end
+
+            -- The jobs name themselves when the loading screen ends,
+            -- which is the event the harness otherwise never fires.
+            -- Deferred first, so firing it registers the names without
+            -- actually running a journal sweep in here.
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.deferLoad = true
+            if FireEvent("PLAYER_ENTERING_WORLD", false, true) == 0 then
+                return "nothing listened for PLAYER_ENTERING_WORLD"
+            end
+
+            local order = ns.LoadGateList()
+            if #order < 3 then
+                return "only " .. #order .. " jobs registered -- the call "
+                    .. "sites have drifted"
+            end
+            local byName = {}
+            for _, n in ipairs(order) do byName[n] = true end
+            for _, want in ipairs({ "loot", "keystones", "window" }) do
+                if not byName[want] then
+                    return "the '" .. want .. "' job never registered"
+                end
+            end
+
+            -- Open by default: the gate must be invisible until asked
+            -- for, or every player pays for a debugging tool.
+            YippYappHelperDB.deferLoad = nil
+            local ranNow = false
+            if not ns.LoadGateOpen("probe", function() ranNow = true end) then
+                return "the gate held a job with deferral switched off"
+            end
+            if ranNow then
+                return "registering a job ran it -- the caller decides that"
+            end
+
+            -- Held when asked, and the held job still runs on demand.
+            YippYappHelperDB.deferLoad = true
+            local held = 0
+            if ns.LoadGateOpen("probe", function() held = held + 1 end) then
+                return "the gate let a job through while deferring"
+            end
+            if held ~= 0 then return "a deferred job ran anyway" end
+            ns.LoadGateRun("probe")
+            if held ~= 1 then
+                return "running a held job by hand did nothing"
+            end
+
+            ------------------------------------------------------------
+            -- The job that hands off has to say how to wait for it.
+            --
+            -- Every one of these returns before its work does -- a
+            -- coroutine, a timer, the network -- so timing the call
+            -- measured nothing and reported 0ms for all three jobs. A
+            -- diagnostic that clears everything is worse than none, and
+            -- the loot sweep is the one it mattered most for.
+            ------------------------------------------------------------
+            local _, jobs = ns.LoadGateList()
+            local loot = jobs["loot"]
+            if not (loot and type(loot.busy) == "function") then
+                return "the loot sweep does not say when it has finished, so "
+                    .. "running it by hand reports the time to hand off"
+            end
+            if type(loot.busy()) ~= "boolean" then
+                return "the loot sweep's busy check does not answer yes or no"
+            end
+            -- And the cold reset, without which a by-hand run measures
+            -- the cost of finding its own cache already warm -- which is
+            -- how a sweep that takes seconds reported 0.2s.
+            if type(loot.cold) ~= "function" then
+                return "the loot sweep cannot be run cold, so running it by "
+                    .. "hand reports the cost of doing nothing"
+            end
+
+            ------------------------------------------------------------
+            -- "Only this one, at load."
+            --
+            -- Running a job by hand cannot reproduce a loading screen:
+            -- the caches it fills are already full, the journal has
+            -- settled, item data has arrived and nothing else wants the
+            -- frame. So one job is allowed to run where it normally
+            -- runs, with the rest still held -- and that mode has to
+            -- beat the blanket hold or it does nothing at all.
+            ------------------------------------------------------------
+            -- Throwaway names: re-registering a real one would replace
+            -- its busy and cold predicates with nothing, which is a
+            -- sharp enough edge that this test tripped over it first.
+            YippYappHelperDB.deferLoad = true
+            YippYappHelperDB.loadOnly = "probeA"
+            if ns.LoadGateOpen("probeA", function() end) ~= true then
+                return "the named job was still held under 'only'"
+            end
+            if ns.LoadGateOpen("probeB", function() end) ~= false then
+                return "'only probeA' let probeB through as well"
+            end
+            YippYappHelperDB.loadOnly = nil
+
+            -- An unknown name must say so rather than erroring, since
+            -- the whole point is a player typing these by hand.
+            local ok = pcall(function() ns.LoadGateRun("nosuchjob") end)
+            if not ok then return "an unknown job name errored" end
+            local ok2 = pcall(function() ns.LoadGateRun("") end)
+            if not ok2 then return "listing the jobs errored" end
+
+            YippYappHelperDB.deferLoad = nil
+            return "ok:" .. #order
+        end
+    """)(ns)
+    if gate and str(gate).startswith("ok:"):
+        print("  ok   load gate: %s jobs named, open by default, held and "
+              "hand-runnable when deferring" % str(gate)[3:])
+    else:
+        print("  FAIL load gate: %s" % gate)
+        failures.append(("load gate", str(gate)))
+
+    # Never hide a tooltip you do not own.
+    #
+    # GameTooltip is one frame shared by the whole UI. The loot browser's
+    # ReleaseAll called a bare GameTooltip:Hide(), so every redraw of
+    # that list hid whatever the player happened to be reading -- a bag
+    # item, a spell, another addon's panel. And it redraws on
+    # ITEM_DATA_LOAD_RESULT, which fires once per item as data streams
+    # in, so after a loading screen it fired in batches for as long as
+    # the client took to catch up.
+    #
+    # Found by hooking GameTooltip and printing a stack whenever it was
+    # hidden within 0.3s of being shown. Worth keeping: the guard is one
+    # line and its absence is invisible until someone is hovering
+    # something at the wrong moment.
+    tooltip = L.eval("""
+        function(ns)
+            local f = ns.LootBrowserFrame
+            if not f then return "the loot browser frame does not exist" end
+            if not ns.LootBrowser_RefreshDisplay then
+                return "no refresh to test"
+            end
+
+            -- Somebody else's tooltip: a bag button, a spell, anything.
+            local stranger = CreateFrame("Frame", nil, UIParent)
+            GameTooltip:SetOwner(stranger, "ANCHOR_RIGHT")
+            GameTooltip:Show()
+            local ok, err = pcall(function() ns:LootBrowser_RefreshDisplay() end)
+            if not ok then return "refresh errored: " .. tostring(err) end
+            if not GameTooltip:IsShown() then
+                return "a redraw hid a tooltip belonging to another frame"
+            end
+            if GameTooltip:GetOwner() ~= stranger then
+                return "a redraw took another frame's tooltip"
+            end
+
+            -- Our own, anchored to something inside the browser. Leaving
+            -- that one up would strand a tooltip on a row that has just
+            -- been pooled and re-pointed at different data.
+            local mine = CreateFrame("Frame", nil, f)
+            GameTooltip:SetOwner(mine, "ANCHOR_RIGHT")
+            GameTooltip:Show()
+            ok, err = pcall(function() ns:LootBrowser_RefreshDisplay() end)
+            if not ok then return "refresh errored: " .. tostring(err) end
+            if GameTooltip:IsShown() then
+                return "a redraw left our own tooltip up on a pooled row"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if tooltip and str(tooltip) == "ok":
+        print("  ok   tooltip ownership: a loot browser redraw hides its own "
+              "tooltip and leaves everyone else's alone")
+    else:
+        print("  FAIL tooltip ownership: %s" % tooltip)
+        failures.append(("tooltip ownership", str(tooltip)))
+
+    # Do not drive the journal the player is reading.
+    #
+    # The sweep works by moving the Encounter Journal's own selection and
+    # reading what comes back. Against a closed journal that is free;
+    # against an open one every selection re-renders Blizzard's panel, so
+    # the 16ms slice budget became 70-112ms slices the moment the
+    # Adventure Guide was on screen. Reported by a player who opened it
+    # while a background sweep was running -- a wall of trace lines and a
+    # stuttering journal.
+    #
+    # A foreground scan still runs: the player asked our panel a question
+    # and is owed an answer.
+    journal = L.eval("""
+        function(ns)
+            if not (ns.ScanLootBrowserSlot and ns.LootScanRunner) then
+                return "no scanner to drive"
+            end
+            local drive = ns.LootScanRunner:GetScript("OnUpdate")
+            if not drive then return "the scan runner has no OnUpdate" end
+
+            EncounterJournal = EncounterJournal or CreateFrame("Frame")
+            local realShown = EncounterJournal.IsShown
+            local open = true
+            EncounterJournal.IsShown = function() return open end
+
+            -- A clock that moves, so the sweep behaves like a sweep
+            -- rather than collapsing into one resume: the harness holds
+            -- debugprofilestop at zero, which means ScanYield's 16ms
+            -- budget is never reached.
+            local realClock = debugprofilestop
+            local clock = 0
+            debugprofilestop = function()
+                clock = clock + 4
+                return clock
+            end
+
+            ns.lootBrowserState = ns.lootBrowserState or {}
+            ns.lootBrowserState.selectedClassID = 1
+            ns.lootBrowserState.selectedSpecID = 71
+
+            local function finish(msg)
+                debugprofilestop = realClock
+                EncounterJournal.IsShown = realShown
+                if ns.ClearAllLootBrowserCaches then ns:ClearAllLootBrowserCaches() end
+                return msg
+            end
+
+            -- A BACKGROUND sweep, started while the player has the
+            -- Adventure Guide open. Every slice drives the same journal
+            -- they are reading, so it must not take any.
+            ns:ClearAllLootBrowserCaches()
+            ns:ScanLootBrowserSlot(1, 0, true)
+            if not ns:IsLootScanRunning() then
+                return finish("no background pass was started")
+            end
+            for _ = 1, 50 do drive(ns.LootScanRunner) end
+            if not ns:IsLootScanRunning() then
+                return finish("a background sweep ran to completion through "
+                    .. "an open journal")
+            end
+
+            -- Closed: it picks straight back up.
+            open = false
+            local frames = 0
+            while ns:IsLootScanRunning() and frames < 5000 do
+                frames = frames + 1
+                drive(ns.LootScanRunner)
+            end
+            if ns:IsLootScanRunning() then
+                return finish("the sweep never resumed after the journal closed")
+            end
+            -- Not asserting how MANY frames it resumed over: that is the
+            -- slice budget's business and the loot scan test above owns
+            -- it. What matters here is that work was still waiting.
+
+            ------------------------------------------------------------
+            -- A FOREGROUND scan waits too, and that is the whole point.
+            --
+            -- It was let through at first, on the grounds that the player
+            -- had asked our panel a question and was owed an answer. The
+            -- answer it gave was wrong: the journal has one global
+            -- selection, so with it open our EJ_SelectEncounter and the
+            -- journal's own re-selection fight over it, and every boss
+            -- reported the loot of whichever encounter won. Nine bosses,
+            -- the same ten items, cached and served again.
+            ------------------------------------------------------------
+            open = true
+            ns:ClearAllLootBrowserCaches()
+            ns:ScanLootBrowserSlot(1, 0, false)
+            if not ns:IsLootScanRunning() then
+                return finish("no foreground pass was started")
+            end
+            for _ = 1, 50 do drive(ns.LootScanRunner) end
+            if not ns:IsLootScanRunning() then
+                return finish("a foreground scan read through an open journal, "
+                    .. "which is how every boss ends up with the same loot")
+            end
+            open = false
+            local fg = 0
+            while ns:IsLootScanRunning() and fg < 5000 do
+                fg = fg + 1
+                drive(ns.LootScanRunner)
+            end
+            if ns:IsLootScanRunning() then
+                return finish("the foreground scan never resumed")
+            end
+            return finish("ok")
+        end
+    """)(ns)
+    if journal and str(journal) == "ok":
+        print("  ok   journal courtesy: no sweep reads the journal while the "
+              "player has it open, foreground included, and every one resumes "
+              "when it closes")
+    else:
+        print("  FAIL journal courtesy: %s" % journal)
+        failures.append(("journal courtesy", str(journal)))
+
+
+    # Which instances exist does not change until the game patches.
+    #
+    # Finding it out costs a walk through every tier of every expansion
+    # in the Encounter Journal, and that walk was happening once per
+    # session for the life of the addon -- at login, whether or not
+    # anybody opened the panel, and including a reload inside a dungeon
+    # where the client is already streaming that instance.
+    #
+    # Written down and stamped with the interface version plus our own,
+    # so a patch or an addon update looks again and nothing else does.
+    persist = L.eval("""
+        function(ns)
+            if not ns.GetInstanceCache then return "no instance cache" end
+            YippYappHelperDB = YippYappHelperDB or {}
+
+            -- Seeded rather than built. A live build needs the Encounter
+            -- Journal to answer a synchronous walk, which this harness
+            -- only fixtures for the coroutine path -- and the thing under
+            -- test is the reading of the written-down copy, not the
+            -- walking that produced it.
+            local function seed(stamp, data)
+                YippYappHelperDB.lootInstances = { stamp = stamp, data = data }
+                ns:ClearAllLootBrowserCaches()
+            end
+            local good = {
+                dungeons = { { instanceID = 1, name = "D", bosses = {} } },
+                raids = { { instanceID = 2, name = "R", bosses = {} } },
+                worldBosses = {},
+                __fromDisk = true,
+            }
+
+            ns:ClearAllLootBrowserCaches(true)
+            YippYappHelperDB.lootInstances = nil
+
+            -- The happy path, and the only one that saves the walk: a
+            -- copy stamped with what the addon writes today is served
+            -- straight back without touching the journal.
+            if not ns.LootCacheStamp then
+                return "no way to ask what stamp the addon writes"
+            end
+            seed(ns:LootCacheStamp(), good)
+            local hit = ns:GetInstanceCache()
+            if not hit then
+                return "a copy stamped for this build was not loaded at all"
+            end
+            if not hit.__fromDisk then
+                return "a copy stamped for this build was rebuilt anyway, so "
+                    .. "the walk still happens every session"
+            end
+            if #hit.dungeons ~= 1 or #hit.raids ~= 1 then
+                return "the loaded copy is not what was written"
+            end
+
+            -- A stamp that cannot match must be rebuilt, which here means
+            -- NOT served: the fixture cannot build, so a nil result is
+            -- the honest signal that it declined the stale copy.
+            seed("definitely-not-this-build", good)
+            local stale = ns:GetInstanceCache()
+            if stale and stale.__fromDisk then
+                return "a stale stamp was served instead of rebuilt"
+            end
+
+            -- A malformed copy must be rejected the same way, rather than
+            -- handed to a render half-built.
+            seed("definitely-not-this-build", { dungeons = "broken" })
+            local bad = ns:GetInstanceCache()
+            if bad and bad.dungeons == "broken" then
+                return "a malformed saved copy was trusted"
+            end
+
+            -- An empty one is not a cache, it is a failed scan that would
+            -- otherwise be served forever.
+            seed("definitely-not-this-build",
+                { dungeons = {}, raids = {}, worldBosses = {} })
+            local empty = ns:GetInstanceCache()
+            if empty and #empty.dungeons == 0 and #empty.raids == 0
+                and empty.__fromDisk then
+                return "an empty saved copy was served as if it were real"
+            end
+
+            -- And a routine invalidation must NOT throw the disk copy
+            -- away, or the walk comes back every session and the whole
+            -- point is lost.
+            seed("keep-me", good)
+            ns:ClearAllLootBrowserCaches()
+            if not YippYappHelperDB.lootInstances then
+                return "an ordinary cache clear deleted the saved copy"
+            end
+            ns:ClearAllLootBrowserCaches(true)
+            if YippYappHelperDB.lootInstances then
+                return "an explicit forget left the saved copy behind"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if persist and str(persist) == "ok":
+        print("  ok   instance list persists: written down and served back, "
+              "rebuilt on a stamp change, rejected when malformed or empty, "
+              "and kept through an ordinary cache clear")
+    else:
+        print("  FAIL instance list persists: %s" % persist)
+        failures.append(("instance list persists", str(persist)))
+
+    # ...and so does the loot hanging off it.
+    #
+    # Which items a boss drops changes when the game patches and at no
+    # other time, yet it was refetched on every reload -- and the fetch
+    # is the bulk of the sweep: the instance walk finds a few dozen
+    # bosses, then every one of them is asked at every difficulty.
+    #
+    # Same stamp as the instance list, so a patch or an addon update
+    # invalidates both together and nothing else invalidates either.
+    lootrows = L.eval("""
+        function(ns)
+            if not ns.LootCacheStamp then return "no stamp to key on" end
+            YippYappHelperDB = YippYappHelperDB or {}
+
+            local rows = { { sourceName = "R", sourceType = "raid",
+                             bossName = "B", encounterID = 1,
+                             items = { [16] = { { itemID = 5, name = "X" } } } } }
+
+            -- A fresh session. The forget is what resets the "already
+            -- read the disk copy" latch; an ordinary clear deliberately
+            -- does not, so seeding without one silently re-tests the
+            -- previous case and every later assertion passes for the
+            -- wrong reason.
+            local function freshSession(data)
+                ns:ClearAllLootBrowserCaches(true)
+                YippYappHelperDB.lootRows =
+                    { stamp = ns:LootCacheStamp(), data = data }
+            end
+
+            -- Stamped for this build: served straight back, no sweep.
+            freshSession({ ["71-0"] = rows })
+            local got = ns:ScanLootBrowserSlot(1, 0)
+            if type(got) ~= "table" or #got ~= 1 then
+                return "a copy stamped for this build was not served ("
+                    .. type(got) .. ")"
+            end
+            if got[1].bossName ~= "B" then
+                return "what came back is not what was written"
+            end
+            if ns:IsLootScanRunning() then
+                return "swept anyway with a good saved copy on disk"
+            end
+
+            -- Wrong stamp: not served.
+            ns:ClearAllLootBrowserCaches(true)
+            YippYappHelperDB.lootRows =
+                { stamp = "not-this-build", data = { ["71-0"] = rows } }
+            ns:ScanLootBrowserSlot(1, 0)
+            if YippYappHelperDB.lootRows.stamp == ns:LootCacheStamp() then
+                return "a stale stamp was quietly adopted"
+            end
+
+            ------------------------------------------------------------
+            -- Every boss dropping the same thing is not loot.
+            --
+            -- The journal has one global selection, so anything that
+            -- re-selects underneath a running sweep makes every boss
+            -- report whichever encounter won. Reported as nine bosses
+            -- listing the same ten items -- and now that these rows go
+            -- to disk, a bad pass would outlive the session that made it
+            -- and last until the next patch.
+            --
+            -- Refused on the way IN as well as on the way out, or the
+            -- guard only protects players who did not already have one.
+            ------------------------------------------------------------
+            local same = {}
+            for i = 1, 5 do
+                same[i] = { sourceName = "D", sourceType = "dungeon",
+                            bossName = "Boss" .. i, encounterID = i,
+                            items = { [23] = { { itemID = 7, name = "Same" } } } }
+            end
+            freshSession({ ["71-0"] = same })
+            local poisoned = ns:ScanLootBrowserSlot(1, 0)
+            if type(poisoned) == "table" and #poisoned == 5 then
+                return "a pass where every boss drops the same thing was "
+                    .. "served from disk"
+            end
+
+            -- ...but bosses that genuinely differ must still load.
+            local differ = {}
+            for i = 1, 5 do
+                differ[i] = { sourceName = "D", sourceType = "dungeon",
+                              bossName = "Boss" .. i, encounterID = i,
+                              items = { [23] = { { itemID = i, name = "N" } } } }
+            end
+            freshSession({ ["71-0"] = differ })
+            local fine = ns:ScanLootBrowserSlot(1, 0)
+            if type(fine) ~= "table" or #fine ~= 5 then
+                return "a good pass was thrown away with the bad ones"
+            end
+
+            -- An empty list is a failed scan, not a cache.
+            freshSession({ ["71-0"] = {} })
+            local empty = ns:ScanLootBrowserSlot(1, 0)
+            if type(empty) == "table" and #empty > 0 then
+                return "an empty saved list was served as rows"
+            end
+
+            -- An ordinary clear keeps the disk copy; only a forget drops it.
+            freshSession({ ["71-0"] = rows })
+            ns:ClearAllLootBrowserCaches()
+            if not YippYappHelperDB.lootRows then
+                return "an ordinary cache clear deleted the saved rows"
+            end
+            ns:ClearAllLootBrowserCaches(true)
+            if YippYappHelperDB.lootRows then
+                return "an explicit forget left the saved rows behind"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if lootrows and str(lootrows) == "ok":
+        print("  ok   loot rows persist: served from disk without sweeping, "
+              "refused when stale or empty, kept through an ordinary clear")
+    else:
+        print("  FAIL loot rows persist: %s" % lootrows)
+        failures.append(("loot rows persist", str(lootrows)))
+
+    # The third journal walk, and the last one that ran per session.
+    #
+    # ns:GetJournalItemLink maps an item id to the journal's own link for
+    # it, and building that index walks the Encounter Journal again --
+    # lazily, the first time the Best in Slot or Trinkets page asks about
+    # a row. Which item the journal lists for a boss changes when the
+    # game patches and at no other time.
+    links = L.eval("""
+        function(ns)
+            if not (ns.GetJournalItemLink and ns.LootCacheStamp) then
+                return "no link index to test"
+            end
+            YippYappHelperDB = YippYappHelperDB or {}
+            local made = { [4242] = "|Hitem:4242|h[Saved]|h" }
+
+            -- A fresh session, seeded. The forget is what drops the
+            -- in-memory index; an ordinary clear deliberately keeps it,
+            -- so seeding without one would just re-read the last case.
+            local function freshSession(saved)
+                ns:ClearAllLootBrowserCaches(true)
+                YippYappHelperDB.lootLinks = saved
+            end
+
+            -- Stamped for this build: served without a walk.
+            freshSession({ stamp = ns:LootCacheStamp(), data = made })
+            local got = ns:GetJournalItemLink(4242)
+            if got ~= made[4242] then
+                return "a copy stamped for this build was not served ("
+                    .. tostring(got) .. ")"
+            end
+
+            -- Wrong stamp: not served. The fixture cannot complete a
+            -- walk, so nil is the honest signal that it declined.
+            freshSession({ stamp = "not-this-build", data = made })
+            if ns:GetJournalItemLink(4242) == made[4242] then
+                return "a stale stamp was served instead of rebuilt"
+            end
+
+            -- An empty index is never accepted, for the same reason one
+            -- is never written: the journal is not always populated when
+            -- first asked, and an empty one served as fact leaves every
+            -- page showing base items with no way back.
+            freshSession({ stamp = ns:LootCacheStamp(), data = {} })
+            if ns:GetJournalItemLink(4242) ~= nil then
+                return "an empty saved index was served"
+            end
+
+            -- Kept through an ordinary clear, dropped only on a forget --
+            -- the same rule as the instance list and the rows, or the
+            -- walk comes back every session.
+            freshSession({ stamp = ns:LootCacheStamp(), data = made })
+            ns:ClearAllLootBrowserCaches()
+            if not YippYappHelperDB.lootLinks then
+                return "an ordinary cache clear deleted the saved index"
+            end
+            ns:ClearAllLootBrowserCaches(true)
+            if YippYappHelperDB.lootLinks then
+                return "an explicit forget left the saved index behind"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if links and str(links) == "ok":
+        print("  ok   journal links persist: served from disk without walking, "
+              "refused when stale or empty, kept through an ordinary clear")
+    else:
+        print("  FAIL journal links persist: %s" % links)
+        failures.append(("journal links persist", str(links)))
+
+    # A full group's keystones have to stay on the page.
+    #
+    # Reported from a screenshot: four keys in the group, and the fourth
+    # was drawn through the bottom of the Mythic+ page and into the tab
+    # strip underneath. The card grows to the floor and stops; the rows
+    # inside it were laid out at a fixed height however many there were.
+    #
+    # It survived the geometry check above because that check reads the
+    # section CARDS, and these rows are raw textures drawn straight onto
+    # the content frame -- so the one part of the page that overflowed
+    # was the one part nothing measured.
+    #
+    # Five is the most a group can hold, and it is the case that never
+    # occurred until keystones moved onto LibKeystone and the list
+    # started filling up.
+    overflow = L.eval("""
+        function(ns)
+            local f = ns.MythicPlusFrame
+            if not f then return "no Mythic+ frame" end
+            local realParty = ns.GetPartyKeystones
+            local realOwn   = ns.GetOwnKeystone
+            local realGroup = IsInGroup
+
+            local maps = ns:GetSeasonMaps()
+            if #maps < 2 then return "not enough season maps for a fixture" end
+            local function mapOf(i)
+                local m = maps[((i - 1) % #maps) + 1]
+                return m.mapID or m.id or m
+            end
+
+            -- Four groupmates plus the player: a full key list.
+            local fake = {}
+            for i = 1, 4 do
+                fake["Mate" .. i] = {
+                    mapID = mapOf(i), level = 10 + i,
+                    name = "Dungeon " .. i, ts = 0,
+                }
+            end
+            ns.GetPartyKeystones = function() return fake end
+            ns.GetOwnKeystone = function()
+                return { mapID = mapOf(5), level = 12, name = "Mine" }
+            end
+            IsInGroup = function() return true end
+
+            local function restore(msg)
+                ns.GetPartyKeystones, ns.GetOwnKeystone = realParty, realOwn
+                IsInGroup = realGroup
+                return msg
+            end
+
+            local ok, err = pcall(function() ns:RefreshMythicPlus() end)
+            if not ok then return restore("the page errored: " .. tostring(err)) end
+
+            local contentH = f._contentH or 0
+            if contentH <= 0 then return restore("the page reported no height") end
+
+            -- Everything the page drew, measured against the room it
+            -- said it had. Textures carry the keystone rows; a row that
+            -- ends below the floor is one the player sees on top of the
+            -- tab strip.
+            local pool, n = f._texs or {}, f._texCount or 0
+            if n == 0 then return restore("the page drew no textures at all") end
+
+            local worst, worstBy = nil, 0
+            for i = 1, n do
+                local t = pool[i]
+                if t and t:IsShown() then
+                    local _, _, _, _, oy = t:GetPoint(1)
+                    local h = t:GetHeight() or 0
+                    if oy then
+                        -- Points are negative offsets from the content's
+                        -- top-left, so the bottom edge is oy - h.
+                        local bottom = -(oy - h)
+                        if bottom > contentH and (bottom - contentH) > worstBy then
+                            worst, worstBy = i, bottom - contentH
+                        end
+                    end
+                end
+            end
+            if worst then
+                return restore(string.format(
+                    "a drawn row runs %.0fpx past the %.0fpx page",
+                    worstBy, contentH))
+            end
+            return restore("ok:" .. n)
+        end
+    """)(ns)
+    if overflow and str(overflow).startswith("ok:"):
+        print("  ok   keystone overflow: a full group's keys stay inside the "
+              "page (%s drawn pieces measured)" % str(overflow)[3:])
+    else:
+        print("  FAIL keystone overflow: %s" % overflow)
+        failures.append(("keystone overflow", str(overflow)))
+
 
     # The week you lose by spending in the wrong order.
     #
@@ -4330,6 +6226,14 @@ def main():
             local ui = ns.GearPageUI
             local card = ui and ui.cards and ui.cards[8]
             if not card then return restore("no card for the Feet slot") end
+
+            -- Nothing heads the improvements list any more. The strip of
+            -- per-wallet sentences that used to sit above the first row
+            -- moved onto the crest tiles, and its pool went with it -- so
+            -- a pool reappearing here is the old layout creeping back.
+            if ui.outlookLines then
+                return restore("the gear page grew a per-wallet strip again")
+            end
             local g = card.freeGlow
             if not g then return restore("the card has no free-upgrade border") end
 
@@ -4815,7 +6719,9 @@ def main():
         end
     """)(ns)
     if suggest and str(suggest).startswith("ok:"):
-        print("  ok   suggestions render: %s elements" % str(suggest)[3:])
+        print("  ok   suggestions render: %s elements, rows only — the "
+              "per-wallet strip that used to head them is gone"
+              % str(suggest)[3:])
     else:
         print("  FAIL suggestions render: %s" % suggest)
         failures.append(("suggestions render", str(suggest)))
@@ -6218,6 +8124,38 @@ def main():
             if not ok then return "rail build failed: " .. tostring(err) end
             if #(Shell._crestTiles or {}) ~= #(ns.CRESTS or {}) then
                 return "rail drew " .. #(Shell._crestTiles or {}) .. " crest tiles"
+            end
+
+            -- What a whole wallet can do lives on the tile's hover now.
+            -- It used to be a strip of sentences above the improvements
+            -- list, which put a paragraph about Champion between the
+            -- player and the slots it was about -- and the helper behind
+            -- it had already gone a whole release with no caller at all,
+            -- so a tile that cannot answer is exactly how it dies again.
+            --
+            -- The hover is driven, not just inspected: a tile knowing its
+            -- track proves nothing if OnEnter never asks.
+            local advised = 0
+            for _, tile in ipairs(Shell._crestTiles) do
+                if not tile._track then
+                    return "a crest tile does not know which wallet it is"
+                end
+                local line = ns:GetTrackPolicyLine(tile._track)
+                if line then
+                    advised = advised + 1
+                    if line:find("^" .. tile._track) then
+                        return "the tile hover repeats the currency's own name"
+                    end
+                end
+                tile._currencyID = tile._currencyID or 1
+                GameTooltip._lines = {}
+                local ok2, err2 = pcall(tile:GetScript("OnEnter"), tile)
+                if not ok2 then
+                    return "the crest hover errors: " .. tostring(err2)
+                end
+            end
+            if advised == 0 then
+                return "no crest tile can say anything about its wallet"
             end
 
             -- The rule sits under the heading and spans its full width,
@@ -7917,6 +9855,10 @@ def main():
             ns.lootBrowserState = ns.lootBrowserState or {}
             ns.lootBrowserState.selectedClassID = 1
             ns.lootBrowserState.selectedSpecID = 71
+            -- Every sweep now waits while the player's Adventure Guide is
+            -- open, so a stub that reads as shown parks the pass forever.
+            EncounterJournal = EncounterJournal or CreateFrame("Frame")
+            EncounterJournal.IsShown = function() return false end
             -- The instance cache too, not just the loot cache: with it
             -- already warm the sweep is a fraction of its real size and
             -- the test would be measuring almost nothing.
@@ -8049,117 +9991,6 @@ def main():
         else:
             print("  ok   bindings: %d binding(s), each named and pointing at a real function"
                   % len(found))
-
-    # Other people's interrupts land on the tracker.
-    #
-    # The tracker cannot read a party member's spell id -- it is secret
-    # once tainted -- so somebody else's kick is inferred: their cast is
-    # noted by timestamp, and an enemy's interrupt event within a moment
-    # of it is attributed to them. That makes WHICH unit tokens count the
-    # whole mechanism, and it used to be nameplates alone, which fails
-    # entirely for anyone with enemy nameplates off.
-    interrupts = L.eval("""
-        function(ns)
-            local I, S = ns.Interrupts, ns.InterruptsSettings
-            if not (I and S) then return "the interrupt tracker is not loaded" end
-
-            local saved = {}
-            local function stub(name, fn) saved[name] = _G[name]; _G[name] = fn end
-            local clock = 1000
-            stub("GetTime", function() return clock end)
-            stub("IsInGroup", function() return true end)
-            stub("UnitExists", function(u)
-                return u == "player" or u == "party1" or u == "party2"
-                    or u == "target" or u == "nameplate1" or u == "nameplate2"
-            end)
-            stub("UnitName", function(u) return u end)
-            stub("UnitClass", function(u)
-                if u == "party1" then return "Shaman", "SHAMAN" end
-                if u == "party2" then return "Mage", "MAGE" end
-                return "Warrior", "WARRIOR"
-            end)
-            local function creature(u)
-                if u == "target" or u == "nameplate1" then return "Creature-1" end
-                if u == "nameplate2" then return "Creature-2" end
-                return "P-" .. tostring(u)
-            end
-            stub("UnitGUID", creature)
-            -- The tracker deduplicates with unit tokens now, because enemy
-            -- guids come back secret in Midnight. Same two mobs, asked the
-            -- way the addon asks.
-            stub("UnitIsUnit", function(a, b) return creature(a) == creature(b) end)
-
-            local wasEnabled = S:Get("enabled")
-            S:Set("enabled", true)
-            FireEvent("GROUP_ROSTER_UPDATE")
-
-            local function onCd(unit)
-                local e = I.state[UnitGUID(unit)]
-                return (e and e.readyAt and e.readyAt > clock) and true or false
-            end
-            local function kick(caster, enemy)
-                clock = clock + 60
-                FireEvent("UNIT_SPELLCAST_SUCCEEDED", caster, "c", 57994)
-                clock = clock + 0.05
-                FireEvent("UNIT_SPELLCAST_INTERRUPTED", enemy)
-            end
-            local function finish(msg)
-                S:Set("enabled", wasEnabled)
-                for name, fn in pairs(saved) do _G[name] = fn end
-                return msg
-            end
-
-            if onCd("party1") then return finish("a cooldown was running before anybody kicked") end
-
-            kick("party1", "nameplate1")
-            if not onCd("party1") then
-                return finish("a party kick reported on a nameplate was not attributed")
-            end
-
-            kick("party2", "target")
-            if not onCd("party2") then
-                return finish("a party kick reported on the target was ignored -- "
-                    .. "nameplates are not the only way this event arrives")
-            end
-
-            -- One kick, reported on both tokens for the same enemy. The
-            -- duplicate must not consume a second player's cast.
-            clock = clock + 60
-            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party1", "c", 57994)
-            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party2", "c", 2139)
-            clock = clock + 0.05
-            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate1")
-            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "target")
-            if onCd("party1") and onCd("party2") then
-                return finish("one interrupt reported twice put two people on cooldown")
-            end
-            if not (onCd("party1") or onCd("party2")) then
-                return finish("one interrupt reported twice attributed to nobody")
-            end
-
-            -- The other side of the same window: two DIFFERENT mobs kicked
-            -- close together are two kicks, and dropping the second would
-            -- leave a real cooldown untracked.
-            clock = clock + 300
-            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party1", "c", 57994)
-            FireEvent("UNIT_SPELLCAST_SUCCEEDED", "party2", "c", 2139)
-            clock = clock + 0.05
-            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate1")
-            FireEvent("UNIT_SPELLCAST_INTERRUPTED", "nameplate2")
-            if not (onCd("party1") and onCd("party2")) then
-                return finish("two enemies kicked in the same window counted as one")
-            end
-
-            return finish("ok:nameplate and target both attribute, duplicates charge "
-                .. "one player, two enemies charge two")
-        end
-    """)(ns)
-    if interrupts and str(interrupts).startswith("ok:"):
-        print("  ok   interrupts: other players' kicks are attributed (%s)"
-              % str(interrupts)[3:])
-    else:
-        print("  FAIL interrupts: %s" % interrupts)
-        failures.append(("interrupts", str(interrupts)))
 
     # The ready check survives being refused the aura list.
     #

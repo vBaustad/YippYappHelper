@@ -312,7 +312,25 @@ local WORLD_BOSS_INSTANCE_ID = 1312
 -- spinner for, not background work, so the useful trade is fewer frames
 -- rather than a smoother framerate during them: at 8ms it gave back half
 -- of every frame and took twice as long to show anything.
-local SCAN_BUDGET_MS = 16
+local SCAN_BUDGET_FOREGROUND_MS = 16
+------------------------------------------------------------------------
+-- ...and the exact opposite trade for the login prewarm.
+--
+-- The reasoning above is sound and was applied to both kinds of scan,
+-- which was the bug: the prewarm is precisely the case where NOBODY is
+-- watching a spinner. Taking a full frame's budget every frame for a
+-- sweep of every tier of every expansion caps the client at roughly
+-- 30fps for as long as it runs -- seconds, a few seconds after a
+-- loading screen, for a panel the player has not opened and may never
+-- open this session.
+--
+-- 4ms costs the prewarm about four times the wall clock and nobody can
+-- tell, because nothing is waiting on it. If a real request turns up
+-- mid-sweep the background pass yields the journal to it anyway, and the
+-- foreground scan it becomes uses the budget above.
+------------------------------------------------------------------------
+local SCAN_BUDGET_BACKGROUND_MS = 4
+local scanBudgetMs = SCAN_BUDGET_FOREGROUND_MS
 local sliceStartedAt = 0
 
 --- Hands the frame back if this slice has used its budget.
@@ -332,7 +350,7 @@ local sliceStartedAt = 0
 local function ScanYield()
     local co, isMain = coroutine.running()
     if not co or isMain then return end
-    if debugprofilestop() - sliceStartedAt >= SCAN_BUDGET_MS then
+    if debugprofilestop() - sliceStartedAt >= scanBudgetMs then
         coroutine.yield()
     end
 end
@@ -344,6 +362,22 @@ end
 --- pcall'd body dies with "attempt to yield across metamethod/C-call
 --- boundary". Anything this calls may still pcall freely -- the rule is
 --- only that nothing yields INSIDE one.
+------------------------------------------------------------
+-- Sanity bounds for the journal walks below.
+--
+-- Every one of them is a `while true` whose only exit is the Encounter
+-- Journal returning nil for the next index. That is the documented
+-- shape, and it is also a hang if the journal ever declines to say no --
+-- which is a real risk precisely where this runs, a few seconds after a
+-- loading screen, on the API that is least settled at that moment.
+--
+-- Set far above anything the game ships so they never fire in normal
+-- use. They are not a limit on content; they are the difference between
+-- a bug that stops and a bug that takes the client with it.
+------------------------------------------------------------
+local MAX_INSTANCES_PER_TIER = 500
+local MAX_BOSSES_PER_INSTANCE = 100
+
 local function BuildInstanceCacheWork()
         local instances = { dungeons = {}, raids = {}, worldBosses = {} }
 
@@ -357,7 +391,7 @@ local function BuildInstanceCacheWork()
             ScanYield()
             EJ_SelectTierCompat(tier)
             local index = 1
-            while true do
+            while index <= MAX_INSTANCES_PER_TIER do
                 ScanYield()
                 local instanceID, name = EJ_GetInstanceByIndexCompat(index, false)
                 if not instanceID then break end
@@ -366,7 +400,8 @@ local function BuildInstanceCacheWork()
                     EJ_SelectInstanceCompat(instanceID)
                     local bosses = {}
                     local bi = 1
-                    while true do
+                    while bi <= MAX_BOSSES_PER_INSTANCE do
+                        ScanYield()
                         local bossName, _, bossID = EJ_GetEncounterInfoByIndexCompat(bi)
                         if not bossName then break end
                         table.insert(bosses, { name = bossName, encounterID = bossID })
@@ -405,15 +440,22 @@ local function BuildInstanceCacheWork()
 
         EJ_SelectTierCompat(currentTier)
 
+        -- The raid half yielded NOWHERE. The dungeon walk above hands
+        -- the frame back at each tier and each instance, and this ran
+        -- every raid of every expansion, and every boss inside each one,
+        -- in a single unbroken stretch -- so the budget the scanner is
+        -- built around simply did not apply to half its work.
         local raidIdx = 1
-        while true do
+        while raidIdx <= MAX_INSTANCES_PER_TIER do
+            ScanYield()
             local instanceID, name = EJ_GetInstanceByIndexCompat(raidIdx, true)
             if not instanceID then break end
 
             EJ_SelectInstanceCompat(instanceID)
             local bosses = {}
             local bi = 1
-            while true do
+            while bi <= MAX_BOSSES_PER_INSTANCE do
+                ScanYield()
                 local bossName, _, bossID = EJ_GetEncounterInfoByIndexCompat(bi)
                 if not bossName then break end
                 table.insert(bosses, { name = bossName, encounterID = bossID })
@@ -439,8 +481,124 @@ local function BuildInstanceCacheWork()
     return instances
 end
 
+------------------------------------------------------------------------
+-- The instance list is static until the game patches.
+--
+-- Which raids and dungeons exist, and which bosses are in them, does not
+-- change while anybody is playing -- and yet finding it out costs a walk
+-- through every tier of every expansion in the Encounter Journal, once
+-- per session, for the life of the addon.
+--
+-- So it is written down. The stamp is the game's interface version plus
+-- our own, because either one changing is a reason to look again: a
+-- patch can add an instance, and an addon update can change which
+-- dungeons we consider seasonal.
+--
+-- This does not make the loot itself free -- that is still fetched per
+-- boss -- but it removes the discovery walk, which is the part that runs
+-- at login whether or not anybody opens the panel.
+------------------------------------------------------------------------
+local function CacheStamp()
+    local ifaceOk, iface = pcall(function() return select(4, GetBuildInfo()) end)
+    local addonVer
+    if C_AddOns and C_AddOns.GetAddOnMetadata then
+        local ok, v = pcall(C_AddOns.GetAddOnMetadata, "YippYappHelper", "Version")
+        if ok then addonVer = v end
+    end
+    return ("%s-%s"):format(
+        ifaceOk and tostring(iface) or "?",
+        tostring(addonVer or "?"))
+end
+
+------------------------------------------------------------------------
+-- ...and so is the loot hanging off it.
+--
+-- Which items a boss drops is as fixed as which bosses exist: it changes
+-- when the game patches and at no other time. Fetching it costs the bulk
+-- of the sweep -- the instance walk finds a few dozen bosses, and then
+-- every one of them is asked for its loot at every difficulty -- and it
+-- was being paid again on every reload.
+--
+-- Stored whole, links included. The compact form would be item ids with
+-- the rest rebuilt on load, and it was not worth it: a row's name and
+-- icon come back asynchronously from the client, so dropping them trades
+-- disk for a panel that renders blank until item data arrives. This is
+-- larger on disk and identical in behaviour.
+--
+-- Keyed by spec and slot filter, exactly as in memory, so a player who
+-- only ever looks at one filter only ever stores one.
+------------------------------------------------------------------------
+-- Forward declaration: the check lives next to FinishScan, where the
+-- reason for it is, but the load path needs it too -- a bad pass already
+-- written to disk has to be refused on the way back in, or the guard
+-- only protects players who did not already have one.
+local EveryBossIdentical
+
+local function SaveLootRows()
+    YippYappHelperDB = YippYappHelperDB or {}
+    -- A shallow copy, because the live table gets wiped and the saved one
+    -- must not go with it. The entries below the top level are replaced
+    -- wholesale rather than edited, so sharing them is safe.
+    local copy = {}
+    for key, rows in pairs(lootBrowserCache) do copy[key] = rows end
+    YippYappHelperDB.lootRows = { stamp = CacheStamp(), data = copy }
+end
+
+local lootRowsLoaded = false
+local function LoadLootRows()
+    if lootRowsLoaded then return end
+    lootRowsLoaded = true
+
+    local db = YippYappHelperDB and YippYappHelperDB.lootRows
+    if type(db) ~= "table" or db.stamp ~= CacheStamp() then return end
+    if type(db.data) ~= "table" then return end
+
+    for key, rows in pairs(db.data) do
+        -- Shape-checked, and empties refused. This came off disk, and an
+        -- empty list is not a cache -- it is a scan that failed once and
+        -- would otherwise be served as fact forever.
+        if type(key) == "string" and type(rows) == "table" and #rows > 0
+            and not EveryBossIdentical(rows) then
+            lootBrowserCache[key] = rows
+        end
+    end
+end
+
+-- Published for Tools/loadcheck.py, which has to seed a saved copy that
+-- the addon will actually accept. A test that composed the stamp itself
+-- would pass while the real one drifted.
+function ns:LootCacheStamp() return CacheStamp() end
+
+local function LoadSavedInstances()
+    local db = YippYappHelperDB and YippYappHelperDB.lootInstances
+    if type(db) ~= "table" then return nil end
+    if db.stamp ~= CacheStamp() then return nil end
+    local d = db.data
+    -- Shape-checked rather than trusted. This came off disk and a
+    -- half-written table would fail much further away, in a render.
+    if type(d) ~= "table" or type(d.dungeons) ~= "table"
+        or type(d.raids) ~= "table" or type(d.worldBosses) ~= "table" then
+        return nil
+    end
+    if #d.dungeons == 0 and #d.raids == 0 then return nil end
+    return d
+end
+
+local function SaveInstances(data)
+    if type(data) ~= "table" then return end
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.lootInstances = { stamp = CacheStamp(), data = data }
+end
+
 local function BuildInstanceCache()
     if instanceCache then return instanceCache end
+
+    -- Written down last time, and nothing has patched since.
+    local saved = LoadSavedInstances()
+    if saved then
+        instanceCache = saved
+        return saved
+    end
 
     SuppressEJ()
 
@@ -464,6 +622,7 @@ local function BuildInstanceCache()
     end
 
     instanceCache = result
+    SaveInstances(result)
     return result
 end
 
@@ -568,6 +727,29 @@ end
 ------------------------------------------------------------------------
 -- Loot Scanning
 ------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- Did the journal answer for the boss we asked about?
+--
+-- Set true when it did not. The journal has one global selection, so
+-- between our EJ_SelectEncounter and our read of the loot, anything else
+-- driving it -- another addon, or Blizzard's own panels -- can move that
+-- selection, and the loot we then read belongs to a different boss.
+--
+-- That is how nine bosses came to list the same ten items. The shape of
+-- the result gives it away when EVERY boss matches, and
+-- EveryBossIdentical catches that case, but a selection that moves once
+-- part-way through a sweep corrupts some rows and not others -- which
+-- looks entirely plausible and would be cached and served as fact.
+--
+-- This is the exact test rather than the heuristic: every loot row the
+-- journal hands back names the encounter it belongs to, so a row that
+-- names a different one is proof the selection moved under us.
+--
+-- One flag rather than plumbing a return value through three layers:
+-- only one pass runs at a time, and StartScan clears it.
+------------------------------------------------------------------------
+local scanTainted = false
+
 local function ScanLootForEncounter(instanceID, encounterID, difficultyID, classID, specID, slotFilter)
     local items = {}
     EJ_SelectInstanceCompat(instanceID)
@@ -586,6 +768,17 @@ local function ScanLootForEncounter(instanceID, encounterID, difficultyID, class
     while true do
         local info = EJ_GetLootInfoByIndexCompat(index)
         if not info or not info.name then break end
+        -- Checked only when the journal says which boss it means. The
+        -- field is not guaranteed across client versions, and an absent
+        -- one is "cannot verify", not "wrong".
+        if info.encounterID and encounterID
+            and info.encounterID ~= encounterID then
+            scanTainted = true
+            -- Nothing from this read is trustworthy: the selection has
+            -- already moved, so the rows before this one may be another
+            -- boss's too.
+            return {}
+        end
         -- Skip entries without an itemID. The loot browser shows an icon
         -- + tooltip for every row; without an itemID neither hyperlink
         -- nor SetItemByID resolves, so the entry would render as a
@@ -686,6 +879,66 @@ local function CancelScan()
     ns.isLootScanning = false
 end
 
+--- Is the player looking at the journal we are about to drive?
+---
+--- The sweep works by moving the Encounter Journal's own selection --
+--- instance, difficulty, slot filter -- and reading what comes back.
+--- That is fine against a closed journal and rude against an open one:
+--- every selection we make re-renders Blizzard's panel, so our 16ms
+--- slice budget turned into 70-112ms slices the moment the Adventure
+--- Guide was on screen. Measured, from a player who opened it while a
+--- background sweep was running.
+---
+--- It is also their window. Our scan changes what it is showing while
+--- they are reading it.
+local function JournalIsOpen()
+    return EncounterJournal and EncounterJournal.IsShown
+        and EncounterJournal:IsShown() and true or false
+end
+
+------------------------------------------------------------------------
+-- Does this pass say every boss drops the same thing?
+--
+-- Then it is not loot, it is one encounter's loot copied across every
+-- row. The Encounter Journal has a single global selection, so anything
+-- that re-selects underneath a running sweep -- the player browsing the
+-- Adventure Guide was the case that found this -- makes
+-- EJ_GetLootInfoByIndex answer for whichever encounter won rather than
+-- the one being asked about.
+--
+-- Caught here as well as prevented upstream, because prevention is a
+-- guess about every way the selection can move and this is a fact about
+-- the result. And the cost of being wrong changed: these rows are
+-- written to disk now, so a bad pass used to last a session and would
+-- otherwise last until the next patch.
+--
+-- Four entries before it will call anything, and every one of them has
+-- to match. Two bosses sharing a short filtered list is ordinary; four
+-- sharing an identical one is not.
+------------------------------------------------------------------------
+function EveryBossIdentical(results)
+    if type(results) ~= "table" or #results < 4 then return false end
+
+    local first
+    for _, entry in ipairs(results) do
+        local ids = {}
+        for _, items in pairs(entry.items or {}) do
+            for _, item in ipairs(items) do
+                ids[#ids + 1] = tostring(item.itemID or "?")
+            end
+        end
+        if #ids == 0 then return false end
+        table.sort(ids)
+        local sig = table.concat(ids, ",")
+        if not first then
+            first = sig
+        elseif sig ~= first then
+            return false
+        end
+    end
+    return true
+end
+
 local function FinishScan(ok, results)
     local scan = activeScan
     activeScan = nil
@@ -700,8 +953,22 @@ local function FinishScan(ok, results)
     -- before the journal has necessarily populated its loot map, and a
     -- cached `{}` would leave the panel blank until something forced the
     -- cache to clear.
-    if ok and results and #results > 0 then
+    -- ...and never cache one gathered around an open journal.
+    --
+    -- Slices are skipped while the Adventure Guide is up, but the guide
+    -- can be opened partway through one -- the check happens once per
+    -- frame, not once per journal call. That window is enough to read a
+    -- boss's loot out of whichever encounter the journal had selected
+    -- instead, and a wrong answer written to the cache is served again
+    -- for the rest of the session.
+    --
+    -- Throwing the pass away costs a rescan. Keeping it cost nine bosses
+    -- listing the same ten items.
+    if ok and results and #results > 0 and not JournalIsOpen()
+        and not scanTainted and not EveryBossIdentical(results) then
         lootBrowserCache[scan.key] = results
+        -- Written down so the next session does not pay for this again.
+        SaveLootRows()
     end
 
     UnsuppressEJ()
@@ -721,9 +988,32 @@ local function FinishScan(ok, results)
     end
 end
 
-scanRunner:SetScript("OnUpdate", function(self)
+local function RunSlice(self)
     local scan = activeScan
     if not scan then self:Hide(); return end
+
+    ------------------------------------------------------------
+    -- Every sweep waits, foreground included.
+    --
+    -- The first cut let a foreground scan through on the grounds that
+    -- the player had asked our panel a question and was owed an answer.
+    -- That was wrong, and the symptom showed it: the journal has ONE
+    -- global selection, so while it is open our EJ_SelectEncounter and
+    -- the journal's own re-selection fight over it -- and
+    -- EJ_GetLootInfoByIndex then answers for whichever encounter won.
+    --
+    -- Reported as a Raids page where all nine bosses listed the same ten
+    -- items. That is not a slow answer, it is a wrong one, and it was
+    -- being written into the cache to be served again later.
+    --
+    -- Waiting is the only safe option. A delayed panel is a nuisance; a
+    -- panel confidently showing one boss's loot under every boss's name
+    -- is worse than no panel.
+    ------------------------------------------------------------
+    if JournalIsOpen() then
+        scan.waitedForJournal = true
+        return
+    end
 
     sliceStartedAt = debugprofilestop()
     local ok, res = coroutine.resume(scan.co)
@@ -732,24 +1022,58 @@ scanRunner:SetScript("OnUpdate", function(self)
     elseif coroutine.status(scan.co) == "dead" then
         FinishScan(true, res)
     end
+end
+
+-- Named for the tracer.
+--
+-- This is where the sweep actually spends the client's frames, and it is
+-- an OnUpdate script on a local frame -- so nothing hanging off `ns`
+-- could ever see it. The first real stall this addon caught was 9.6
+-- seconds long and reported "not inside anything we wrap", which was
+-- true and told us nothing.
+--
+-- One slice is supposed to be about 16ms. Anything near a second means
+-- the budget is not being honoured somewhere inside the walk, and this
+-- says so by name.
+scanRunner:SetScript("OnUpdate", function(self)
+    if ns.Trace and ns.Trace.on then
+        return ns.Trace:Section("loot: sweep slice", RunSlice, self)
+    end
+    return RunSlice(self)
 end)
 
 --- Begins a pass. The coroutine body is the old synchronous sweep.
 StartScan = function(cacheKey, classID, specID, slotFilter, background)
     SuppressEJ()
+    scanTainted = false
     ns.isLootScanning = true
+    -- Read by ScanYield on every slice of this pass. Set here rather
+    -- than carried on activeScan because ScanYield is also reachable
+    -- from the synchronous journal-link index, which has no scan.
+    scanBudgetMs = background and SCAN_BUDGET_BACKGROUND_MS
+                              or SCAN_BUDGET_FOREGROUND_MS
 
     activeScan = {
         key = cacheKey,
         background = background and true or false,
         co = coroutine.create(function()
+            -- Marked rather than timed: this yields, so its elapsed time
+            -- would be the wall clock it was parked across rather than
+            -- the work it did. The label is the point -- the frame
+            -- watchdog reads it, so a stall inside the cache build says
+            -- so instead of shrugging.
+            local prev = ns.Trace and ns.Trace:Mark("loot: instance cache")
             if not instanceCache and not BuildInstanceCache() then
+                if ns.Trace then ns.Trace:Unmark(prev) end
                 error("could not load instance data", 0)
             end
+            if ns.Trace then ns.Trace:Unmark(prev) end
             local r = {}
+            prev = ns.Trace and ns.Trace:Mark("loot: journal sweep")
             ScanSourceType(r, instanceCache.dungeons,    "dungeon",   ns.LOOT_DIFFICULTIES.DUNGEON,    classID, specID, slotFilter)
             ScanSourceType(r, instanceCache.raids,       "raid",      ns.LOOT_DIFFICULTIES.RAID,       classID, specID, slotFilter)
             ScanSourceType(r, instanceCache.worldBosses, "worldboss", ns.LOOT_DIFFICULTIES.WORLD_BOSS, classID, specID, slotFilter)
+            if ns.Trace then ns.Trace:Unmark(prev) end
             return r
         end),
     }
@@ -765,6 +1089,10 @@ function ns:ScanLootBrowserSlot(specIndex, slotFilter, background)
     local classID = ns.lootBrowserState.selectedClassID or select(3, UnitClass("player"))
     local specID = ns.lootBrowserState.selectedSpecID
         or GetSpecializationInfoForClassID(classID, specIndex)
+
+    -- The written-down copy, once per session, before anything decides a
+    -- scan is needed.
+    LoadLootRows()
 
     local cacheKey = specID .. "-" .. slotFilter
     if lootBrowserCache[cacheKey] then
@@ -826,6 +1154,43 @@ local journalLinks = nil
 local journalTriedAt = nil
 local JOURNAL_RETRY = 30
 
+------------------------------------------------------------------------
+-- The index is another thing that only changes when the game patches.
+--
+-- It maps an item id to the journal's own link for it, and building it
+-- is a third walk of the Encounter Journal -- once per session, lazily,
+-- the first time the Best in Slot or Trinkets page asks about a row.
+-- Which item the journal lists for a boss does not change between
+-- reloads any more than the boss list does.
+--
+-- Same stamp as the instance list and the loot rows, so a patch or an
+-- addon update invalidates all three together and nothing else
+-- invalidates any of them.
+------------------------------------------------------------------------
+local function SaveJournalLinks()
+    if not journalLinks or not next(journalLinks) then return end
+    YippYappHelperDB = YippYappHelperDB or {}
+    -- Safe by reference: each build assigns a fresh table, so dropping
+    -- our own handle later does not empty the saved one.
+    YippYappHelperDB.lootLinks = { stamp = CacheStamp(), data = journalLinks }
+end
+
+local journalLinksLoaded = false
+local function LoadJournalLinks()
+    if journalLinksLoaded then return end
+    journalLinksLoaded = true
+
+    local db = YippYappHelperDB and YippYappHelperDB.lootLinks
+    if type(db) ~= "table" or db.stamp ~= CacheStamp() then return end
+    if type(db.data) ~= "table" or not next(db.data) then return end
+
+    -- Never accept an empty index, for the same reason one is never
+    -- written: the journal is not always populated when first asked, and
+    -- an empty one served as fact leaves every page showing base items
+    -- with no way to recover.
+    journalLinks = db.data
+end
+
 -- Highest difficulty per source type, mirroring LOOT_DIFFICULTIES.
 local BEST_DIFFICULTY = { dungeon = 23, raid = 16, worldboss = 0 }
 
@@ -864,6 +1229,8 @@ end
 --- spec's list would silently come back empty.
 function ns:GetJournalItemLink(itemID)
     if not itemID then return nil end
+    -- Last session's index, before deciding a walk is needed.
+    LoadJournalLinks()
     if journalLinks then return journalLinks[itemID] end
     if journalTriedAt and (time() - journalTriedAt) < JOURNAL_RETRY then
         return nil
@@ -891,6 +1258,8 @@ function ns:GetJournalItemLink(itemID)
         journalLinks = nil
     else
         journalTriedAt = nil
+        -- Written down so the next session does not walk for this again.
+        SaveJournalLinks()
     end
 
     UnsuppressEJ()
@@ -1377,9 +1746,22 @@ function ns:ClearLootBrowserCache()
     wipe(lootBrowserCache)
 end
 
-function ns:ClearAllLootBrowserCaches()
+function ns:ClearAllLootBrowserCaches(forgetSaved)
     wipe(lootBrowserCache)
     instanceCache = nil
+    -- The written-down copy survives by default: it is the thing that
+    -- stops the walk happening every session, so dropping it on every
+    -- routine invalidation would defeat the point. `forgetSaved` is for
+    -- when the list itself is suspect rather than the loot hanging off
+    -- it.
+    if forgetSaved and YippYappHelperDB then
+        YippYappHelperDB.lootInstances = nil
+        YippYappHelperDB.lootRows = nil
+        YippYappHelperDB.lootLinks = nil
+        lootRowsLoaded = false
+        journalLinksLoaded = false
+        journalLinks = nil
+    end
 end
 
 ------------------------------------------------------------------------
@@ -1775,6 +2157,7 @@ local ejFrame = CreateFrame("Frame")
 local lbRefreshPending = false
 ejFrame:RegisterEvent("EJ_LOOT_DATA_RECIEVED")
 ejFrame:RegisterEvent("EJ_DIFFICULTY_UPDATE")
+
 ejFrame:SetScript("OnEvent", function()
     if not ns.isLootScanning then
         -- Only invalidate + refresh when the panel is open; keep the cache
@@ -1805,7 +2188,64 @@ local EISFT = Enum.ItemSlotFilterType
 local prewarmFrame = CreateFrame("Frame")
 prewarmFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 prewarmFrame:SetScript("OnEvent", function(self)
+    ------------------------------------------------------------
+    -- Not while the player is inside an instance.
+    --
+    -- This guard used to live inside the load-gate closure below, which
+    -- meant it only ever ran under `/yh loadtest loot` -- the by-hand
+    -- path, where the player has explicitly asked for the work and the
+    -- guard is least wanted. On the normal path, which is the one every
+    -- session takes, the gate returns "go ahead", the closure is never
+    -- called, and the sweep ran on the way into dungeons exactly as
+    -- before. The protection read as present and was not.
+    --
+    -- Note the order against the unregister below: bailing here keeps
+    -- the event registered, so the next loading screen asks again.
+    ------------------------------------------------------------
+    if IsInInstance and IsInInstance() then return end
     self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    -- Held back while hunting a freeze. This walks every tier of every
+    -- expansion through the Encounter Journal a few seconds after a
+    -- loading screen, which puts it squarely in the window under
+    -- suspicion -- so it gets a name and can be run by hand instead.
+    if ns.LoadGateOpen and not ns.LoadGateOpen("loot", function()
+        ------------------------------------------------------------
+        -- Run by hand, so the instance guard above deliberately does
+        -- not apply: asking for the work IS asking for it here.
+        --
+        -- This is a nicety -- it makes the first panel open feel
+        -- instant -- and it is thousands of journal calls, five seconds
+        -- after a loading screen, on a client that is still busy with
+        -- one. Zoning into a dungeon is the version of that where the
+        -- player is least able to afford it.
+        --
+        -- Deliberately NOT claiming the client loads journal data on
+        -- zone-in: that was asserted here and never verified. What IS
+        -- established, by this file's own scars, is that the journal
+        -- populates asynchronously and is not ready when first asked --
+        -- see the EJ_LOOT_DATA_RECIEVED handling and the five-second
+        -- delay below. Doing a long walk through it during a zone is bad
+        -- on those grounds alone.
+        --
+        -- Reported as freezing on the way in and out of dungeons, and on
+        -- reloading inside one. Waiting costs a slower first open once,
+        -- outside.
+        ------------------------------------------------------------
+        if ns.LootBrowser_DetectSpec then ns:LootBrowser_DetectSpec() end
+        local state = ns.lootBrowserState
+        if not state.selectedSpecIndex then return end
+        ns:ScanLootBrowserSlot(state.selectedSpecIndex, EISFT.NoFilter, true)
+    end, function()
+        -- The sweep runs on a coroutine driven by an OnUpdate, so the
+        -- call above returns long before the work does.
+        return ns.IsLootScanRunning and ns:IsLootScanRunning() or false
+    end, function()
+        -- The expensive half is the instance cache -- every tier of
+        -- every expansion -- and it is built once and kept. Run by hand
+        -- without this, the sweep finds it already there and reports the
+        -- cost of nothing.
+        ns:ClearAllLootBrowserCaches()
+    end) then return end
     -- First pass at 5s: EJ has usually populated its initial map by then.
     C_Timer.After(5, function()
         if ns.LootBrowser_DetectSpec then ns:LootBrowser_DetectSpec() end

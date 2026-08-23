@@ -18,7 +18,6 @@ local _, ns = ...
 -- saved-variable layout changes and no migration is needed.
 ------------------------------------------------------------
 
-local S = ns.InterruptsSettings
 
 local registered = false
 
@@ -40,13 +39,6 @@ local function AddCheckbox(category, key, name, tooltip, get, set)
         function(v) set(v and true or false) end)
     Settings.CreateCheckbox(category, setting, tooltip)
     return setting
-end
-
---- Interrupt-tracker options all live in one table, so they share a path.
-local function AddTrackerCheckbox(category, key, name, tooltip)
-    return AddCheckbox(category, "trk_" .. key, name, tooltip,
-        function() return S:Get(key) end,
-        function(v) S:Set(key, v) end)
 end
 
 --- A module toggle (YippYappHelperDB.modules), defaulting to on.
@@ -136,9 +128,6 @@ local function BuildAll(category, layout)
         function(v)
             if ns.ReadyCheck and ns.ReadyCheck.SetEnabled then ns.ReadyCheck.SetEnabled(v) end
         end)
-
-    AddTrackerCheckbox(category, "enabled", "Interrupt Tracker",
-        "Tracks party and raid interrupt cooldowns in a movable frame.")
 
     -- The trigger lives in the tooltip, not the label: this column is
     -- narrow enough that any suffix is truncated mid-word, which reads
@@ -230,15 +219,6 @@ local function BuildAll(category, layout)
         .. "battle res pool in the open world, so the timer never shows there.",
         function() local BR = ns.BattleResTimer; return BR and BR:IsShowOutOfCombat() end,
         function(v) local BR = ns.BattleResTimer; if BR then BR:SetShowOutOfCombat(v) end end)
-
-    AddHeader(layout, "Show the Interrupt Tracker when")
-    AddTrackerCheckbox(category, "visAlways", "Always",
-        "Overrides the rest -- the tracker stays up regardless of context.")
-    AddTrackerCheckbox(category, "visGroup", "In a group", nil)
-    AddTrackerCheckbox(category, "visInstance", "In dungeons and raids", nil)
-    AddTrackerCheckbox(category, "visMythicPlus", "During an active keystone", nil)
-    AddTrackerCheckbox(category, "visRaid", "In raid instances only", nil)
-    AddTrackerCheckbox(category, "visPvp", "In PvP and arenas", nil)
 
     AddHeader(layout, "Appearance and position")
     AddButton(layout, "All YippYapp frames", "Open Edit Mode",

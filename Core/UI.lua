@@ -595,11 +595,21 @@ function ns:RefreshSuggestions()
     end
 
     ------------------------------------------------------------
-    -- One ranked list, in the same order the shell's Improvements page
-    -- uses.
+    -- One ranked list, and nothing above it.
     --
-    -- This was grouped by crest track, with a budget header per group.
-    -- Three things were wrong with that. The headers restated the Crests
+    -- A strip of per-track sentences used to head this panel -- what
+    -- each wallet could do, three of them, before the first slot. It
+    -- read as a briefing: the player opened the panel to find out which
+    -- slot to spend on and got three paragraphs about wallets first.
+    -- Every fact in them was already true of the rows underneath, and
+    -- the rows say it about a slot the player can click. What is
+    -- genuinely per-wallet -- how far the whole tier gets, what a craft
+    -- has taken off the top -- moved onto the crest tiles in the shell's
+    -- character column, where a balance already lives; see
+    -- ns:GetTrackPolicyLine.
+    --
+    -- It was grouped by crest track before that, with a budget header per
+    -- group. Three things were wrong with that. The headers restated the Crests
     -- panel sitting directly above them, so the same balances appeared
     -- twice a hundred pixels apart. Grouping by wallet meant the list
     -- could not also be ordered by what to do first, so this panel and
@@ -610,7 +620,7 @@ function ns:RefreshSuggestions()
     -- The budget facts moved into the crest rows above, which is where a
     -- balance belongs. What is left here is the part only this list can
     -- give: the slots, ranked, with the reason each one sits where it
-    -- does.
+    -- does -- in the same order the shell's Improvements page uses.
     ------------------------------------------------------------
     local list = ns.GetRankedRecommendations and ns:GetRankedRecommendations() or {}
 
@@ -634,7 +644,7 @@ function ns:RefreshSuggestions()
             yOffset = yOffset + 22
         end
 
-        Card(r, ord >= 6)
+        Card(r, ord > (ns.RECOMMEND_LIT_MAX or 6))
     end
 
     if yOffset == 0 then

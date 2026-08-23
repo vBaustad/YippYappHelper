@@ -1037,7 +1037,130 @@ function ns:GetGuildKeystones()
     return guildKeystones
 end
 
+------------------------------------------------------------
+-- Two wires, one table.
+--
+-- The addon shared keys over its own prefix, which meant the Guild tab
+-- only ever listed people who also ran YippYapp -- so in practice it sat
+-- empty and told the player to go and evangelise an addon.
+--
+-- LibKeystone is what BigWigs, DBM and EllesmereUI all embed, on a
+-- shared "LibKS" prefix, and its frame answers a request the moment the
+-- file loads -- the host addon does not have to display anything, or
+-- even register a callback. So a guild full of BigWigs users answers,
+-- which is every guild.
+--
+-- Both wires still feed this, because a key from our own prefix is not
+-- wrong, just rarer. Whichever arrives is recorded the same way.
+------------------------------------------------------------
+local refreshPending = false
+local rosterBroadcastPending = false
+
+local function RecordKeystone(shortName, mapID, level, channel, rating)
+    if not (shortName and mapID and level) then return end
+    -- LibKeystone sends 0,0 for "no key" and -1,-1 for a guildie who has
+    -- asked to be hidden. Neither is a keystone, and both would render
+    -- as a dungeon called Unknown at level -1.
+    if level <= 0 or mapID <= 0 then return end
+
+    local name = C_ChallengeMode.GetMapUIInfo(mapID)
+    local entry = {
+        mapID = mapID,
+        level = level,
+        name = name or "Unknown",
+        ts = GetTime(),
+        -- Free from LibKeystone and not carried by our own prefix at
+        -- all. Stored rather than shown for now: the rows are already
+        -- dense, and a number nothing reads is better than a second
+        -- broadcast later to go and fetch it.
+        rating = rating,
+    }
+
+    if channel == "GUILD" then
+        -- Keyed by sender, so a large or hostile guild can grow this
+        -- without bound. Cap it: past a few hundred keys the list is
+        -- unreadable anyway, and the table is only wiped on a weekly
+        -- reset.
+        local count = 0
+        for _ in pairs(guildKeystones) do count = count + 1 end
+        if count < 300 or guildKeystones[shortName] then
+            guildKeystones[shortName] = entry
+        end
+    elseif shortName ~= UnitName("player") then
+        -- Our own broadcast echoes back on PARTY, and LibKeystone hands
+        -- us our own key directly on every Request so we show up when
+        -- ungrouped. The party list is about the other four.
+        partyKeystones[shortName] = entry
+    else
+        return
+    end
+
+    ------------------------------------------------------------
+    -- One redraw for the burst, not one per reply.
+    --
+    -- This redrew the whole page on every message, which was survivable
+    -- while the only repliers were other YippYapp users -- in practice
+    -- none. On the shared channel every BigWigs user in the guild
+    -- answers, so a single request into a large guild returns hundreds
+    -- of replies inside a second or two, and this asked for hundreds of
+    -- full page renders to draw a list that changed once.
+    --
+    -- Coalesced onto the end of the burst. The library already throttles
+    -- what WE send; nothing throttles what arrives.
+    ------------------------------------------------------------
+    if not refreshPending then
+        refreshPending = true
+        C_Timer.After(0.3, function()
+            refreshPending = false
+            if ns.RefreshMythicPlus then ns:RefreshMythicPlus() end
+            -- The after-key summary is usually the thing waiting on
+            -- this, and it is already on screen by the time replies land
+            -- -- so it has to be told, not just the M+ page.
+            if ns.RefreshCompletionPopup then ns.RefreshCompletionPopup() end
+        end)
+    end
+end
+
+------------------------------------------------------------
+-- The shared channel.
+--
+-- Registered against a table of our own rather than `ns`: the library
+-- keys its callback map by the object passed in, and handing it the
+-- addon namespace would let any other consumer in the same session
+-- unregister us by accident.
+--
+-- Guarded on the library being present. A .toc change needs a full
+-- client restart, not a reload, so somebody who updated and only
+-- reloaded is running the new Lua without the new library line -- and
+-- the old prefix below still works for them.
+------------------------------------------------------------
+local LibKeystone = LibStub and LibStub("LibKeystone", true)
+if LibKeystone then
+    local owner = {}
+    LibKeystone.Register(owner, function(level, mapID, rating, playerName, channel)
+        RecordKeystone(playerName, mapID, level, channel, rating)
+    end)
+end
+
+--- Ask the shared channel, when we have it.
+local function LibKSRequest(channel)
+    if not LibKeystone then return end
+    -- Errors on anything that is not PARTY or GUILD, and the library
+    -- checks IsInGroup/IsInGuild itself before sending.
+    LibKeystone.Request(channel)
+end
+
 local function SendKS(channel)
+    -- Checked HERE, not only where the send was scheduled.
+    --
+    -- Every one of these is fired from a timer, and the group you were
+    -- in when the timer was set is not necessarily the group you are in
+    -- when it goes off. Sending to PARTY without a party makes the
+    -- client answer "You aren't in a party." in chat -- which is how a
+    -- raid dissolving produced a screenful of them.
+    if channel == "PARTY" and not IsInGroup() then return end
+    if channel == "GUILD" and not IsInGuild() then return end
+
     local ks = ns:GetOwnKeystone()
     if not ks then return end
     local msg = string.format("KS:%d:%d", ks.mapID, ks.level)
@@ -1055,6 +1178,13 @@ function ns:BroadcastKeystone()
     -- Sending to RAID inside a raid is noisy and irrelevant.
     if IsInGroup() then SendKS("PARTY") end
     if IsInGuild() then SendKS("GUILD") end
+    -- LibKeystone has no send-only call: Request both asks and answers,
+    -- replying with our own key on the way out. That is the announcement
+    -- for anyone on the shared channel, and it is throttled inside the
+    -- library to one message per three seconds per channel, so the
+    -- timers stacked around this cannot turn into a burst.
+    if IsInGroup() then LibKSRequest("PARTY") end
+    if IsInGuild() then LibKSRequest("GUILD") end
 end
 
 -- Ask the guild to re-broadcast their keys
@@ -1063,6 +1193,9 @@ function ns:RequestGuildKeystones()
     C_ChatInfo.SendAddonMessage(COMM_PREFIX, "KSQ:", "GUILD")
     -- Also send our own right away so the requester sees us
     SendKS("GUILD")
+    -- ...and ask everyone else, which is the half that actually returns
+    -- anything on a normal guild roster.
+    LibKSRequest("GUILD")
 end
 
 --- Ask the party to re-broadcast their keys.
@@ -1076,6 +1209,7 @@ function ns:RequestPartyKeystones()
     if not IsInGroup() then return end
     C_ChatInfo.SendAddonMessage(COMM_PREFIX, "KSQ:", "PARTY")
     SendKS("PARTY")
+    LibKSRequest("PARTY")
 end
 
 local commFrame = CreateFrame("Frame")
@@ -1091,31 +1225,10 @@ commFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         local shortName = Ambiguate(sender, "short")
         local cmd, mapIDStr, levelStr = strsplit(":", msg)
         if cmd == "KS" then
-            local mapID = tonumber(mapIDStr)
-            local level = tonumber(levelStr)
-            if mapID and level then
-                local name = C_ChallengeMode.GetMapUIInfo(mapID)
-                local entry = { mapID = mapID, level = level, name = name or "Unknown", ts = GetTime() }
-                if channel == "GUILD" then
-                    -- Keyed by sender, so a large or hostile guild can
-                    -- grow this without bound. Cap it: past a few hundred
-                    -- keys the list is unreadable anyway, and the table
-                    -- is only wiped on a weekly reset.
-                    local count = 0
-                    for _ in pairs(guildKeystones) do count = count + 1 end
-                    if count < 300 or guildKeystones[shortName] then
-                        guildKeystones[shortName] = entry
-                    end
-                elseif shortName ~= UnitName("player") then
-                    -- Ignore our own broadcast: PARTY addon messages echo back to the sender.
-                    partyKeystones[shortName] = entry
-                end
-                if ns.RefreshMythicPlus then ns:RefreshMythicPlus() end
-                -- The after-key summary is usually the thing waiting on
-                -- this, and it is already on screen by the time replies
-                -- land -- so it has to be told, not just the M+ page.
-                if ns.RefreshCompletionPopup then ns.RefreshCompletionPopup() end
-            end
+            -- Same recorder as the shared channel, so the two wires
+            -- cannot disagree about what a key is or where it goes.
+            RecordKeystone(shortName, tonumber(mapIDStr), tonumber(levelStr),
+                channel, nil)
         elseif cmd == "KSQ" and channel == "GUILD" then
             -- Someone asked guild for keys; send ours back (with a small jitter
             -- so 500 guildies don't all reply in the same frame). Enforce a
@@ -1144,13 +1257,36 @@ commFrame:SetScript("OnEvent", function(self, event, prefix, msg, channel, sende
         for name in pairs(partyKeystones) do
             if not inGroup[name] then partyKeystones[name] = nil end
         end
-        C_Timer.After(1, function() ns:BroadcastKeystone() end)
+
+        ------------------------------------------------------------
+        -- One broadcast for the churn, not one per roster event.
+        --
+        -- GROUP_ROSTER_UPDATE fires once per member joining or leaving.
+        -- A twenty-man raid forming or dissolving therefore scheduled
+        -- twenty broadcasts, each a second out, and each arriving after
+        -- the group they were meant for had already changed again.
+        ------------------------------------------------------------
+        if not rosterBroadcastPending then
+            rosterBroadcastPending = true
+            C_Timer.After(2, function()
+                rosterBroadcastPending = false
+                ns:BroadcastKeystone()
+            end)
+        end
     elseif event == "PLAYER_ENTERING_WORLD" or event == "CHALLENGE_MODE_MAPS_UPDATE" then
         -- The map table just changed, so anything derived from it is
         -- stale. This is also the event that arrives when the list
         -- finally populates after a reload, and the season rotating is
         -- the same fact arriving later.
         teleportCache = nil
+        -- Held back while hunting a freeze. A request into a large guild
+        -- returns a reply from every BigWigs user in it, so this is the
+        -- other load-time job that does an unbounded amount of work a few
+        -- seconds after a loading screen.
+        if ns.LoadGateOpen and not ns.LoadGateOpen("keystones", function()
+            ns:BroadcastKeystone()
+            if IsInGuild() then ns:RequestGuildKeystones() end
+        end) then return end
         C_Timer.After(2, function() ns:BroadcastKeystone() end)
         -- Pull guild keys shortly after login
         if IsInGuild() then

@@ -320,13 +320,30 @@ do
     f:RegisterEvent("QUEST_DATA_LOAD_RESULT")
     f:SetScript("OnEvent", function(_, _, id, success)
         if not (success and id) then return end
+        ------------------------------------------------------------
+        -- Only quests THIS file asked about.
+        --
+        -- QUEST_DATA_LOAD_RESULT is a global event: it reports every
+        -- quest any addon or the game itself requests, and questing
+        -- addons request them in the hundreds. Without this line a
+        -- quest-log addon populating its cache had us relaying its
+        -- traffic into a full home-page rebuild, once per quest.
+        ------------------------------------------------------------
+        if not requested[id] then return end
         local Q = C_QuestLog
         local title = Q and Q.GetTitleForQuestID and Q.GetTitleForQuestID(id)
         if type(title) == "string" and title ~= "" then
             titles[id] = title
-            -- The page is only redrawn if it is open. A title arriving
-            -- while it is shut is cached and used the next time it opens.
-            if ns.Shell and ns.Shell.RefreshPage then
+            -- The page is only redrawn if the window is open. A title
+            -- arriving while it is shut is cached and used next time.
+            --
+            -- "Open" has to be asked of the window, not of the page.
+            -- Shell:RefreshPage only checks that the page is MOUNTED,
+            -- and a page stays mounted after the window closes -- so
+            -- once the player had visited Home this rebuilt it on a
+            -- closed window for the rest of the session.
+            if ns.Shell and ns.Shell.RefreshPage
+               and ns.Shell.IsOpen and ns.Shell:IsOpen() then
                 ns.Shell:RefreshPage("home")
             end
         end

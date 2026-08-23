@@ -1008,10 +1008,29 @@ function W:IconTile(parent, size)
     tile.hl:SetPoint("BOTTOMRIGHT", tile.icon, 2, -2)
     tile.hl:SetColorTexture(1, 1, 1, 0.18)
 
+    -- A crest tile carries `_track`, and the hover asks what that whole
+    -- WALLET can do. This is where that sentence lives now -- it used to
+    -- be a strip above the improvements list, which put a paragraph
+    -- about Champion between the player and the slots it was about.
+    --
+    -- Asked on HOVER, not stashed on refresh. The answer costs a crest
+    -- plan, a season demand and a craft plan per track, and building
+    -- five of them every time the character column redraws is five
+    -- wallets' worth of work for a tooltip nobody is pointing at.
     tile:SetScript("OnEnter", function(self2)
         if not self2._currencyID then return end
         GameTooltip:SetOwner(self2, "ANCHOR_RIGHT")
         GameTooltip:SetCurrencyByID(self2._currencyID)
+        if self2._track and ns.GetTrackPolicyLine then
+            local advice, claim = ns:GetTrackPolicyLine(self2._track)
+            if advice then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine(advice, 1, 0.82, 0, true)
+                if claim then
+                    GameTooltip:AddLine(claim, 0.78, 0.78, 0.78, true)
+                end
+            end
+        end
         GameTooltip:Show()
     end)
     tile:SetScript("OnLeave", function() GameTooltip:Hide() end)

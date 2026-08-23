@@ -51,51 +51,6 @@ local FRAMES = {
             return not BR or not BR.IsEnabled or BR:IsEnabled()
         end,
     },
-    {
-        key   = "interrupts",
-        label = "Interrupt Tracker",
-        frame = function() return _G.YippYappInterruptsRoot end,
-        isLocked  = function()
-            local S = ns.InterruptsSettings
-            return not S or (S:Get("locked") and true or false)
-        end,
-        setLocked = function(v)
-            local S = ns.InterruptsSettings
-            if S then S:Set("locked", v and true or false) end
-        end,
-        -- Test mode fills the tracker with five dummy bars, which is the
-        -- whole point during editing: bar width, height, spacing, icons
-        -- and text options are meaningless against an empty frame.
-        --
-        -- Capture the player's real setting once, on the way in. show() is
-        -- called again by RefreshPreviews after every settings change, and
-        -- re-capturing there would record the value we just forced -- so
-        -- exiting Edit Mode would strand the tracker in test mode.
-        show = function()
-            local S = ns.InterruptsSettings
-            if not S then return end
-            if EM._trackerTest == nil then
-                EM._trackerTest = S:Get("testMode") and true or false
-            end
-            S:Set("testMode", true)
-        end,
-        hide = function()
-            local S = ns.InterruptsSettings
-            if not S then return end
-            S:Set("testMode", EM._trackerTest and true or false)
-            EM._trackerTest = nil
-        end,
-        available = function() return ns.InterruptsSettings ~= nil end,
-        -- Test mode forces the tracker past every visibility rule, but
-        -- not past being switched off: ShouldShow checks `enabled`
-        -- first. So a disabled tracker has no frame to select and Edit
-        -- Mode has nothing to draw an outline on -- which looks exactly
-        -- like a broken addon rather than a ticked-off checkbox.
-        enabled = function()
-            local S = ns.InterruptsSettings
-            return not S or (S:Get("enabled") and true or false)
-        end,
-    },
 }
 
 function EM:Frames() return FRAMES end

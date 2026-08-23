@@ -2,7 +2,7 @@
 ## Title: YippYapp Helper
 ## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
 ## Author: vbaustad
-## Version: 3.1.1
+## Version: 3.2.0
 ## SavedVariables: YippYappHelperDB
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
@@ -16,6 +16,20 @@ Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
+# Keystone sharing, on the channel everyone is already on.
+#
+# The addon used to share keys over its own prefix, which meant the
+# Guild tab only ever showed people who also ran YippYapp -- in practice
+# nobody. LibKeystone is the library BigWigs, DBM and EllesmereUI all
+# embed, and its frame answers requests as soon as the file loads,
+# whether or not the host addon displays anything. So a guild full of
+# BigWigs users answers, which is every guild.
+#
+# Vendored from BigWigs (byte-identical to Ellesmere's copy, both
+# v11). LibStub hands out whichever copy loads first, so keeping ours
+# current matters -- a stale embedded copy becomes everyone's copy.
+Libs\LibKeystone\LibKeystone.lua
+
 # LibEditMode registers our movable frames as real Edit Mode systems, so
 # they get Blizzard's own selection outlines and settings dialogs.
 # Core/EditMode.lua falls back to hand-drawn boxes if this is missing.
@@ -25,6 +39,11 @@ Libs\LibEditMode\embed.xml
 Core\YippYappHelper.lua
 Core\Data.lua
 Core\Core.lua
+
+# Timing instrumentation for the freeze hunt: /yh trace. Wraps at
+# PLAYER_LOGIN, so load order here does not matter, and it is inert
+# until switched on.
+Core\Trace.lua
 
 # The shared situation window. Loads ahead of every feature because the
 # three panels that live in it -- ready check, dungeon utility notes and
@@ -129,10 +148,6 @@ Features\MythicPlus\UtilityData.lua
 Features\MythicPlus\UtilityAdvisor.lua
 
 Features\Teleports\TeleportUI.lua
-
-Features\Interrupts\InterruptsSettings.lua
-Features\Interrupts\InterruptsData.lua
-Features\Interrupts\InterruptsUI.lua
 
 # ─── Integrations (must load after Features) ──────────────
 # Planner data backs the shell's home page. Kept under Features for

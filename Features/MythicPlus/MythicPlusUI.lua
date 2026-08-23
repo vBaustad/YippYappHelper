@@ -72,7 +72,6 @@ local TAB_Y = -36
 -- The vault chips get a row to themselves in app mode. In the standalone
 -- window they share the tab row, but the shell draws the tabs, so here
 -- the content has to start below the chips instead of behind them.
-local VAULT_ROW_H = TAB_H + 8
 local testMode = false
 
 local tabDefs = {
@@ -131,132 +130,20 @@ local function UpdateTabHighlights()
 end
 
 ------------------------------------------------------------
--- Vault header (persistent, right-aligned on tab row)
+-- The vault strip used to live here.
+--
+-- Removed rather than restyled: the dashboard already draws the Great
+-- Vault, in more detail and where a player looks for it, so this was
+-- the same three numbers a second time -- and it was charging a whole
+-- row of height for them on the page with the worst vertical pressure
+-- in the addon. That row now goes to the cards, which is what was
+-- overflowing.
+--
+-- Nothing is left behind to hide. A frame kept only as an anchor for
+-- the Guild tab's Refresh button is how the last dead thing on this
+-- page survived three sweeps.
 ------------------------------------------------------------
-local vaultContainer = CreateFrame("Frame", nil, frame)
-vaultContainer:SetSize(250, TAB_H)
-vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, TAB_Y)
-local vaultSlotBtns = {}
-local vaultLabelFs = nil
-local vaultInited = false
 
-local function RefreshVaultHeader()
-    C_AddOns.LoadAddOn("Blizzard_WeeklyRewards")
-    local BlizzardMixin = WeeklyRewardsActivityMixin
-
-    -- Hide old slots
-    for _, btn in ipairs(vaultSlotBtns) do btn:Hide() end
-
-    local activities = C_WeeklyRewards.GetActivities(Enum.WeeklyRewardChestThresholdType.Activities)
-    if not activities or #activities == 0 then return end
-    table.sort(activities, function(a, b) return a.index < b.index end)
-
-    local VAULT_BTN_W, VAULT_BTN_H = 56, TAB_H
-    local VAULT_BTN_GAP = 3
-    local numSlots = math.min(#activities, 3)
-
-    -- Label
-    if not vaultLabelFs then
-        vaultLabelFs = vaultContainer:CreateFontString(nil, "OVERLAY")
-        vaultLabelFs:SetFont(STANDARD_TEXT_FONT, 10, "")
-    end
-    vaultLabelFs:ClearAllPoints()
-    vaultLabelFs:SetPoint("RIGHT", vaultContainer, "RIGHT", -(numSlots * (VAULT_BTN_W + VAULT_BTN_GAP) + 2), 0)
-    vaultLabelFs:SetText(ns.Widgets:Tint("muted", "Vault"))
-    vaultLabelFs:Show()
-
-    for si, activityInfo in ipairs(activities) do
-        if si > 3 then break end
-        local filled = activityInfo.progress >= activityInfo.threshold
-
-        local slotBtn = vaultSlotBtns[si]
-        if not slotBtn then
-            slotBtn = CreateFrame("Button", nil, vaultContainer, "BackdropTemplate")
-            slotBtn:SetSize(VAULT_BTN_W, VAULT_BTN_H)
-            slotBtn._fs = slotBtn:CreateFontString(nil, "OVERLAY")
-            slotBtn._fs:SetPoint("CENTER")
-            slotBtn._fs:SetJustifyH("CENTER")
-            slotBtn._fs:SetWidth(VAULT_BTN_W)
-            slotBtn._fs:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
-            vaultSlotBtns[si] = slotBtn
-        end
-
-        slotBtn:ClearAllPoints()
-        local bx = -(numSlots - si) * (VAULT_BTN_W + VAULT_BTN_GAP)
-        slotBtn:SetPoint("RIGHT", vaultContainer, "RIGHT", bx, 0)
-        slotBtn:SetBackdrop({
-            bgFile   = "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 8,
-            insets   = { left = 2, right = 2, top = 2, bottom = 2 },
-        })
-
-        if filled then
-            slotBtn:SetBackdropColor(0.0, 0.25, 0.0, 0.8)
-            slotBtn:SetBackdropBorderColor(0.0, 0.6, 0.0, 0.7)
-        else
-            slotBtn:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
-            slotBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
-        end
-
-        if filled then
-            local itemLink = C_WeeklyRewards.GetExampleRewardItemHyperlinks(activityInfo.id)
-            local ilvl = itemLink and itemLink ~= "" and C_Item.GetDetailedItemLevelInfo(itemLink)
-            if ilvl then
-                slotBtn._fs:SetText("|cffffffff" .. ilvl .. "|r")
-            else
-                local lvl = activityInfo.level > 0 and ("+" .. activityInfo.level) or "Done"
-                slotBtn._fs:SetText("|cff00ff00" .. lvl .. "|r")
-            end
-        else
-            slotBtn._fs:SetText("|cff" .. ns.Widgets:Hex("muted") .. activityInfo.progress .. "/" .. activityInfo.threshold .. "|r")
-        end
-
-        local isFilled = filled
-        slotBtn.info = activityInfo
-        if BlizzardMixin then
-            for _, method in ipairs({
-                "CanShowPreviewItemTooltip", "HandlePreviewMythicRewardTooltip",
-                "HandlePreviewRaidRewardTooltip", "HandlePreviewPvPRewardTooltip",
-                "HandlePreviewWorldRewardTooltip", "IsCompletedAtHeroicLevel",
-                "AddTopRunsToTooltip", "AddRaidCompletionInfoToGameTooltip",
-                "GetRaidName", "ShowPreviewItemTooltip", "ShowIncompleteTooltip",
-            }) do
-                if BlizzardMixin[method] then slotBtn[method] = BlizzardMixin[method] end
-            end
-        end
-
-        slotBtn:SetScript("OnClick", function() WeeklyRewards_ShowUI() end)
-        slotBtn:SetScript("OnEnter", function(self)
-            if isFilled then
-                self:SetBackdropColor(0.0, 0.35, 0.0, 0.9)
-                self:SetBackdropBorderColor(0.0, 0.8, 0.0, 0.9)
-            else
-                self:SetBackdropColor(0.15, 0.15, 0.15, 0.9)
-                self:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.7)
-            end
-            if BlizzardMixin and self.info then
-                BlizzardMixin.OnEnter(self)
-            else
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:AddLine("Great Vault", 1, 1, 1)
-                GameTooltip:Show()
-            end
-        end)
-        slotBtn:SetScript("OnLeave", function(self)
-            if isFilled then
-                self:SetBackdropColor(0.0, 0.25, 0.0, 0.8)
-                self:SetBackdropBorderColor(0.0, 0.6, 0.0, 0.7)
-            else
-                self:SetBackdropColor(0.08, 0.08, 0.08, 0.8)
-                self:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
-            end
-            GameTooltip:Hide()
-        end)
-
-        slotBtn:Show()
-    end
-end
 
 ------------------------------------------------------------
 -- Content area (below tabs)
@@ -308,8 +195,16 @@ end
 local texPool = {}
 local texPoolIdx = 0
 
+-- Exposed for Tools/loadcheck.py, like _sections below and for a reason
+-- the sections could not cover: the geometry check reads card frames,
+-- and the group's keystone rows are raw textures drawn straight onto the
+-- content frame. So the check passed while a fourth keystone was being
+-- drawn through the bottom of the page and into the tab strip.
+frame._texs = texPool
+
 local function AcquireTex(parent)
     texPoolIdx = texPoolIdx + 1
+    frame._texCount = texPoolIdx
     local tex = texPool[texPoolIdx]
     if not tex then
         tex = parent:CreateTexture(nil, "ARTWORK")
@@ -435,6 +330,7 @@ local function ResetPools()
     fsPoolIdx = 0
     for i = 1, texPoolIdx do texPool[i]:Hide() end
     texPoolIdx = 0
+    frame._texCount = 0
     for i = 1, btnPoolIdx do btnPool[i]:Hide() end
     btnPoolIdx = 0
     for i = 1, secBtnPoolIdx do secBtnPool[i]:Hide() end
@@ -840,40 +736,36 @@ local function RefreshGuildTab()
         })
     end
 
-    -- Refresh button: custom-styled, anchored to the vault row on the main
-    -- frame (sits to the LEFT of the vault header), not to content — so it
-    -- doesn't overlap the second guild-keystone column on wider rosters.
-    local refreshBtn = frame._guildRefreshBtn
-    if not refreshBtn then
-        refreshBtn = CreateFrame("Button", nil, frame, "BackdropTemplate")
-        refreshBtn:SetSize(78, 20)
-        ns.Widgets:Apply(refreshBtn, "row")
-        local fs = refreshBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        fs:SetPoint("CENTER")
-        fs:SetText("Refresh")
-        fs:SetTextColor(0.85, 0.85, 0.85)
-        refreshBtn._label = fs
-
-        refreshBtn:SetScript("OnEnter", function(self)
-            self:SetBackdropBorderColor(0.0, 0.8, 1.0, 1)
-            self._label:SetTextColor(1, 1, 1)
+    ------------------------------------------------------------
+    -- No Refresh button. Opening the tab is the request.
+    --
+    -- It was parented to the whole window rather than to this tab's
+    -- content, and nothing hid it again -- so once the Guild tab had
+    -- been opened the button stayed on screen over the Home tab's
+    -- dungeon tiles for the rest of the session. That was survivable
+    -- while it sat beside the vault strip; removing the strip left it
+    -- in the middle of the row.
+    --
+    -- It is also a button for something the addon can do on its own.
+    -- Asking is one throttled addon message, the answers arrive over the
+    -- next few seconds, and the panel already redraws when they land --
+    -- so the only thing the click ever added was the player knowing they
+    -- had to click it.
+    --
+    -- Throttled here as well as in the library: switching tabs back and
+    -- forth should not queue a request per switch, and LibKeystone's own
+    -- three seconds is per channel rather than per caller.
+    ------------------------------------------------------------
+    local now = GetTime()
+    if (now - (frame._lastGuildAsk or 0)) > 10 then
+        frame._lastGuildAsk = now
+        if ns.RequestGuildKeystones then ns:RequestGuildKeystones() end
+        -- Replies land over the next second or two, and nothing else
+        -- would redraw this tab once they do.
+        C_Timer.After(2, function()
+            if ns.RefreshMythicPlus then ns:RefreshMythicPlus() end
         end)
-        refreshBtn:SetScript("OnLeave", function(self)
-            self:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.7)
-            self._label:SetTextColor(0.85, 0.85, 0.85)
-        end)
-        refreshBtn:SetScript("OnClick", function()
-            if ns.RequestGuildKeystones then ns:RequestGuildKeystones() end
-            if ns.RefreshMythicPlus then
-                C_Timer.After(1.5, function() ns:RefreshMythicPlus() end)
-            end
-        end)
-
-        frame._guildRefreshBtn = refreshBtn
     end
-    refreshBtn:ClearAllPoints()
-    refreshBtn:SetPoint("RIGHT", vaultContainer, "LEFT", -8, 0)
-    refreshBtn:Show()
 
     if #guildKeys == 0 then
         local cx = math.floor(cw / 2)
@@ -896,7 +788,15 @@ local function RefreshGuildTab()
         line2:SetWidth(cw - 20)
         line2:SetJustifyH("CENTER")
         if IsInGuild() then
-            line2:SetText("|cff888888Guildies need YippYapp installed to share keys.\nHit Refresh to ping the guild — replies arrive over the next few seconds.|r")
+            -- No longer "install this addon". Keys now come over
+            -- LibKeystone, the shared library BigWigs, DBM and
+            -- EllesmereUI all embed, so anyone running any of those
+            -- answers whether or not they have ever heard of
+            -- YippYapp. Telling a player to go and evangelise an
+            -- addon was asking them to fix a problem that was ours.
+            line2:SetText("|cff888888Asking the guild now. Anyone running "
+                .. "BigWigs, DBM or EllesmereUI answers, and replies arrive over "
+                .. "the next few seconds.|r")
         else
             line2:SetText(ns.Widgets:Tint("muted", "You're not in a guild."))
         end
@@ -988,7 +888,6 @@ function ns:RefreshMythicPlus()
 
     ResetPools()
     UpdateTabHighlights()
-    RefreshVaultHeader()
 
     if activeTab == "guild" then
         RefreshGuildTab()
@@ -1004,7 +903,7 @@ function ns:RefreshMythicPlus()
     -- difference is several rows' worth.
     local contentH = content:GetHeight()
     if contentH < 10 then
-        contentH = select(2, ns:GetAppFrameSize()) - VAULT_ROW_H - PAD * 2
+        contentH = select(2, ns:GetAppFrameSize()) - PAD * 2
     end
     local floorY = -contentH
     -- The same budget the layout below spends, published so
@@ -1652,7 +1551,27 @@ function ns:RefreshMythicPlus()
     -- Use highest milestone as the bar max for consistent scaling
     local barMax = MILESTONES[#MILESTONES]
 
+    ------------------------------------------------------------
+    -- Only the goals still ahead.
+    --
+    -- A full bar reading "2000 Done" is a row spent on something the
+    -- player cannot act on, in the card whose whole job is what to do
+    -- next -- and it pushed the focus list under it further down a page
+    -- that was already running out of room. The rating beside the
+    -- player's name says where they are; this says where they are
+    -- going.
+    --
+    -- Every milestone passed still leaves the last one on screen, so a
+    -- player at 3000 sees "3000 Done" rather than an empty card. Nothing
+    -- left to chase is itself worth one row.
+    ------------------------------------------------------------
+    local goals = {}
     for _, target in ipairs(MILESTONES) do
+        if ownScore < target then goals[#goals + 1] = target end
+    end
+    if #goals == 0 then goals = { MILESTONES[#MILESTONES] } end
+
+    for _, target in ipairs(goals) do
         local achieved = ownScore >= target
         local r, g, b = ns:GetRatingColor(target)
         local pct = math.min(ownScore / target, 1)
@@ -1994,12 +1913,52 @@ function ns:RefreshMythicPlus()
     local ksEmptyFs
 
     if #keystones > 0 then
-        local KS_CARD_H = 36
-        local KS_CARD_GAP = 3
-        local KS_ICON_SIZE = 28
+        ------------------------------------------------------------
+        -- Sized to what is actually in the group, not to what used to
+        -- be.
+        --
+        -- The rows were drawn at one fixed height however many there
+        -- were, while the card around them stops at the bottom of the
+        -- page -- so a group holding four keys ran the fourth one out
+        -- through the floor and into the tab strip underneath.
+        --
+        -- Invisible until the keys started arriving. This list only ever
+        -- saw other YippYapp users, so in practice it held one entry or
+        -- none; moving keystone sharing onto LibKeystone filled it up
+        -- and the layout met a full group for the first time.
+        --
+        -- Two presets, the way the This Week card beside it already
+        -- picks between a plain row and a detailed one: the roomy row
+        -- while it fits, a tighter one when it does not. Five is the
+        -- most a group can ever hold, so the tight preset is the end of
+        -- it -- the truncation below is a backstop against a short page,
+        -- not the normal path.
+        ------------------------------------------------------------
+        local ROOMY = { h = 36, gap = 3, icon = 28, lvl = 18, name = 10, dung = 9 }
+        local TIGHT = { h = 27, gap = 2, icon = 21, lvl = 14, name =  9, dung = 8 }
+
+        local room = ksY - floorY
+        local function fitCount(p) return math.floor((room + p.gap) / (p.h + p.gap)) end
+
+        local pre = ROOMY
+        if fitCount(ROOMY) < #keystones then pre = TIGHT end
+
+        local KS_CARD_H   = pre.h
+        local KS_CARD_GAP = pre.gap
+        local KS_ICON_SIZE = pre.icon
         local ksCardW = ksInnerW
 
-        for ki, ks in ipairs(keystones) do
+        -- Still short? Then say so rather than stopping mid-list. A list
+        -- that quietly ends at three reads as "the group holds three
+        -- keys", which is a different and wrong fact -- and the count in
+        -- the card's own heading would contradict it.
+        local MORE_H = 13
+        local shown = #keystones
+        local fits = fitCount(pre)
+        if shown > fits then shown = math.max(fits - 1, 1) end
+
+        for ki = 1, shown do
+            local ks = keystones[ki]
             local cc = ks.class and RAID_CLASS_COLORS[ks.class]
 
             local ksBg = AcquireTex(content)
@@ -2025,22 +1984,32 @@ function ns:RefreshMythicPlus()
 
             local ksLvl = AcquireFS(content)
             ksLvl:SetPoint("LEFT", ksIcon, "RIGHT", 6, 0)
-            ksLvl:SetFont(STANDARD_TEXT_FONT, 18, "OUTLINE")
+            ksLvl:SetFont(STANDARD_TEXT_FONT, pre.lvl, "OUTLINE")
             ksLvl:SetText("|cff00d4ff+" .. ks.level .. "|r")
 
             local ksName = AcquireFS(content)
             ksName:SetPoint("TOPLEFT", ksIcon, "TOPRIGHT", 58, -1)
             ksName:SetWidth(ksCardW - KS_ICON_SIZE - 74)
-            ksName:SetFont(STANDARD_TEXT_FONT, 10, "")
+            ksName:SetFont(STANDARD_TEXT_FONT, pre.name, "")
             ksName:SetText(cc and cc:WrapTextInColorCode(ks.name) or ks.name)
 
             local ksDung = AcquireFS(content)
             ksDung:SetPoint("BOTTOMLEFT", ksIcon, "BOTTOMRIGHT", 58, 1)
             ksDung:SetWidth(ksCardW - KS_ICON_SIZE - 74)
-            ksDung:SetFont(STANDARD_TEXT_FONT, 9, "")
+            ksDung:SetFont(STANDARD_TEXT_FONT, pre.dung, "")
             ksDung:SetText("|cff" .. ns.Widgets:Hex("muted") .. ks.dungeonName .. "|r")
 
             ksY = ksY - (KS_CARD_H + KS_CARD_GAP)
+        end
+
+        if shown < #keystones then
+            local moreFs = AcquireFS(content)
+            moreFs:SetPoint("TOPLEFT", content, "TOPLEFT", ksInnerX, ksY)
+            moreFs:SetWidth(ksCardW)
+            moreFs:SetFont(STANDARD_TEXT_FONT, 9, "")
+            moreFs:SetText(ns.Widgets:Tint("faint",
+                "+" .. (#keystones - shown) .. " more, no room to show"))
+            ksY = ksY - MORE_H
         end
     else
         ksEmptyFs = AcquireFS(content)
@@ -2082,18 +2051,14 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
         -- the other a few pixels from it. Hiding a control and then
         -- showing it again is not a migration.
         --
-        -- The vault chips move to the row the tabs vacated, so they are
-        -- a row of their own rather than something the content has to
-        -- flow around -- overlapping the dungeon tiles is exactly what
-        -- they did when the content moved up to fill the freed space.
         local appTopY = -6
-        vaultContainer:ClearAllPoints()
-        vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, appTopY)
 
         content:ClearAllPoints()
-        -- Clear of the vault row, not of the tab row that is no longer
-        -- drawn.
-        content:SetPoint("TOPLEFT", PAD, appTopY - VAULT_ROW_H)
+        -- Starts at the top now. It used to clear the vault strip, and
+        -- that strip was the dashboard's vault drawn a second time -- so
+        -- the row it was reserving goes back to the cards, which is the
+        -- page that needed it most.
+        content:SetPoint("TOPLEFT", PAD, appTopY)
         content:SetPoint("BOTTOMRIGHT", -PAD, PAD)
 
         -- The shell's content region already IS a surface. A second one
@@ -2115,8 +2080,6 @@ function ns:SetMythicPlusAppMode(enabled, contentWidth, contentHeight)
             tab:SetPoint("TOPLEFT", PAD + idx * (TAB_W + TAB_GAP), TAB_Y)
             tab:Show()
         end
-        vaultContainer:ClearAllPoints()
-        vaultContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, TAB_Y)
         content:ClearAllPoints()
         content:SetPoint("TOPLEFT", PAD, TAB_Y - TAB_H - 4)
         content:SetPoint("BOTTOMRIGHT", -PAD, PAD)

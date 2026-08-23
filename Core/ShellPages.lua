@@ -128,7 +128,19 @@ Shell:RegisterPage({
         -- ctx forwarded so the page can size to the region. Refresh
         -- reads it off its own content frame, but passing it keeps the
         -- page honest about where its dimensions come from.
-        if ns.BisUI and ns.BisUI.Refresh then ns.BisUI:Refresh(ctx) end
+        -- Named for the tracer. BisUI hangs its render off its own
+        -- table rather than off `ns`, so the wrap list never saw it --
+        -- and opening this tab inside a raid finder group was reported
+        -- as a freeze that traced to "not inside anything we wrap".
+        if ns.BisUI and ns.BisUI.Refresh then
+            if ns.Trace and ns.Trace.on then
+                ns.Trace:Section("bis: refresh", function()
+                    ns.BisUI:Refresh(ctx)
+                end)
+            else
+                ns.BisUI:Refresh(ctx)
+            end
+        end
     end,
 })
 

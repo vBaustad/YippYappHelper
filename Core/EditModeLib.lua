@@ -32,7 +32,6 @@ function ns.EditModeManagesPosition(key)
     return managesPosition[key] == true
 end
 
-local S = ns.InterruptsSettings
 
 local function posDB(key, layoutName)
     YippYappHelperDB = YippYappHelperDB or {}
@@ -109,9 +108,9 @@ end
 ---
 --- LibEditMode parents the selection to the frame at the default level,
 --- but our windows put clickable content on top: the completion popup
---- fills its body with action buttons, and both it and the tracker draw
---- overlays at level +10. Those swallow the click before the selection
---- ever sees it, so the frame looks selectable but cannot be picked up.
+--- fills its body with action buttons and draws overlays at level +10.
+--- Those swallow the click before the selection ever sees it, so the
+--- frame looks selectable but cannot be picked up.
 ---
 --- Strata has to be matched too, and matched *again* whenever it
 --- changes. Strata outranks frame level, so a frame that raises itself
@@ -211,28 +210,6 @@ local function Slider(name, default, minV, maxV, step, get, set, fmt)
     }
 end
 
-local function Dropdown(name, default, values, get, set)
-    return {
-        name = name, kind = Kind("Dropdown"), default = default,
-        values = values,
-        get = function() return get() end,
-        set = function(_, value) set(value); RepairAfterChange() end,
-    }
-end
-
---- Interrupt-tracker options all share one storage path.
-local function TrackerCheckbox(name, key)
-    return Checkbox(name, S:Defaults()[key],
-        function() return S:Get(key) end,
-        function(v) S:Set(key, v) end)
-end
-
-local function TrackerSlider(name, key, minV, maxV, step, fmt)
-    return Slider(name, S:Defaults()[key], minV, maxV, step,
-        function() return S:Get(key) end,
-        function(v) S:Set(key, v) end, fmt)
-end
-
 --- Leading caption for a frame's dialog. These windows appear on their
 --- own schedule and cannot be opened manually, so "when does this show
 --- up" is the first thing worth saying -- and a tooltip you have to
@@ -247,7 +224,6 @@ local function Caption(text)
 end
 
 local pct = function(v) return ("%d%%"):format(math.floor(v)) end
-local px  = function(v) return ("%dpx"):format(math.floor(v)) end
 
 ------------------------------------------------------------
 -- Registration
@@ -271,47 +247,6 @@ local function RegisterAll()
                     function(v) BR:SetScale(v / 100) end, pct),
             }, "Battle Res Timer")
     end
-
-    -- Interrupt Tracker
-    if S and _G.YippYappInterruptsRoot and not done.interrupts then
-        done.interrupts = true
-        Register(_G.YippYappInterruptsRoot, "interrupts",
-            { point = "CENTER", x = 0, y = -160 }, {
-                Caption("Shown per the visibility rules at the bottom"),
-                Dropdown("Orientation", "horizontal", {
-                    { text = "Horizontal", value = "horizontal" },
-                    { text = "Vertical",   value = "vertical" },
-                },
-                    function() return S:Get("orientation") end,
-                    function(v) S:Set("orientation", v) end),
-                Dropdown("Grow direction", "down", {
-                    { text = "Down",  value = "down" },
-                    { text = "Up",    value = "up" },
-                    { text = "Left",  value = "left" },
-                    { text = "Right", value = "right" },
-                },
-                    function() return S:Get("growDirection") end,
-                    function(v) S:Set("growDirection", v) end),
-                TrackerSlider("Bar width",  "barWidth",  40, 600, 5, px),
-                TrackerSlider("Bar height", "barHeight",  6,  80, 1, px),
-                TrackerSlider("Icon size",  "iconSize",  12,  96, 1, px),
-                TrackerSlider("Spacing",    "spacing",    0,  40, 1, px),
-                TrackerSlider("Padding",    "framePadding", 0, 40, 1, px),
-                TrackerCheckbox("Show background", "showBackdrop"),
-                TrackerCheckbox("Class-colored border", "classBorder"),
-                TrackerCheckbox("Show spell icon", "showSpellIcon"),
-                TrackerCheckbox("Show player name", "showName"),
-                TrackerCheckbox("Show timer", "showTimer"),
-                { name = "Show the tracker when", kind = Kind("Divider") },
-                TrackerCheckbox("Always", "visAlways"),
-                TrackerCheckbox("In a group", "visGroup"),
-                TrackerCheckbox("In dungeons and raids", "visInstance"),
-                TrackerCheckbox("During an active keystone", "visMythicPlus"),
-                TrackerCheckbox("In raid instances only", "visRaid"),
-                TrackerCheckbox("In PvP and arenas", "visPvp"),
-            }, "Interrupt Tracker")
-    end
-
 end
 
 ------------------------------------------------------------
@@ -378,8 +313,8 @@ end
 --- their selections stay dormant and the frame looks selectable but is
 --- not. Re-assert once our frames are actually up.
 ---
---- The interrupt tracker never had this problem because it is persistent,
---- which is why it alone worked.
+--- A persistent frame never had this problem, which is how the cause was
+--- found: the one frame that was always up was the one that worked.
 local function RevealSelections()
     if not LEM.frameSelections then return end
     -- Walks OUR frames, not the library's whole table.

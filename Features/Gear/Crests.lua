@@ -105,8 +105,30 @@ resolver:RegisterEvent("PLAYER_LOGIN")
 -- Mistcrests onto the other row left the addon reading the empty one
 -- until the next login.
 resolver:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
-resolver:SetScript("OnEvent", function()
-    ns:ResolveCrestIDs()
+
+-- Coalesced, because CURRENCY_DISPLAY_UPDATE is a gameplay event, not a
+-- rare one: every quest turn-in, every dungeon boss, every mob that
+-- drops anything trackable fires it, often several times in a row.
+-- ResolveCrestIDs is ten pcall'd GetCurrencyInfo calls and ten result
+-- tables for the collector, and it is answering a question whose answer
+-- changes about once a season.
+--
+-- A second of lag costs nothing here: anything that DRAWS a crest goes
+-- through GetCrestInfo, which resolves on the spot for exactly this
+-- reason. This path only exists so code reading crest.id directly is not
+-- left on a stale row.
+local resolvePending = false
+resolver:SetScript("OnEvent", function(_, event)
+    if event ~= "CURRENCY_DISPLAY_UPDATE" then
+        ns:ResolveCrestIDs()
+        return
+    end
+    if resolvePending then return end
+    resolvePending = true
+    C_Timer.After(1, function()
+        resolvePending = false
+        ns:ResolveCrestIDs()
+    end)
 end)
 
 function ns:GetCrestInfo()

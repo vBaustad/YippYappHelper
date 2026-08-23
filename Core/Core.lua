@@ -29,8 +29,53 @@ upgradeScanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
 
 -- Cache tooltip scan results; invalidated on UNIT_INVENTORY_CHANGED
 local scanCache = {}
+
+-- ...and the whole slot read around it, on exactly the same lifetime.
+--
+-- Only the tooltip half was cached, which hid how often the rest ran:
+-- ns:GetSlotInfo is the bottom of nearly every gear question the addon
+-- asks, and one draw of the suggestions panel called it over a THOUSAND
+-- times. Cheap calls individually -- GetInventoryItemLink, an
+-- ItemLocation, two pcall'd C_Item reads and sometimes
+-- GetDetailedItemLevelInfo -- but a thousand of them is not cheap, and
+-- it happens again on every event that redraws the panel, which after a
+-- loading screen is several in a row.
+--
+-- Same key and same invalidation as the tooltip scan, because the two
+-- answers go stale together: both are read off the equipped item, so
+-- whatever makes the scan wrong makes the item level wrong with it.
+local slotInfoCache = {}
+-- Lua cannot cache a nil, and an empty slot is a legitimate answer that
+-- would otherwise re-read five APIs every time to rediscover nothing.
+local EMPTY_SLOT = {}
+
+------------------------------------------------------------
+-- ...but a read taken before the client is ready may not be kept.
+--
+-- This is the half that matters, and it is why the storm happens WHEN
+-- it happens. ScanUpgradeTrack caches only on success: if the tooltip
+-- does not parse it returns nothing and records nothing, so the next
+-- caller builds the tooltip again. Right after a loading screen the
+-- item data has not arrived, NOTHING parses, and every one of the
+-- thousand-odd slot reads a single panel draw makes is a full
+-- SetInventoryItem -- with several draws landing in that same window as
+-- currency, bag and roster events arrive together.
+--
+-- So an unparsed read is cached, but only until the end of the frame.
+-- GetTime is frame-constant, which is exactly the granularity wanted: a
+-- burst inside one frame collapses to sixteen reads, and the next frame
+-- asks again and gets the real answer the moment the client has one.
+-- Cache it durably instead and the addon would spend the session
+-- believing the player is wearing nothing.
+------------------------------------------------------------
+local function StillFresh(entry)
+    if not entry.provisional then return true end
+    return entry.at == GetTime()
+end
+
 function ns:InvalidateScanCache()
     wipe(scanCache)
+    wipe(slotInfoCache)
 end
 
 ------------------------------------------------------------
@@ -299,8 +344,17 @@ end
 
 -- Returns item info for an equipment slot
 function ns:GetSlotInfo(slotID)
+    local hit = slotInfoCache[slotID]
+    if hit and StillFresh(hit) then
+        if hit == EMPTY_SLOT then return nil end
+        return hit
+    end
+
     local itemLink = GetInventoryItemLink("player", slotID)
     if not itemLink then
+        -- Genuinely bare, and the client is certain about that even mid
+        -- loading screen: there is no link to be waiting on.
+        slotInfoCache[slotID] = EMPTY_SLOT
         return nil
     end
 
@@ -330,7 +384,7 @@ function ns:GetSlotInfo(slotID)
     -- Scan tooltip for actual upgrade track and crafted status
     local trackName, currRank, maxRank, isCrafted = ScanUpgradeTrack(slotID)
 
-    return {
+    local info = {
         link = itemLink,
         ilvl = itemLevel,
         quality = itemQuality,
@@ -340,6 +394,22 @@ function ns:GetSlotInfo(slotID)
         maxRank = maxRank,
         crafted = isCrafted,
     }
+    -- Handed out by reference from here on. Nothing writes to what this
+    -- returns -- every one of the seventeen call sites reads and
+    -- discards -- and a caller that starts to would be editing the
+    -- answer every other caller gets, so keep it that way.
+    --
+    -- No track means the tooltip did not parse, which is either an
+    -- off-season piece with no upgrade line or -- far more often, and
+    -- far more expensively -- an item the client has not finished
+    -- loading. The two are indistinguishable from here, so the answer is
+    -- held for this frame only and asked again on the next.
+    if not trackName then
+        info.provisional = true
+        info.at = GetTime()
+    end
+    slotInfoCache[slotID] = info
+    return info
 end
 
 -- Check if an item can be upgraded
@@ -524,14 +594,24 @@ ns.watermarkCache = {}
 --- Which is the real lesson, and it is in the harness now: the stub
 --- used to accept the location happily, so no check could ever have
 --- caught this. It throws like the client does now.
-local function QueryWatermark(slotID)
+--- `knownLink` is the slot's item link when the caller already has it.
+---
+--- The sweep runner does: it reads the slot, tests the link against the
+--- last answered one, and only then asks. Without this it read the slot
+--- again in here -- a cache hit in the client, but a second read all the
+--- same, and the invariant worth being able to state is "one slot read
+--- per frame", not "one, plus however many the callee repeats".
+local function QueryWatermark(slotID, knownLink)
     if not C_ItemUpgrade then return 0 end
 
     -- GetSlotInfo rather than GetInventoryItemLink so a slot that has
     -- been stood in for -- by the harness, or by anything else that
     -- answers for gear -- is asked the same question as a real one.
-    local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
-    local itemLink = info and info.link
+    local itemLink = knownLink
+    if not itemLink then
+        local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
+        itemLink = info and info.link
+    end
     if not itemLink then return 0 end
 
     if C_ItemUpgrade.GetHighWatermarkForItem then
@@ -564,15 +644,35 @@ end
 --- Marks only ever go up, so a remembered one is never wrong -- at
 --- worst it is behind, and the live query corrects it the moment it
 --- answers. That asymmetry is what makes caching safe here.
-local function RememberWatermark(slotID, mark)
+local function RememberWatermark(slotID, mark, link)
     ns.watermarkCache[slotID] = mark
     YippYappHelperDB = YippYappHelperDB or {}
     YippYappHelperDB.watermarks = YippYappHelperDB.watermarks or {}
     YippYappHelperDB.watermarks[slotID] = mark
+    -- The item the answer was about, kept beside the answer.
+    --
+    -- A reload does not change what is equipped, so a mark recorded last
+    -- session against the piece still in the slot is still the client's
+    -- answer -- and asking again is sixteen questions for information
+    -- already on disk. Without this the marks survived a reload but the
+    -- knowledge of WHAT they were about did not, so every session
+    -- re-asked from scratch.
+    if link then
+        YippYappHelperDB.watermarkLinks = YippYappHelperDB.watermarkLinks or {}
+        YippYappHelperDB.watermarkLinks[slotID] = link
+    end
 end
 
 --- Read the stored marks back at login.
 function ns:LoadWatermarks()
+    -- Which item each stored mark was an answer about, so a slot whose
+    -- piece has not changed is not asked again. Read before the marks
+    -- themselves so a malformed table cannot leave the two disagreeing.
+    local links = YippYappHelperDB and YippYappHelperDB.watermarkLinks
+    if type(links) == "table" and ns.SeedWatermarkQueries then
+        ns:SeedWatermarkQueries(links)
+    end
+
     local stored = YippYappHelperDB and YippYappHelperDB.watermarks
     if type(stored) ~= "table" then return 0 end
     local n = 0
@@ -588,14 +688,121 @@ end
 -- Refresh all watermarks. Worth trying wherever gear changes, not only
 -- at the vendor: if the API answers away from one the cache fills on its
 -- own, and if it does not, nothing is lost by asking.
-function ns:RefreshWatermarks()
-    for _, slotInfo in ipairs(ns.SLOT_IDS) do
-        local mark = QueryWatermark(slotInfo.slot)
-        if mark > 0 then
-            RememberWatermark(slotInfo.slot, mark)
+------------------------------------------------------------
+-- Ask about one slot per frame, and only about slots that changed.
+--
+-- MEASURED: this took 5911ms of a 6314ms frame -- 94% of a six-second
+-- freeze, from a player zoning between a dungeon and the world. It is
+-- sixteen slots in a single pass, each one up to three
+-- C_ItemUpgrade calls, and those calls are not cheap when the item data
+-- behind them has not finished loading -- which is exactly the state
+-- right after a loading screen. And it is driven from the
+-- UNIT_INVENTORY_CHANGED handler, which fires when you zone.
+--
+-- Two things were wrong and both are fixed here.
+--
+-- It asked about every slot every time. A slot's mark is the client's
+-- answer about the item in it, so with the same item still equipped the
+-- previous answer stands -- there is nothing to re-ask. Only a slot
+-- whose link has changed since its last successful answer is worth a
+-- query, which on a zone is usually none of them.
+--
+-- And it did the whole sweep in one frame. Spread over frames instead,
+-- so even the cold case -- a fresh login, sixteen unknown slots -- costs
+-- a slot per frame rather than a stall. Marks only ever go up and are
+-- persisted, so arriving at the answer a few frames late costs nothing:
+-- the worst case is one redraw showing a mark it is about to raise.
+------------------------------------------------------------
+local markedLink = {}
+
+--- Forget which links were asked about, so the next pass re-queries.
+--- For the upgrade vendor, where the client's answer is authoritative
+--- and worth taking again.
+function ns:InvalidateWatermarkQueries()
+    wipe(markedLink)
+end
+
+--- Restore last session's answers-to-items mapping.
+---
+--- Only entries that still look like a slot and a link, because this
+--- came off disk. A wrong one here would silence a query rather than
+--- corrupt an answer -- the mark itself is loaded separately and is
+--- still whatever the client last said.
+function ns:SeedWatermarkQueries(links)
+    for slotID, link in pairs(links) do
+        if type(slotID) == "number" and type(link) == "string" then
+            markedLink[slotID] = link
         end
     end
 end
+
+local markRunner = CreateFrame("Frame")
+local markQueue, markIdx = {}, 0
+markRunner:Hide()
+
+markRunner:SetScript("OnUpdate", function(self)
+    markIdx = markIdx + 1
+    local slotID = markQueue[markIdx]
+    if not slotID then
+        self:Hide()
+        markQueue, markIdx = {}, 0
+        return
+    end
+
+    ------------------------------------------------------------
+    -- The slot READ happens here too, not in the caller.
+    --
+    -- It used to be RefreshWatermarks that called GetSlotInfo, sixteen
+    -- times in a row, purely to decide which slots were worth queueing.
+    -- Only the C_ItemUpgrade half was spread across frames -- so the
+    -- pass "asked one slot per frame" and still opened with sixteen
+    -- synchronous slot reads, which is the expensive half.
+    --
+    -- GetSlotInfo is not cheap in the state this runs in. It ends in
+    -- ScanUpgradeTrack, a real SetInventoryItem tooltip build, and the
+    -- UNIT_INVENTORY_CHANGED handler that drives this calls
+    -- InvalidateScanCache immediately before -- so every one of the
+    -- sixteen is guaranteed cold, on item data the client may still be
+    -- loading. That is the 5.3-second frame, and it survived the fix
+    -- that was supposed to be about exactly this.
+    --
+    -- The "unchanged item, nothing to ask" test moves in here with it.
+    -- It still skips the client query; it just no longer needs every
+    -- slot read up front to decide.
+    ------------------------------------------------------------
+    local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
+    local link = info and info.link
+    if link and markedLink[slotID] ~= link then
+        local mark = QueryWatermark(slotID, link)
+        if mark > 0 then
+            RememberWatermark(slotID, mark, link)
+            -- Recorded only on a real answer. A slot that returned
+            -- nothing is still an open question, and pinning the link
+            -- here would stop it ever being asked again.
+            markedLink[slotID] = link
+        end
+    end
+end)
+
+--- Starts a pass. Costs the caller nothing but the queue.
+---
+--- Every slot goes in, unfiltered -- deciding which ones were worth
+--- asking about is what used to make this expensive, because deciding
+--- meant reading all sixteen. The runner decides per slot instead, on
+--- its own frame, and a slot whose item has not changed still costs
+--- only a cached read.
+function ns:RefreshWatermarks()
+    local queue = {}
+    for _, slotInfo in ipairs(ns.SLOT_IDS) do
+        queue[#queue + 1] = slotInfo.slot
+    end
+    markQueue, markIdx = queue, 0
+    markRunner:Show()
+end
+
+-- Published for Tools/loadcheck.py, which drives the pass a frame at a
+-- time rather than waiting on a real OnUpdate.
+ns.WatermarkRunner = markRunner
 
 --- The highest item level a SOULBOUND piece in the bags has given this
 --- slot.
@@ -752,7 +959,12 @@ eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
 -- signalled by anything else the addon listens for.
 eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
-eventFrame:RegisterEvent("UNIT_INVENTORY_CHANGED")
+-- Filtered to the player. The handler already tested `arg1 == "player"`
+-- and threw the rest away, but the throwing-away happened in Lua: in a
+-- raid this event fires for every member whose gear changes, and each
+-- one woke a handler to be discarded. RegisterUnitEvent makes the client
+-- do the filtering, which is the same answer for no calls at all.
+eventFrame:RegisterUnitEvent("UNIT_INVENTORY_CHANGED", "player")
 
 local ITEM_UPGRADE_INTERACTION = Enum.PlayerInteractionType.ItemUpgrade
 local characterFrameHooked = false
@@ -792,8 +1004,19 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             -- progress had been stalled. The Folio came out entirely,
             -- so nothing writes or reads this any more.
             "folio",
+            -- The interrupt tracker, removed. Its whole party half was
+            -- inference -- the client stopped handing out which spell a
+            -- teammate cast, so it matched on a 150ms timing coincidence
+            -- and assumed the class's default kick. It had been guessing
+            -- wrong for all of 12.1.
+            "interrupts",
         }) do
             YippYappHelperDB[dead] = nil
+        end
+        -- The tracker's Edit Mode position is a level deeper, keyed per
+        -- layout, so the sweep above cannot reach it.
+        if type(YippYappHelperDB.editMode) == "table" then
+            YippYappHelperDB.editMode.interrupts = nil
         end
 
         print("|cff00ff00YippYapp Helper|r loaded \226\128\148 type |cff00ff00/yh|r to open")
@@ -1031,6 +1254,21 @@ do
         if not (isInitialLogin or isReloadingUi) then return end
         -- Every later one is a doorway, and this only wanted the first.
         self:UnregisterAllEvents()
+        -- Held back while hunting a freeze. Opening the window builds
+        -- the dashboard and whatever page it lands on, which is the
+        -- largest single piece of work the addon does at load.
+        -- Run by hand this opens straight away rather than through the
+        -- delay: the point of the command is to do the work now and
+        -- watch it, and OpenOnLoginIfWanted's own C_Timer would hand
+        -- back a job that had not started yet.
+        if ns.LoadGateOpen and not ns.LoadGateOpen("window", function()
+            if not ns.GetOpenOnLogin() then
+                print("|cff00ff00YippYapp|r (open-on-login is off, so this job "
+                    .. "does nothing at load either)")
+                return
+            end
+            if ns.OpenTo then ns:OpenTo("home") end
+        end) then return end
         ns.OpenOnLoginIfWanted(isInitialLogin, isReloadingUi)
     end)
 end
@@ -1153,6 +1391,9 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh shell <page> — open a specific page")
         print("     |cff888888pages: home, gear, bis, trinkets, consumables,|r")
         print("     |cff888888progression, loot, mythicplus, raid, teleports, delves|r")
+        print("  /yh lootreset — throw away saved loot browser data and rescan")
+        print("  /yh loadtest — hold back load-time work, then run it by hand")
+        print("  /yh trace — time our own functions; finds what stalls a frame")
         print("  /yh guide — boss guide for the current raid")
         print("  /yh profile — show/set player profile")
         print("  /yh profile <name> — set profile (normal, heroic, mythic)")
@@ -1450,6 +1691,56 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     -- /yh debug — crest and slot state, dumped to chat.
     -- Unlisted in /yh help, same as ejdump and editdebug: it prints the
     -- gear engine's working, which is a developer's question.
+    -- /yh lootreset
+    if cmd == "lootreset" or cmd == "resetloot" then
+        if ns.ClearAllLootBrowserCaches then
+            -- The `true` is the whole point: an ordinary clear keeps the
+            -- saved copy, which is right for routine invalidation and
+            -- exactly wrong when the saved copy is the problem.
+            ns:ClearAllLootBrowserCaches(true)
+            print("|cff00ff00YippYapp|r loot browser data cleared, on disk as "
+                .. "well as in memory. It rebuilds next time the page is opened.")
+        else
+            print("|cff00ff00YippYapp|r the loot browser is not loaded.")
+        end
+        return
+    end
+
+    -- /yh loadtest [name|defer|off]
+    if cmd == "loadtest" then
+        if not ns.LoadGateRun then
+            print("|cff00ff00YippYapp|r the load gate is not loaded — a .toc "
+                .. "change needs a full client restart, not a /reload.")
+            return
+        end
+        ns.LoadGateRun(strlower(strtrim(arg or "")))
+        return
+    end
+
+    -- /yh trace [on|off|report|reset]
+    if cmd == "trace" then
+        local T = ns.Trace
+        if not T then
+            print("|cff00ff00YippYapp|r trace is not loaded — a .toc change "
+                .. "needs a full client restart, not a /reload.")
+            return
+        end
+        local sub = strlower(strtrim(arg or ""))
+        if sub == "report" then
+            T:Report()
+        elseif sub == "reset" then
+            T:Reset()
+            print("|cff00ff00YippYapp|r trace counters cleared.")
+        elseif sub == "off" then
+            T:SetEnabled(false)
+        elseif sub == "on" then
+            T:SetEnabled(true)
+        else
+            T:SetEnabled(not T.on)
+        end
+        return
+    end
+
     if cmd == "debug" then
         print("|cff00ff00=== YippYapp Debug ===|r")
         local profile = ns:GetCurrentProfile()

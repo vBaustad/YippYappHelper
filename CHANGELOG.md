@@ -1,5 +1,442 @@
 # YippYapp Helper - Changelog
 
+## Unreleased
+
+### Removed
+- **The interrupt tracker is gone.** It had not worked for the whole of
+  12.1, and it could not be repaired in place. The tracker never saw
+  which spell a party member cast -- the client stopped handing that over
+  once party spell IDs became secret-tainted -- so the party half of it
+  was inference: note that a teammate cast *something*, and when an enemy
+  is interrupted within 150ms, assume it was that teammate's class
+  default kick. Every layer of the file was scar tissue from working
+  around that (`pcall` on every lookup, `UnitIsUnit` instead of comparing
+  GUIDs because enemy nameplate GUIDs came back secret too), and the
+  guess at the bottom was the part that could not be fixed.
+
+  Making it genuinely work means a different data source -- the combat
+  log's `SPELL_INTERRUPT` names the kicker and the spell outright -- which
+  is a rewrite rather than a repair, and it would add the one event class
+  this addon has deliberately stayed clear of. OmniCD already does that
+  job well. Removed rather than left on screen lying.
+
+  Its saved settings and Edit Mode position are cleared on next login, so
+  nothing is left behind in the SavedVariables file.
+
+### Performance
+- **The watermark sweep still froze the client, and the test said it
+  didn't.** `ns:RefreshWatermarks` was fixed once already -- it asks the
+  client about one slot per frame instead of sixteen at once -- and it
+  went on producing multi-second frames anyway, most recently 5.3 seconds
+  on a spec change. Only half of it had been spread. To decide which
+  slots were worth queueing it called `ns:GetSlotInfo` on all sixteen up
+  front, synchronously, and that is the expensive half: `GetSlotInfo`
+  ends in a real `SetInventoryItem` tooltip build, and the
+  `UNIT_INVENTORY_CHANGED` handler driving it wipes the scan cache
+  immediately beforehand -- so every one of the sixteen is guaranteed
+  cold, on item data the client may still be loading. The decision moved
+  into the per-frame runner; the caller now does no slot reads at all.
+- **...and the check that was supposed to catch it stubbed the slow
+  half.** The harness counted `C_ItemUpgrade` calls and asserted none
+  landed in the calling frame, while replacing `GetSlotInfo` with a
+  trivial stub -- so it proved the cheap half was spread and never
+  measured the sixteen synchronous reads at all. It counts slot reads
+  now too, and the assertion is controlled: reinstate the old
+  queue-builder and it reports "read 16 slots in the frame that called
+  it".
+
+A sweep for work the addon does during ordinary play. None of these were
+features; all of them were the addon spending frames on questions nobody
+had asked.
+
+- **The login loot prewarm no longer caps the client at 30fps.** The
+  Encounter Journal sweep gives the frame back once it has used its
+  budget, and the budget was one whole frame at 60fps -- correct for the
+  scan somebody is watching a spinner for, and exactly backwards for the
+  one that runs unasked a few seconds after a loading screen. The prewarm
+  now takes 4ms rather than 16ms. It finishes later; nothing is waiting
+  on it.
+- **...and it no longer runs while you are inside a dungeon.** There was
+  already a guard for this, and it had never once executed: it lived
+  inside the closure the load gate only calls under `/yh loadtest loot`,
+  which is the by-hand path where the guard is least wanted. On the
+  normal path -- the one every session takes -- the gate says "go ahead"
+  and the closure is never called, so thousands of journal calls ran on
+  the way into keys exactly as before. The guard is now where it reads
+  like it was: ahead of the work, on the path that does the work.
+- **The battle-res timer stopped listening to your own cooldowns.**
+  `SPELL_UPDATE_CHARGES` fires for every charge-based spell the character
+  owns, so a Monk rolling around a world quest woke the handler several
+  times a second -- and the handler re-validates the entire saved
+  settings table and calls `GetInstanceInfo` before concluding "not in a
+  raid, draw nothing". The event is now registered only while the icon is
+  actually on screen; the events that can put it there were already
+  covered.
+- **The home page stopped rebuilding for other addons' quests.**
+  `QUEST_DATA_LOAD_RESULT` is global -- it reports every quest anything in
+  the UI asks for, and quest addons ask in the hundreds. Each one with a
+  resolvable title triggered a full home-page relayout, and because a page
+  stays mounted after the window closes, it did so on a window nobody was
+  looking at. Now only the quests this addon asked about count, and only
+  while the window is open.
+- **Crest IDs are resolved once a second at most, not once per coin.**
+  `CURRENCY_DISPLAY_UPDATE` is a gameplay event -- every turn-in, every
+  boss, every mob that drops anything -- and each one ran ten `pcall`ed
+  currency lookups and handed ten result tables to the collector, to
+  re-answer a question whose answer changes about once a season. Anything
+  that draws a crest still resolves on the spot, so nothing shows a stale
+  row.
+- **`/yh trace` costs nothing while it is off.** Its frame watchdog is a
+  parentless frame, which the client shows by default, so its `OnUpdate`
+  ran every frame of every session to read one boolean and return. Trace
+  could never have caught this: it does not wrap its own watchdog. The
+  frame is hidden now until tracing is switched on.
+- **`UNIT_INVENTORY_CHANGED` is filtered to the player.** The handler
+  already discarded everyone else's -- but in Lua, after being woken for
+  each of them. The client does that filtering for free.
+
+
+### Mythic+
+- **One redraw per burst of keystone replies, not one per reply.** The
+  page redrew on every incoming key, which was survivable while the only
+  repliers were other YippYapp users -- in practice none. On the shared
+  channel a single request into a large guild returns hundreds of replies
+  inside a second, and this asked for hundreds of full page renders to
+  draw a list that changed once. The library throttles what we send;
+  nothing throttles what arrives.
+- **Keystones now arrive on the channel everyone is already on.** Keys
+  were shared over YippYapp's own addon prefix, so the Guild tab only
+  ever listed people who also ran YippYapp -- in practice nobody, and
+  its empty state told the player to go and evangelise an addon to fix
+  it. The addon now embeds `LibKeystone`, the library BigWigs, DBM and
+  EllesmereUI all carry. Its frame answers a request the moment the file
+  loads, whether or not the host addon displays anything, so a guild or
+  party full of BigWigs users answers. Party keys populate from the same
+  callback. The old prefix still works, so nothing is lost for anyone
+  who does run YippYapp.
+  - **Needs a full client restart, not a `/reload`** -- it is a .toc
+    change, and the Lua guards on the library being absent so a reload
+    degrades to the old behaviour rather than erroring.
+  - M+ rating rides along for free on this channel and is now recorded,
+    though nothing displays it yet.
+
+### Mythic+ page
+- **A full group's keystones no longer run off the bottom of the page.**
+  The card grows to the floor and stops; the rows inside it were laid out
+  at one fixed height however many there were, so a fourth key was drawn
+  through the page and into the tab strip underneath. Two row heights
+  now, the way the This Week card beside it already picks between a plain
+  row and a detailed one -- roomy while it fits, tighter when it does
+  not, and a "+N more" line as a backstop rather than a list that
+  silently stops. Never seen before because this list only ever showed
+  other YippYapp users; moving keystones onto LibKeystone filled it up
+  and the layout met a full group for the first time.
+- **The Guild tab's Refresh button is gone; opening the tab asks.** The
+  button was parented to the whole window rather than to the tab's
+  content and nothing hid it again, so once the Guild tab had been opened
+  it stayed on screen over the Home tab's dungeon tiles for the rest of
+  the session. It was also a button for something the addon can do on its
+  own: asking is one throttled addon message, the replies arrive over the
+  next few seconds, and the panel already redraws when they land — so the
+  only thing the click ever added was the player having to know to click
+  it. Throttled to one ask per ten seconds so flipping between tabs does
+  not queue a request per switch.
+- **The vault strip above the page is gone.** The dashboard already draws
+  the Great Vault, in more detail and where a player looks for it, so
+  this was the same three numbers a second time -- charging a whole row
+  of height for them on the page with the worst vertical pressure in the
+  addon. That row goes back to the cards, which is what was overflowing.
+- **Rating goals you have already passed are hidden.** A full bar reading
+  "2000 Done" is a row spent on something you cannot act on, in the card
+  whose whole job is what to do next, and it pushed the focus list under
+  it further down. The last milestone stays when every one is passed, so
+  the card is never empty.
+
+### Loot browser
+- **A pass is refused if the journal ever answered for a boss we did not
+  ask about.** Every loot row names the encounter it belongs to, so a row
+  naming a different one is proof the journal's single global selection
+  moved between our `EJ_SelectEncounter` and our read — which is the
+  actual mechanism behind the identical-loot bug. Checked per row, and
+  tolerant of clients that do not supply the field: absent means "cannot
+  verify", not "wrong".
+  - This catches the case the shape check cannot: a selection that moves
+    part-way through a sweep corrupts some rows and not others, which
+    looks entirely plausible and would be cached and served as fact.
+- **A pass where every boss drops the same thing is refused, saved or
+  loaded.** That is not loot — it is one encounter's list copied across
+  every row, which happens because the Encounter Journal has a single
+  global selection and anything that re-selects underneath a running
+  sweep makes `EJ_GetLootInfoByIndex` answer for whichever encounter won.
+  Prevented upstream by never sweeping while the Adventure Guide is open,
+  but prevention is a guess about every way the selection can move and
+  this is a fact about the result. Checked on the way **in** as well as
+  out, so a bad pass already written to disk is thrown away rather than
+  only being prevented for players who never had one.
+- **`/yh lootreset`** throws away all saved loot browser data — on disk
+  as well as in memory — and rebuilds on the next open. The ordinary
+  cache clear deliberately keeps the saved copy, which is right for
+  routine invalidation and exactly wrong when the saved copy is the
+  problem.
+- **The instance list is written down instead of rediscovered every
+  session.** Which raids and dungeons exist, and which bosses are in
+  them, does not change until the game patches — yet finding it out cost
+  a walk through every tier of every expansion in the Encounter Journal,
+  once per login, whether or not anybody opened the panel. It is now
+  saved and stamped with the game's interface version plus the addon's
+  own, so a patch or an addon update looks again and nothing else does. A
+  copy that is stale, malformed or empty is rebuilt rather than trusted,
+  and an ordinary cache clear keeps it — only an explicit forget drops
+  it.
+- **The loot itself is written down too, so a reload does not refetch
+  it.** Which items a boss drops is as fixed as which bosses exist, and
+  fetching it is the bulk of the sweep — the instance walk finds a few
+  dozen bosses, then every one of them is asked at every difficulty.
+  Saved under the same stamp as the instance list, so a patch or an addon
+  update invalidates both together and nothing else invalidates either.
+  Stored whole, links included: the compact form would be item ids with
+  the rest rebuilt on load, and that trades disk for a panel that renders
+  blank until the client returns item data.
+- **The journal link index is written down too.** `GetJournalItemLink`
+  maps an item id to the journal's own link for it, and building that
+  index is a third walk of the Encounter Journal — lazily, the first time
+  the Best in Slot or Trinkets page asks about a row. Which item the
+  journal lists for a boss changes when the game patches and at no other
+  time. Saved under the same stamp as the instance list and the rows, so
+  all three invalidate together and nothing else invalidates any of them.
+  An empty index is still never accepted, saved or built: the journal is
+  not always populated when first asked, and an empty one served as fact
+  leaves every page showing base items with no way back.
+- **The login prewarm no longer runs while you are inside an instance.**
+  It is a nicety — it makes the first panel open feel instant — and it is
+  thousands of Encounter Journal calls fired five seconds after a loading
+  screen, on a client that is still busy with one. Zoning into a dungeon
+  is the version of that where you can least afford it. It now waits
+  until you are somewhere quiet.
+- **Redrawing the list no longer hides whatever tooltip you were
+  reading.** `ReleaseAll` called a bare `GameTooltip:Hide()`, and
+  GameTooltip is one frame shared by the entire UI — so every redraw hid
+  a bag item's tooltip, a spell's, another addon's panel. The list
+  redraws on `ITEM_DATA_LOAD_RESULT`, which fires once per item as data
+  streams in, so after a loading screen it fired in batches for as long
+  as the client took to catch up. It now hides the tooltip only when the
+  owner is inside the loot browser.
+- **Half the journal sweep never yielded.** The instance cache is built
+  inside a coroutine with a 16ms frame budget, and the dungeon walk hands
+  the frame back at each tier and each instance -- but the raid walk did
+  not yield anywhere at all, so every raid of every expansion, and every
+  boss inside each one, ran in a single unbroken stretch. Neither boss
+  loop yielded either. The budget the scanner is built around simply did
+  not apply to half its work, and this runs a few seconds after a loading
+  screen. Measured: the same sweep now spreads over 141 frames instead of
+  132.
+- **Bounded the journal walks.** Each was a `while true` whose only exit
+  was the Encounter Journal returning nil for the next index — the
+  documented shape, and also a hang if the journal ever declines to say
+  no, which is a real risk on the API least settled right after a loading
+  screen. The caps sit far above anything the game ships (verified as
+  having no effect on what is scanned); they are the difference between a
+  bug that stops and one that takes the client with it.
+
+### Diagnostics
+- **`/yh trace`** — times the addon's own functions and says, on screen,
+  when one of them eats a frame. Built for a freeze that only happened
+  after a loading screen: a hang throws no error so !BugGrabber has
+  nothing to catch, and SavedVariables only flush on a clean exit, so
+  anything written for the next login is lost when the client has to be
+  killed. Counting as it happens is what is left. The setting survives a
+  `/reload`, because the window worth watching is the one right after
+  one. `/yh trace report` for totals — call counts as well as time,
+  since the problem below was never a slow call.
+  - It cannot see inside a loop that never returns; nothing in Lua can.
+    That is what the load gate below is for.
+  - **The loot sweep is now named.** The first real stall this caught was
+    9.6 seconds and reported "not inside anything we wrap" — true, and
+    useless: the sweep runs in a coroutine driven by an OnUpdate script
+    and the cache it builds is a file-local, so neither is reachable from
+    a list of functions hanging off the namespace. `Trace:Section` times
+    a block that runs to completion (the coroutine driver, where the
+    frames are actually spent) and `Trace:Mark` names one that yields
+    without timing it, since a parked coroutine's elapsed time is wall
+    clock rather than work. A stall now says `loot: sweep slice`,
+    `loot: instance cache` or `loot: journal sweep`.
+  - **The raid path is now watched too.** Stalls of 3.6s and 6.1s landed
+    on "Party converted to Raid" and an LFR zone-in rather than a plain
+    loading screen, and nothing on that path was instrumented. Added
+    `RefreshRaidPage/Overview/Display/Groups`, `ScanRaid` and the tier
+    data helpers, plus `interrupts: rebuild` and `readycheck: roster` —
+    both locals, named at the call site, both firing on every roster
+    change.
+  - `LootBrowser_RefreshDisplay` and `RefreshWatermarks` added to the
+    wrap list — both redraw off item data streaming in, which is exactly
+    what a bag full of new loot produces.
+  - **The frame watchdog now reports what share of a stalled frame was
+    ours**, instead of which function we were inside. The old version was
+    broken by construction: an `OnUpdate` runs *between* frames, after
+    every wrapped call has returned and cleared that field, so it printed
+    "not inside anything we wrap" every single time — and a run of real
+    multi-second stalls got read as the addon being innocent. Every
+    wrapped call now adds its elapsed time to a per-frame total that
+    clears between frames, so whatever ran during the frame that stalled
+    is still counted when the next one arrives.
+  - It reports at 250ms rather than 50ms.
+    The frames right after a loading screen are legitimately long, so the
+    lower threshold printed a wall of noise on every load and buried the
+    one line worth reading.
+- **`/yh loadtest`** — holds back the expensive jobs that normally run
+  themselves a few seconds after a loading screen, gives each one a name,
+  and runs them by hand from a client that is already up. Whichever
+  command does not come back is the one, and it is the whole bisect in a
+  single session rather than a restart per guess. Currently names
+  `loot` (walks every tier of every expansion through the Encounter
+  Journal), `keystones` (a guild request now returns a reply from every
+  BigWigs user in it) and `window` (opening on login builds the dashboard
+  and whatever page it lands on).
+  - **`/yh loadtest only <name>`** is the mode that actually reproduces
+    a loading screen: it lets exactly one job run where it normally runs,
+    at the moment it normally runs, with the rest still held. One reload
+    per job. Running a job by hand cannot reproduce load conditions and
+    should not be read as if it does -- by then the caches it fills are
+    already full, the journal has settled, item data has arrived and
+    nothing else is competing for the frame.
+  - By-hand runs now clear the job's own caches first and wait for its
+    asynchronous tail, reporting the worst frame seen while waiting. The
+    first version timed the handoff rather than the work and reported
+    0ms for every job -- a diagnostic that clears everything is worse
+    than none.
+  - Why a flag rather than a post-mortem: SavedVariables are flushed on a
+    clean exit and a killed client never has one, so nothing a frozen
+    session learns about its own death survives it. A flag set *before*
+    the freeze does survive, because the `/reload` that triggers it
+    writes the file on the way out.
+
+### Performance
+- **The six-second freeze, found and fixed.** `ns:RefreshWatermarks` was
+  measured taking **5911ms of a 6314ms frame — 94% of it** — on a player
+  zoning between a dungeon and the world. Sixteen slots in a single pass,
+  each up to three `C_ItemUpgrade` calls, and those are not cheap while
+  the item data behind them is still loading, which is exactly the state
+  after a loading screen. It runs from the `UNIT_INVENTORY_CHANGED`
+  handler, which fires when you zone.
+  - It now asks about **one slot per frame** instead of all sixteen at
+    once, so even a cold pass costs a slot per frame rather than a stall.
+  - And it only asks about slots whose item actually **changed** since
+    the last answer — which on a zone is usually none of them. A slot's
+    mark is the client's answer about the item in it; with the same item
+    equipped, the previous answer stands.
+  - Marks only ever go up and are persisted, so arriving a few frames
+    late costs nothing.
+  - **And a reload now asks nothing at all.** The marks always survived a
+    reload; what did not was the record of *which item* each one was an
+    answer about, so every session re-asked all sixteen from scratch. A
+    reload cannot change what is equipped, so a mark recorded last
+    session against the piece still in the slot is still the client's
+    answer. Only a slot whose item genuinely changed is asked.
+  - A mark can also rise from a piece binding in the bags, which does not
+    change the equipped item — that case is covered separately by
+    `BoundBagFloor`, which reads the bags directly rather than asking the
+    client.
+- **One draw of the suggestions panel asked the client for a slot's item
+  over a thousand times.** `ns:GetSlotInfo` is the bottom of nearly every
+  gear question the addon asks, and only the tooltip half of it was
+  cached -- the item link, the ItemLocation and two pcall'd `C_Item`
+  reads ran every single time, measured at 1285 calls for one refresh.
+  It is now cached on exactly the same lifetime as the tooltip scan it
+  wraps, empty slots included, since both go stale together.
+- **...and none of it was being cached in the window where it hurt.**
+  `ScanUpgradeTrack` records a result only when the tooltip parses. Right
+  after a loading screen the item data has not arrived, so *nothing*
+  parses, nothing is cached, and every one of those thousand-odd reads
+  builds a full `SetInventoryItem` tooltip -- while several panel draws
+  land in that same window as currency, bag and roster events arrive
+  together. That is a stall that happens specifically after a loading
+  screen and nowhere else. A read taken before the client is ready is now
+  held for the current frame only: a burst inside one frame collapses to
+  sixteen reads, and the next frame asks again and gets the real answer
+  as soon as there is one.
+
+### Gear
+- **The advisor knows you can craft the thing.** Several specs are told
+  by their own best-in-slot list to MAKE a piece rather than kill
+  something for it, and every rule in the upgrade advisor priced the
+  vendor route only -- so it would happily talk you into spending the
+  exact 80 crests the craft you are saving for needs. A slot the guide
+  says to craft now reads "Craft instead", with what it costs, what it
+  lands at and why that beats anything crests can do to what is in the
+  slot today; the other rows on that tier say where the 80 went rather
+  than quietly reporting less to spend. Gated on a Spark of Tides
+  actually being in your bags -- sparks are the half that does not
+  refill, and advice to hold crests for a craft you cannot start is just
+  advice to stop spending. One craft held for at a time, and the tier it
+  aims at is the best one this season's cap can still reach, not the
+  first one you happen to be able to afford tonight.
+  - A bare slot the list says to craft used to say nothing at all: the
+    improvements list drops empty slots, which is exactly where a craft
+    is the whole answer.
+- **The strip of per-wallet sentences above Improvements is gone.** Three
+  paragraphs about crest tiers sat between the player and the list of
+  slots they were about -- on a page read for the next thing to click.
+  Everything they said about a slot is on that slot's row and its hover.
+  What is only true of a whole wallet -- how far the tier gets, how many
+  weeks the shortfall is, what a craft has taken off the top -- moved
+  onto the crest tiles beside the paper doll, where the balance already
+  lives. Hover one.
+- **A crest tier is now counted over slots, not over the pieces you are
+  wearing on it.** Every demand figure in the addon priced the pieces
+  currently on a track, which is the wrong set: a Champion crest is spent
+  on every slot that will ever hold a Champion item, including the ones
+  still wearing Veteran, still wearing nothing, or waiting on a drop.
+  Counting only what was worn made the bill look small, the wallet look
+  scarce, and every rule downstream reach for "hold".
+  `ns:GetSeasonDemand` prices it forward instead, off the watermark:
+  ranks at or under a slot's mark are free, so the cost of taking a slot
+  to a track's cap is the ranks above its mark -- whatever is in it now,
+  and whether or not anything is. A Myth piece takes a whole slot off the
+  Hero bill, because the mark it sets is past the Hero cap. Ten Myth
+  pieces leave six slots at five ranks each, and 600 Hero crests covers
+  the lot.
+- **"Enough available to max all 6 slots without worrying about running
+  short."** When everything a tier could ever want fits inside what you
+  can still get, the tier is not scarce, and the rules that ration it
+  stand down: the reserve keeps nothing back, the hold-for-a-drop bet
+  stops firing (with crests for every slot, both happen), "Hold crests"
+  becomes "Upgrade later -- this one is covered too", and the overlap
+  warnings -- find a Champion piece to skip the first Hero rank -- go
+  quiet, because that trick saves crests and there is nothing to save.
+  The sentence says which promise it is making: *in hand* is spend it
+  tonight, *available* is you will not be short by the time the drops
+  land.
+- **A slot's bill is priced off the mark it will have, not the one it
+  has.** A slot wearing a Champion 1/6 reads as five Hero ranks, but
+  that piece gets taken to the Champion cap first -- the addon says so
+  on its own row -- which marks the slot at 308 and leaves four. Ten
+  Myth, five Hero and one Champion at 1/6 is 500 + 100 Champion + 80,
+  not 600; the addon had been disagreeing with the player's arithmetic
+  about an upgrade it had already recommended.
+- **A track you own no pieces of can now be advised on.** Wearing nothing
+  on a track ended the answer, which silenced exactly the case worth
+  hearing: 600 Hero crests and no Hero piece yet means the crests are
+  already sorted and only the drops are missing.
+- **The improvements list now says what a whole wallet can do, not only
+  which slot is next.** Three lines head it — the highest crest tracks
+  with something left to buy — each answering the question a capped
+  player actually opens the panel with: how much this track wants, what
+  is in the wallet, and whether the season cap still allows the rest.
+  The arithmetic has been in `ns:GetTrackPolicyLine` since it was
+  written and nothing had ever called it.
+- **Held crests and earnable crests are stated apart.** The budget they
+  add up to was printed as one number described as income -- "120 to
+  finish them all and 240 coming" -- which counted crests already in the
+  bags as though none of them were there. It now reads "you hold 40 and
+  the cap allows 200 more".
+- **"Need 80 more Champion" now says where the 80 comes from.** Every
+  rank in the spend plan carries a flag for whether the season cap
+  reaches it, and nothing read it, so a slot two keys from affordable
+  and one the cap cannot cover this week gave the same line. Three
+  answers now: farmable this week, waiting on a reset, or -- only on a
+  track the content has outgrown, where crests arrive as overflow from
+  capping something higher -- wanting a drop instead.
+
 ## v3.1.1 - Closing the window in combat (2026-08-19)
 
 ### Fixed

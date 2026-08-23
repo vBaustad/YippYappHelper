@@ -357,7 +357,17 @@ frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 -- battle res is actually spent or comes back, and that is the number
 -- people are looking at. Without it the count could sit half a second
 -- stale, which is exactly the moment it matters.
-frame:RegisterEvent("SPELL_UPDATE_CHARGES")
+--
+-- NOT registered here, though: SyncUpdater below turns it on and off
+-- with the icon. CHARGES is quieter than COOLDOWN but it is not quiet --
+-- it fires for every charge-based spell the character owns, so a Monk
+-- rolling around a world quest was running the handler several times a
+-- second. And the handler is not free: Tick calls ShouldShowDisplay,
+-- which calls db() -- which re-validates and clamps the whole saved
+-- table -- and GetInstanceInfo, only to conclude "not in a raid, draw
+-- nothing". Outside a brez instance that answer cannot change, and the
+-- events that CAN change it (zoning, encounter start, combat) are all
+-- registered above.
 
 local updater = frame:CreateAnimationGroup()
 updater:SetLooping("REPEAT")
@@ -372,8 +382,11 @@ updater:SetScript("OnLoop", Tick)
 local function SyncUpdater(shown)
     if shown then
         if not updater:IsPlaying() then updater:Play() end
-    elseif updater:IsPlaying() then
-        updater:Stop()
+        -- Charge news only matters while the number is on screen.
+        frame:RegisterEvent("SPELL_UPDATE_CHARGES")
+    else
+        if updater:IsPlaying() then updater:Stop() end
+        frame:UnregisterEvent("SPELL_UPDATE_CHARGES")
     end
 end
 
