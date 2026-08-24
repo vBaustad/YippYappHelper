@@ -153,8 +153,6 @@ Features\Teleports\TeleportUI.lua
 # Planner data backs the shell's home page. Kept under Features for
 # locality; it loads here because the pages that read it are above.
 
-Features\Delves\DelvesData.lua
-Features\Delves\DelvesUI.lua
 Features\Planner\WeeklyChecklist.lua
 Features\Planner\PlannerData.lua
 

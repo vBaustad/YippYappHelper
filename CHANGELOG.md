@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Removed
+- **The Delves tab is gone.** A whole page to restate a companion's
+  friendship rank, a key count and a tier ladder -- none of which the
+  game hides, and two of which this addon already says elsewhere. It came
+  out entirely: `Features/Delves/`, its shell page, its entry in
+  `/yh shell <page>`, and the client stubs in the harness that nothing
+  else used (`C_DelvesUI`, the `C_GossipInfo` friendship pair,
+  `C_PartyInfo.IsDelveInProgress`, `C_Reputation`).
+
+  Delves themselves are not gone from the addon, only their tab. The
+  weekly checklist still lists delve chores, the Dashboard still advises
+  "run a tier N delve" when that is the cheapest upgrade going, the
+  Progression page keeps its delve tier section, and the vault's World
+  row is still filled by them.
 - **The interrupt tracker is gone.** It had not worked for the whole of
   12.1, and it could not be repaired in place. The tracker never saw
   which spell a party member cast -- the client stopped handing that over
