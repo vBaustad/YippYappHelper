@@ -1,6 +1,6 @@
 # YippYapp Helper - Changelog
 
-## Unreleased
+## v3.2.0 - Crest advice, shared keystones, and a lighter addon (2026-08-24)
 
 ### Removed
 - **The Delves tab is gone.** A whole page to restate a companion's
