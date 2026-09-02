@@ -1,5 +1,396 @@
 # YippYapp Helper - Changelog
 
+## v3.3.0 - Trinket tier lists, the upgrade-mark fixes, and the Battle Res Timer out (2026-09-02)
+
+### Removed
+- **The Battle Res Timer is gone.** EllesmereUI draws one, so does
+  BigWigs, and all three read the same pool the game itself publishes --
+  so for most raiders this was a second copy of a number already on
+  screen. It was also on screen during a pull, which is where there is
+  least room for one.
+
+  Out with it: `Features/Raid/BattleResTimer.lua`, its two options
+  (Battle Res Timer, and Show between pulls), the "Battle Res Timer"
+  settings section, and `/yh brez`. The roster's "who can combat res"
+  column is a different thing and stays -- that lives in
+  `Features/Raid/SpecMeta.lua` and feeds the raid page.
+
+  Its saved settings and its Edit Mode position are cleared on next
+  login, so nothing is left behind in the SavedVariables file.
+
+  **Edit Mode now has nothing to place.** The timer was its last frame:
+  every other window in the addon moves itself, dragged where you want it
+  while it is open, and only the timer -- up mid-pull, when dragging is
+  the last thing you want to be doing -- needed a mode of its own. The
+  "Appearance and position" section and its Open Edit Mode button have
+  gone with it, and `/yh edit` says so instead of opening an empty
+  manager. The integration itself is left in place: it is machinery
+  rather than a feature, and one table entry brings it back.
+
+### Added
+- **Best in Slot now survives the Catalyst.** Feeding a piece to the
+  Catalyst destroys it, so a row you had done exactly what the page told
+  you to do with flipped from collected back to missing at the moment it
+  was most finished -- the item ID it was tracking no longer existed.
+
+  What survives the conversion is the secondary stats: class set armour
+  inherits them from whatever went in. So a set piece worn in one of the
+  five class-set slots, whose secondaries match the armour that slot's
+  row names, is now read as that row, converted. It counts toward
+  "collected", carries the Catalyst's purple and a `cat` tag on the doll,
+  and the slot summary gains a "2 converted" segment on characters who
+  have any.
+
+  It is shown as an inference rather than as a tick, because that is what
+  it is: a set piece that dropped directly rolls its own secondaries and
+  can land on the same pair by chance. The tooltip says what was actually
+  seen -- "you are wearing class set armour at 311 with this item's
+  secondaries" -- rather than claiming to know which piece was fed in.
+  Anything the client can state outright wins: wearing the row's own item
+  reads as equipped, a copy in the bags reads as bagged, and a row already
+  tagged `+cat` is never inferred at all, since there the item ID answers
+  on its own.
+
+- **Trinkets now carry the guide's verdict, not just the sim's.** Hovering
+  a trinket has always shown where bloodmallet ranks it. It now also
+  shows the letter grade your spec's Wowhead guide gives it, the content
+  it drops from, and the author's own note on it -- "syncs perfectly with
+  DRW as San'layn", "not great, honestly, careful while using it" -- the
+  kind of thing a throughput number cannot say.
+
+  The two are shown side by side rather than blended. A percentage and a
+  letter are different claims: the sim ranks by damage against one
+  dummy, and the guide ranks knowing which on-use wants pairing with
+  which cooldown, which drop is Vault-only, and which pair nobody would
+  wear together. Averaging them would produce a number neither source
+  stands behind.
+
+  **Augmentation Evoker has trinket advice for the first time.**
+  bloodmallet does not sim it and QE Live covers only healers, so the
+  spec had nothing at all. Its guide grades trinkets like every other,
+  and that is what the new tab and the tooltip read.
+
+  **A Guide tab on the Trinkets page**, beside My Spec and Loot Council.
+  It draws the ladder in bands rather than as a numbered list, because
+  within a tier the guide states no order and numbering three S-tier
+  trinkets 1, 2, 3 would invent a ranking the author declined to give.
+  Every band is drawn, never a top-N: the lower bands are where the "do
+  not bother" information lives, which is most of what a tier list is
+  for. The pairing advice sits above it, and each author note under the
+  trinket it is about. No bars, no percentages, no item level stepper --
+  none of those are what a letter grade is made of -- and the fight
+  style buttons are hidden there, since the guide grades a spec once
+  rather than once per target count.
+
+- **The Guide tab leads for specs whose sims are behind.** bloodmallet
+  re-sims a season a few specs at a time, and Balance Druid, Feral,
+  Guardian, Devastation and Retribution are still on last tier's
+  numbers -- they have no opinion at all on anything that has dropped
+  since, and the page opened on them anyway. For those specs the Guide
+  tab is now first, so the page lands on advice that is about this
+  season. It is a reorder, not a redirect: My Spec is one click away,
+  still says what it is, and a remembered choice still beats both.
+  Hiding the sim outright would be a bigger claim than "this one is out
+  of date", which is all that is known. The stale-data warning on My
+  Spec now points at the tab that is current instead of only saying the
+  numbers are old.
+
+  909 graded trinkets and 301 author notes across all 40 specs, from
+  `Tools/scrape_trinket_tiers.py`. The tier list lives on the same
+  `/bis-gear` page the class-guide scrape already fetches, so keeping it
+  current costs no extra requests.
+
+- **A trinket the guide does not list now says so.** Previously a hover
+  that found nothing looked exactly like a hover on an item the addon
+  had never heard of. It now says "not on the Fire Mage trinket list"
+  -- but only for a trinket some other spec ranks or grades, which is
+  what proves it is a current trinket worth having an opinion about. An
+  item nobody ranks still says nothing, because the guide's silence
+  there is about its own scope rather than about the item.
+
+- **The trinket tooltip answers your question first, and only yours
+  when you are alone.** It used to open with five other specs' rankings
+  on every hover. On a character whose own sim is a tier behind, that
+  was the entire tooltip: eight lines about specs you are not playing, a
+  "+29 more specs", and nothing whatsoever about you.
+
+  Your spec now comes first -- the guide's grade, the author's note, and
+  a single `Sim #7` line for where the sim puts it -- and the other
+  specs are shown only when you are in a group, cut from five to three.
+  "Who else wants this" is a real question, but it is the loot council's
+  question and it needs a council; the page's Loot Council tab has
+  always held the full list. The duplicate source attribution in the
+  header is gone too: the group headings underneath already said it.
+
+- **The consumables popout meets the Auction House.** The small popout
+  exists for one place -- standing at an auctioneer with fifteen names to
+  shift-click -- and it did not know when you were there, so every visit
+  started by opening the app, finding the Consumables page and pressing
+  Popout. Now it opens itself when the Auction House does, pinned against
+  the top right of it.
+
+  The top right corner rather than any other: it hangs off the side so
+  nothing is covered, and anchoring the *top* keeps the window still when
+  its height changes -- Gems is a third the length of Consumables, and
+  paging the arrows from a bottom anchor would have it jump every time.
+
+  Pinned is the default, and a **Pin to Auction House** box on the window
+  itself is the unlock. Untick it and the window stays exactly where it
+  is -- unlocked in place, not thrown back to wherever it last sat loose
+  -- and drags anywhere you like from there. The box only shows while the
+  Auction House is open, because that is the only time it means anything.
+  Dragging a pinned window is refused outright rather than allowed and
+  snapped back, which looks like the window fighting the cursor.
+
+  Only a window the Auction House opened is closed again when you leave.
+  One you popped out by hand before walking over is left alone.
+
+  Off in **Options - AddOns - YippYapp Helper - Consumables at the
+  Auction House** if you would rather open it yourself.
+
+  **`/yh ah`** walks that whole path and says what it found at each step
+  -- whether the watcher is armed, whether the page is built, whether the
+  setting is on, whether the Auction House frame has ever loaded -- and
+  then runs it. Every one of those failing looks identical from the
+  chair, which is nothing happening.
+
+### Developer
+- **The load harness counts globals.** Every global the addon creates
+  is snapshotted around the load pass and diffed. A Lua assignment that
+  forgets `local` lands in `_G`, Blizzard's own code reads globals, and
+  reading one an addon wrote carries that addon's taint into the secure
+  path -- the "interface action failed" class, which then gets blamed on
+  whichever addon the player looks at first. Nine exist today and all
+  nine are legitimate: named frames, the keybinding strings, the saved
+  variables table and the bundled libraries' own globals. The tenth will
+  fail the run.
+
+- **`/yh marks` — the whole high-water state, read rather than
+  inferred.** Every one of the seventeen redundancy buckets the client
+  keeps, named from the client's own enum, character and account side by
+  side; then which bucket each worn piece answers to, with crafted and
+  off-stat pieces flagged.
+
+  Everything else in the addon reaches these marks one item at a time,
+  which is the right shape for pricing a rank and the wrong shape for
+  answering "why did this not go free" -- it can only ever show one
+  bucket and never the sixteen it sits among.
+
+  It exists because the rules here are not documented anywhere and the
+  player reports contradict each other. Run it, change one piece, run it
+  again: whatever moved is the rule. Two runs settle questions no amount
+  of reading settles.
+
+
+### Changed
+- **The Auction House list has room, and answers a click instead of the
+  cursor.** The window beside the auctioneer was 250 wide with 22px rows,
+  and the names in it are the longest in the addon -- a weapon enchant
+  wrapped onto a second line inside a one-line row, so it was drawn
+  through the name under it. It is wider now, a line taller, and a name
+  too long for the row is cut short rather than wrapped.
+
+  **No more tooltip on hover.** This window sits on top of the Auction
+  House and the cursor crosses it on the way to something else; a
+  tooltip that opened itself on the way past covered the auction list
+  underneath, repeatedly, for nobody. Now:
+
+  - **Click** an item and its tooltip opens beside the window -- on
+    whichever side has the room -- and stays there until you click it
+    again, so it can be read without holding the mouse still.
+  - **Shift-click** and the Auction House searches for it: the name goes
+    into Blizzard's own search bar and the search runs. Away from an
+    auctioneer, shift-click still links to chat as it always did.
+
+  A line at the bottom of the window says which is which, and says
+  "search" or "link" depending on where you are standing.
+
+- **Steps get a number, not a question mark.** A row with no spell
+  behind it used to draw `INV_Misc_QuestionMark`, on the reasoning that
+  a missing icon and a missing spell id look the same to a reader. That
+  reasoning was wrong about half the rows: "The split", "The quadrants",
+  "The egg fall", "Platform eggs" are not abilities at all. They are
+  steps, done in order, and there was never going to be a spell id for
+  them -- so the question mark was reporting a lookup failure that had
+  not happened.
+
+  Those rows now show a numbered box: the step's place in its phase,
+  after the difficulty filter, so the number matches what is on screen.
+  It reads as sequence, which is what a step is. An ability we genuinely
+  have no id for gets one too -- "here is where this comes" is true,
+  where "something went wrong" was not.
+- **"Before you pull" answers per difficulty.** One flag covered both,
+  so a boss whose Heroic notes existed and whose Mythic ones did not
+  printed "Not recorded" over the top of the Heroic notes it had -- a
+  claim of ignorance the same card disproves two lines further down.
+  Each difficulty answers for itself now: what is written, or an
+  admission for that one alone. Silence still means "nothing changes",
+  which is a real answer and a different one.
+- **Ula'tek's guide, rewritten against a real source.** He was written
+  from two video transcripts because nothing covered him in text.
+  mythictrap has published him now, which adds the half a transcript
+  cannot: real spell IDs for Mother's Wrath, Unchecked Rage, Necrotic
+  Vapors, Anguished Cry and Vicious Echoes, so those five draw the
+  client's own icon and tooltip instead of being matched by name.
+
+  Two phase-one abilities nobody had captioned are in: **Unchecked
+  Rage** is the reason both tanks hold their targets — let either drift
+  out of melee and the raid takes it — and **Necrotic Vapors** is the
+  rot running underneath the phase. Both interrupts are named now, one
+  per later phase.
+
+  Heroic changes go on the two mechanics they change. Mythic stays
+  unknown, because mythictrap publishes a Heroic block for this boss and
+  no Mythic one.
+
+  The transcripts held up everywhere else, including the two things they
+  were most likely to have invented — eggs breaking weak or hatching
+  strong, and phase three's marked players being soaked rather than run
+  from.
+- **Class guide data refreshed** (Wowhead, 2026-09-02). 29 of 40 specs
+  moved since the last release, over two passes. Stat priorities changed
+  for Unholy Death Knight, Subtlety Rogue, Enhancement Shaman and
+  Preservation Evoker -- Enhancement's two hero builds no longer agree,
+  so the page now shows Stormbringer and Totemic separately instead of
+  one merged list. Best-in-slot moved in most of the rest, most heavily
+  Restoration Shaman, Enhancement Shaman, Subtlety Rogue, Preservation
+  Evoker and Restoration Druid.
+- **Consumables data refreshed** (Wowhead, 2026-09-01). 16 of 40 specs
+  moved since the last release. Most of it is one story: a new temporary
+  weapon enchant, Rite of the Hash'ey, which 14 specs now recommend over
+  the old oils and stat enchants. Havoc Demon Hunter also dropped from
+  five gems to two and changed its diamond, and Assassination's flask
+  and combat potion became three-way ties rather than single picks.
+
+### Fixed
+- **The Auction House list read `item:273072` until you closed it.** Walk
+  up to an auctioneer for the first time in a session and the popout
+  came up as a column of red question marks and raw item IDs. Closing it
+  and opening it again fixed it, which is the tell: the client had not
+  sent those items yet, and the names landed a moment later with nobody
+  listening.
+
+  The redraw that runs when an item's data arrives was wired to the
+  Consumables page, and beside the Auction House the page is shut -- so
+  it checked, found the page hidden, and did nothing. The popout now
+  counts as being on screen in its own right, and gets its own redraw
+  when the page is not up to pass one down.
+
+- **A free rank that was not free.** An off hand at 305 wore a cyan
+  "Free upgrade!" and read "free to 308", and the vendor charged crests
+  for the rank.
+
+  The client answers the high-water query twice over: how high THIS
+  character has been in the slot, and how high the account has. The
+  addon took the larger of the two and called every rank under it free.
+  Only the character's own figure carries a free rank; the account
+  figure is how far the rest of the warband has got, which is a
+  different statement about a different character. That is now the only
+  number a free rank may be quoted from, with the account one kept as a
+  fallback for the client not answering in that shape at all.
+
+  Marks written under the old rule are on disk and nothing about a
+  stored number says which half it came from, so they are cleared once
+  at login and re-read within a few frames.
+
+  Wrong in the safe direction from here on, which is the rule the whole
+  free-rank half of the addon is built on: a mark that is too low hands
+  out too few free ranks, and a row that holds back a rank that turned
+  out to be free costs a walk to the vendor. Too high spends crests that
+  do not come back.
+- **The raid scan kept everybody you ever grouped with.** It is written
+  from `INSPECT_READY`, which fires for a group member whoever asked for
+  the inspect -- this addon or any other -- it was cleared only by
+  starting another scan, and it was saved to disk on every logout.
+  Measured on a real account: **673 players, 152KB**, three times the
+  size of everything else in the saved variables file put together, and
+  nearly all of it strangers from pugs weeks earlier.
+
+  It prunes to the current group on every roster change now, and saves
+  nothing at all when you log out ungrouped. An empty roster reads as
+  "ask again later" rather than "you are alone", so a loading screen
+  cannot blank the page for a raid that is still there.
+- **The durability cache is bounded.** Same shape, smaller: fed by
+  addon messages from other players, one entry per distinct sender name,
+  and nothing ever removed one. Entries past their ten-minute TTL are
+  already ignored on read, so they are now swept once the table grows
+  past a group's worth. It matters mainly because the feed is remote --
+  a table that only ever grows, filled by input from outside, is worth
+  bounding whether or not anyone is being clever with it.
+
+- **The crest discount is re-read the moment it is earned.** It is an
+  achievement, and an account-wide one: cross an item level in every
+  slot on any character and every character pays ten crests a rank
+  instead of twenty. The addon checked once at login and cached the
+  answer, so a discount earned with the panel open left every price
+  doubled until a reload -- at exactly the moment the numbers matter
+  most, with somebody deciding what to spend next having just crossed a
+  threshold. `ACHIEVEMENT_EARNED` clears it now.
+
+- **Off-stat gear sets no line.** The high-water mark follows gear that
+  is class-appropriate, not everything a character can physically
+  equip -- and the addon was counting anything bound with a high enough
+  item level. A shaman reported spending sixty Hero crests taking an
+  Agility staff from 311 to 321 with the watermark never moving; a
+  shaman can hold a staff, and an Agility staff is nobody's shaman
+  weapon.
+
+  That is the piece a player is most likely to be sitting on, too: the
+  off-stat one kept because the item level is high. Every place the
+  addon works a mark out for itself now checks -- what is worn, what is
+  bound in the bags, a spare worth finishing, a tradeable piece worth
+  keeping.
+
+  Excluded on positive evidence only: this spec's primary stat read off
+  the guide, the item's read off the item, and the two different.
+  Anything unknown still counts, so the rule cannot quietly swallow the
+  pieces that have no primary stat at all -- most necks, rings and
+  trinkets -- or every spec whose guide the addon has not got.
+
+- **Your alt was reading someone else's marks.** The saved variables
+  file is account-wide -- one table, every character on the account
+  writing into it -- and the high-water mark cache was keyed by slot
+  alone. A mark is a fact about ONE character's slot, so every character
+  after the first read whatever the last one left behind.
+
+  And it read them in exactly the situation the cache exists for: away
+  from the upgrade vendor, where the live query answers nothing and the
+  read falls through to disk. A druid logging in after a demon hunter
+  inherited the demon hunter's weapon line and was told ranks were free
+  that its own vendor charges for.
+
+  Marks and their item links are now filed under the character's GUID --
+  stable across a rename or a transfer, and unique where two characters
+  on different realms share a name. What was already on disk cannot be
+  attributed to anyone, so it is cleared once at login and re-read.
+
+- **Two one-handers share a line, and the addon now knows it.** This is
+  the rest of the free-rank bug above, and it takes two one-handers to
+  see: `Enum.ItemRedundancySlot` keeps the one-hand marks as a ranked
+  PAIR -- `OnehandWeapon` (14) and `OnehandWeaponSecond` (15) -- the same
+  shape rings and trinkets have, and there for the same reason. One good
+  one-hander must not hand the other hand free ranks.
+
+  `GetHighWatermarkForItem` answers about the item's own bucket, which
+  is the higher of the two. Handed to the second hand it is a promise
+  about a weapon the player is not upgrading: a 331 in the main hand
+  answered 331 for an off hand sitting at 305, and every rank to 308 was
+  offered for nothing.
+
+  So the two weapon slots are now a pair -- but only while both hands
+  hold a one-hander. A two-hander, a shield or a holdable sits in a
+  bucket of its own and pairs with nothing, which is why this never
+  showed up on anything but dual-wield. When they do pair, the free line
+  comes from the second bucket, asked for by name, and the bags follow
+  the same second-highest rule rings and trinkets have always used.
+
+- **`/yh debug` can be pointed at a slot** -- `/yh debug 17` for the off
+  hand, Feet as before with no argument. It asks the high-water query
+  about that slot and prints both figures the client hands back beside
+  what the addon concluded from them, so a row promising a rank the
+  vendor charges for can be taken apart from the chair. Equipped crafted
+  pieces are marked `[crafted]` in the dump.
+
 ## v3.2.0 - Crest advice, shared keystones, and a lighter addon (2026-08-24)
 
 ### Removed

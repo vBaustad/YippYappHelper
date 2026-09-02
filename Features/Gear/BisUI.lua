@@ -710,6 +710,53 @@ function ScanBags()
     return found
 end
 
+--- The five slots class set armour comes in, by inventory slot ID. The
+--- same five the raid tier counter reads.
+local TIER_SLOT = { [1] = true, [3] = true, [5] = true, [7] = true, [10] = true }
+
+--- The item level of a class set piece worn in this slot that looks like
+--- this row's item, one Catalyst charge on -- or nil.
+---
+--- Feeding a piece to the Catalyst destroys it. So a row naming armour
+--- the player did exactly what the page told them to do with went from
+--- "collected" back to "missing" the moment they converted it, which is
+--- the one moment it was most finished. The item ID cannot answer this:
+--- the item that carried it no longer exists.
+---
+--- What survives is the secondaries. Class set armour inherits them from
+--- whatever was fed in (ns.CATALYST_NOTE), so a set piece worn in a slot
+--- whose row names armour with the same pair is that row, converted.
+---
+--- This is an inference and the page says so rather than drawing a green
+--- tick: a set piece that dropped directly rolls its own secondaries and
+--- can land on the same pair by chance -- one in six, and there are five
+--- of these slots. So it gets its own colour and its own tooltip line,
+--- and is never quietly folded into "equipped".
+---
+--- Three things have to hold, and each one throws away a way of being
+--- wrong:
+---
+---  * The row does not already name the set piece. Rows tagged +cat do,
+---    and if the player had converted into one the item ID would match
+---    outright -- so an inference here could only disagree with a fact.
+---  * A set piece is actually worn there. Without this the test says
+---    nothing about the Catalyst, only that two items share a stat pair.
+---  * Both stat pairs read, and match. An item still loading reads as
+---    nil, which is not a match -- the row stays missing until the data
+---    lands rather than being credited on a blank.
+local function CatalystIlvl(slotID, entry)
+    if not TIER_SLOT[slotID] then return nil end
+    if entry.catalystFrom then return nil end
+
+    local info = ns.GetSlotInfo and ns:GetSlotInfo(slotID)
+    if not (info and info.setPiece) then return nil end
+
+    local want = ns.ItemSecondaries and ns:ItemSecondaries(itemLink(entry))
+    if not want or want ~= ns:ItemSecondaries(info.link) then return nil end
+
+    return info.ilvl and info.ilvl > 0 and info.ilvl or nil
+end
+
 --- What the player has toward this row: their item level, its rank, and
 --- whether it is on their character or sitting in a bag.
 ---
@@ -721,6 +768,9 @@ end
 --- Equipped wins when both exist, even if the bagged copy is higher:
 --- what you are wearing is the honest answer to "where am I", and a
 --- better one in the bag is a different problem the tooltip can mention.
+---
+--- Fourth state, and the reason for everything below it: "converted".
+--- See CatalystIlvl.
 local function ownedIlvl(slotID, entry, bags)
     if GetInventoryItemID("player", slotID) == entry.itemID then
         local lvl = linkIlvl(GetInventoryItemLink and GetInventoryItemLink("player", slotID))
@@ -732,8 +782,19 @@ local function ownedIlvl(slotID, entry, bags)
         local lvl = bagged ~= true and bagged or nil
         return "bags", lvl, lvl and ns.DescribeIlvlRank and ns:DescribeIlvlRank(lvl) or nil
     end
+
+    -- Last, so anything the client can state outright beats anything
+    -- this has to infer.
+    local lvl = CatalystIlvl(slotID, entry)
+    if lvl then
+        return "catalyst", lvl, ns.DescribeIlvlRank and ns:DescribeIlvlRank(lvl) or nil
+    end
     return nil
 end
+
+-- Published so Tools/loadcheck.py can assert the four states and the
+-- order they beat each other in. The page is the only caller.
+ns.__bisOwnedState = ownedIlvl
 
 --- Right-click any row on the page to reach the same item menu the
 --- trinket lists use -- including "remove as best in slot", which has to
@@ -784,6 +845,19 @@ local function hookTooltip(frame, itemID, link, ilvl, rank, ownIlvl, owned,
             GameTooltip:AddLine(ownIlvl
                 and ("In your bags at %d - not equipped"):format(ownIlvl)
                 or "In your bags - not equipped", 0.48, 0.72, 1)
+        elseif owned == "catalyst" then
+            -- Said as what was seen, not as a verdict. The page cannot
+            -- know this piece was the one fed in -- see CatalystIlvl --
+            -- and a row that claims more certainty than it has is worse
+            -- than one that shows its working.
+            GameTooltip:AddLine(ownIlvl
+                and ("Converted: you are wearing class set armour at %d with this item's secondaries."):format(ownIlvl)
+                or "Converted: you are wearing class set armour with this item's secondaries.",
+                0.60, 0.42, 0.83, true)
+            if ilvl and ownIlvl and ownIlvl < ilvl then
+                GameTooltip:AddLine(("%d short of the rank this row aims at"):format(
+                    ilvl - ownIlvl), 1, 0.78, 0.28)
+            end
         elseif ownIlvl then
             if ilvl and ownIlvl < ilvl then
                 GameTooltip:AddLine(("Yours: %d - %d short of this"):format(
@@ -1215,12 +1289,29 @@ function UI:Render(content, width, height)
             if isCrafted(entry) then
                 b.tag:SetText("|cffc9a06acraft|r")
                 b.tagBG:Show()
+            elseif owned == "catalyst" then
+                -- The same purple and the same three letters the list's
+                -- "+cat" uses, so the two halves of the page name the
+                -- Catalyst the same way.
+                b.tag:SetText("|cff9a6ad4cat|r")
+                b.tagBG:Show()
             end
 
             -- Three states, not two. "Have it" and "have it at the rank
             -- this list means" are different answers, and collapsing
             -- them was what made a 311 look finished.
-            if owned == "bags" then
+            if owned == "catalyst" then
+                -- Purple, not green: this one was inferred rather than
+                -- read off the slot, and the colour is where that is
+                -- said at a glance. The NUMBER still goes amber when it
+                -- is short, because being short is true either way.
+                b:SetBackdropColor(0.13, 0.08, 0.18, 1)
+                b:SetBackdropBorderColor(0.60, 0.42, 0.83, 0.95)
+                local short = dollIlvl and ownIlvl and ownIlvl < dollIlvl
+                b.tick:SetText(ownIlvl
+                    and ((short and "|cffffc83c%d|r" or "|cffc79ae8%d|r"):format(ownIlvl))
+                    or "|cffc79ae8*|r")
+            elseif owned == "bags" then
                 -- Collected but not worn. Blue reads as "this is on you
                 -- to finish" without claiming it is either done or
                 -- missing, and the item stays dimmed because it is.
@@ -1344,12 +1435,13 @@ function UI:Render(content, width, height)
     -- up. The counts come from the same pass that drew the icons, so
     -- there is no second walk over the slots to disagree with the first.
     ------------------------------------------------------------
-    local haveCount, bagCount, missingCount = 0, 0, 0
+    local haveCount, bagCount, missingCount, catCount = 0, 0, 0, 0
     for _, def in ipairs(DOLL) do
         local entry = bySlot[def.slot]
         if entry then
             local owned = ownedIlvl(def.slot, entry, bags)
             if owned == "bags" then bagCount = bagCount + 1
+            elseif owned == "catalyst" then catCount = catCount + 1
             elseif owned then haveCount = haveCount + 1
             else missingCount = missingCount + 1 end
         end
@@ -1366,8 +1458,12 @@ function UI:Render(content, width, height)
     self._slotSummary:SetPoint("TOPLEFT", colL,
         topY - 7 * (iconSize + GAP) - iconSize - 14)
     self._slotSummary:SetWidth(math.max(dollR - DOLL_INSET - colL, 100))
-    self._slotSummary:SetText(("%s  %s  %s"):format(
+    -- "converted" only earns a segment on a character who has any. On
+    -- everyone else it would be a fourth number reading zero on a line
+    -- that already carries two placeholders.
+    self._slotSummary:SetText(("%s  %s%s  %s"):format(
         ("|cff%s%d equipped|r"):format(ns.Widgets:Hex("good"), haveCount),
+        catCount > 0 and ("|cff9a6ad4%d converted|r  "):format(catCount) or "",
         bagCount > 0 and ("|cff%s%d in bags|r"):format(ns.Widgets:Hex("warn"), bagCount)
             or ns.Widgets:Tint("faint", "0 in bags"),
         missingCount > 0 and ("|cff%s%d missing|r"):format(ns.Widgets:Hex("muted"), missingCount)
@@ -1424,6 +1520,17 @@ function UI:Render(content, width, height)
                 local mark = "|cff40ff40*|r"
                 if owned == "bags" then
                     mark = ownIlvl and ("|cff7ab8ff%d|r"):format(ownIlvl) or "|cff7ab8ffbag|r"
+                elseif owned == "catalyst" then
+                    -- The number, then the word: on this side of the
+                    -- page there is room to say which of the four states
+                    -- a row is in. The NUMBER still goes amber when it
+                    -- is short, exactly as the doll's does -- being
+                    -- short is true however the piece got there, and the
+                    -- two halves of the page do not disagree about a row.
+                    local num = (ilvl and ownIlvl and ownIlvl < ilvl)
+                        and "|cffffc83c%d|r" or "|cffc79ae8%d|r"
+                    mark = ownIlvl and (num:format(ownIlvl) .. " |cff9a6ad4cat|r")
+                        or "|cff9a6ad4cat|r"
                 elseif ilvl and ownIlvl and ownIlvl < ilvl then
                     mark = ("|cffffc83c%d|r"):format(ownIlvl)
                 elseif ownIlvl then

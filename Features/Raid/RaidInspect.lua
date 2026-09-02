@@ -76,6 +76,42 @@ local function RefreshUnitByGUID()
             end
         end
     end
+
+    ns:PruneRaidInspect()
+end
+
+--- Rebuild the roster map and drop anyone who left. Published so the
+--- load harness can drive the pair the way a roster change does.
+function ns:RefreshRaidUnits()
+    RefreshUnitByGUID()
+end
+
+------------------------------------------------------------
+-- Everyone who is no longer here, dropped.
+--
+-- The scan data was only ever cleared by starting another scan, and it
+-- is written from INSPECT_READY -- which fires for a group member
+-- whoever asked for the inspect, this addon or any other. So it
+-- collected a row per player per group, kept them across the logout,
+-- and grew for as long as the addon was installed. Measured on a real
+-- account: 673 players, 152KB of the saved variables file, three times
+-- everything else in it put together, nearly all of it strangers from
+-- pugs weeks earlier.
+--
+-- The data describes the group you are in. Nobody outside it belongs.
+--
+-- Only while there IS a group, though. A loading screen can put the
+-- roster briefly at zero, and pruning against an empty map would blank
+-- the page for a raid that is still very much around -- so an empty one
+-- reads as "ask again later", not as "you are alone".
+------------------------------------------------------------
+function ns:PruneRaidInspect()
+    if not (next(unitByGUID) and GetNumGroupMembers() > 0) then return end
+    for guid in pairs(ns.RaidInspectData) do
+        if not unitByGUID[guid] then
+            ns.RaidInspectData[guid] = nil
+        end
+    end
 end
 
 local function ProcessNextInspect()

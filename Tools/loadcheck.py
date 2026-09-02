@@ -415,6 +415,16 @@ function Region.GetScript(self, e)
 end
 function Region.SetScript(self, e, fn) self._scripts = self._scripts or {}; self._scripts[e] = fn; return self end
 function Region.GetLeft(self) return 0 end
+-- No layout engine here, so there is no rectangle to report. Zero
+-- rather than nil on purpose: callers that guard on nil would take
+-- their absent branch and the check would pass without exercising
+-- the arithmetic that runs in game.
+function Region.GetTop(self) return 0 end
+-- The other two edges, for the same reason and with the same answer.
+-- Without these the generic stub hands back a table, and a caller doing
+-- arithmetic on an edge throws rather than being measured.
+function Region.GetRight(self) return 0 end
+function Region.GetBottom(self) return 0 end
 function Region.GetNormalTexture(self) return NewRegion("Texture") end
 function Region.GetParent(self) return self._parent end
 -- Attributes and frame refs are stored rather than swallowed. The
@@ -1337,16 +1347,89 @@ C_LFGList = {}
 -- reads three activity types out of this one; all three came back as 1,
 -- so Mythic+, Raid and World were literally the same query and the
 -- dashboard could not have shown three different rows even with data.
+--
+-- ItemRedundancySlot is here for the same reason and a sharper one: the
+-- catch-all answered 1 to OnehandWeaponSecond, so asking the client for
+-- the SECOND one-hand mark asked it about Neck. Every number in it
+-- matters, and Head is 0 -- a value the catch-all cannot even express.
+--
+-- The pair at 14 and 15 is the shape the whole one-hand rule turns on:
+-- the highest one-hander a character has reached, and the second
+-- highest. Rings and trinkets get one bucket each; one-handers get two.
 local ENUM_EXACT = {
     WeeklyRewardChestThresholdType = { Activities = 1, World = 2, Raid = 3 },
+    ItemRedundancySlot = {
+        Head = 0, Neck = 1, Shoulder = 2, Chest = 3, Waist = 4,
+        Legs = 5, Feet = 6, Wrist = 7, Hand = 8, Finger = 9,
+        Trinket = 10, Cloak = 11, Twohand = 12, MainhandWeapon = 13,
+        OnehandWeapon = 14, OnehandWeaponSecond = 15, Offhand = 16,
+    },
 }
 Enum = setmetatable({}, { __index = function(_, k)
     if ENUM_EXACT[k] then return ENUM_EXACT[k] end
     return setmetatable({}, { __index = function() return 1 end })
 end })
-Settings = { RegisterAddOnCategory = function() end,
-             RegisterCanvasLayoutCategory = function() return { ID = 1 } end,
-             OpenToCategory = function() end }
+-- The options page, stubbed far enough to actually BUILD.
+--
+-- It used to be three no-op functions, which meant Core/BlizzSettings.lua
+-- returned at its first guard and BuildAll never ran once -- so every
+-- checkbox on that page was uncovered, and removing one could take the
+-- rest of the page with it without anything noticing. The Settings API
+-- builds a list in order and an error partway through loses everything
+-- after it, which is precisely the failure that needs seeing.
+--
+-- What is recorded is what a person would look for: the names in the
+-- order they appear, and which kind of control each one is.
+YYH_SETTINGS_BUILT = { order = {}, kind = {} }
+
+local function RecordSetting(name, kind)
+    table.insert(YYH_SETTINGS_BUILT.order, name)
+    YYH_SETTINGS_BUILT.kind[name] = kind
+end
+
+Settings = {
+    VarType = { Boolean = "boolean", Number = "number", String = "string" },
+    RegisterAddOnCategory = function() end,
+    RegisterCanvasLayoutCategory = function() return { ID = 1 } end,
+    OpenToCategory = function() return true end,
+    RegisterVerticalLayoutCategory = function(name)
+        local category = { name = name, GetID = function() return 1 end }
+        local layout = { AddInitializer = function() end }
+        return category, layout
+    end,
+    RegisterProxySetting = function(_cat, key, _kind, name, _default, get, set)
+        -- get() is called on purpose. Every one of these reaches into a
+        -- feature module, and a getter that throws is the realistic way
+        -- this page breaks after a feature is removed.
+        local ok, err = pcall(get)
+        if not ok then
+            error("getter for " .. tostring(name) .. " threw: " .. tostring(err), 0)
+        end
+        return { key = key, name = name, get = get, set = set }
+    end,
+    CreateCheckbox = function(_cat, setting) RecordSetting(setting.name, "checkbox") end,
+    CreateSlider = function(_cat, setting) RecordSetting(setting.name, "slider") end,
+    CreateDropdown = function(_cat, setting, _fn) RecordSetting(setting.name, "dropdown") end,
+    CreateSliderOptions = function() return { SetLabelFormatter = function() end } end,
+    CreateControlTextContainer = function()
+        local items = {}
+        return { Add = function(_, v, t) items[#items + 1] = { v, t } end,
+                 GetData = function() return items end }
+    end,
+}
+
+MinimalSliderWithSteppersMixin = { Label = { Right = 1 } }
+
+function CreateSettingsListSectionHeaderInitializer(text)
+    RecordSetting(text, "header")
+    return {}
+end
+
+function CreateSettingsButtonInitializer(name, buttonText, onClick)
+    RecordSetting(name, "button")
+    return { onClick = onClick }
+end
+
 SlashCmdList = {}
 """
 
@@ -1408,6 +1491,27 @@ def main():
         end
     """)
 
+    # Every global the addon creates, which is the taint question in its
+    # cheapest form.
+    #
+    # A Lua assignment that forgets `local` lands in _G. Blizzard's own
+    # code reads globals, and reading one an addon wrote carries that
+    # addon's taint into the secure path -- the "Interface action failed
+    # because of an addon" class, which then gets blamed on whichever
+    # addon the player looks at first.
+    #
+    # Snapshotted around the load loop, so it sees what the FILES create
+    # rather than what the stub API already provides.
+    dump_globals = L.eval("""
+        function()
+            local t = {}
+            for k in pairs(_G) do t[#t + 1] = tostring(k) end
+            table.sort(t)
+            return table.concat(t, "|")
+        end
+    """)
+    globals_before = set(str(dump_globals()).split("|"))
+
     files = toc_files()
     failures = []
     for rel in files:
@@ -1440,6 +1544,33 @@ def main():
             failures.append((rel, load_err))
 
     print("\n%d/%d files loaded clean" % (len(files) - len(failures), len(files)))
+
+    # Globals created by loading. Named frames are legitimate -- the
+    # client's CreateFrame puts a named frame in _G and there is no way
+    # to have one without -- as is the SavedVariables table and the
+    # slash bindings. Anything else is a missing `local`.
+    ALLOWED_GLOBALS = {
+        # Bundled libraries. LibStub is the shared global every addon
+        # that uses it writes; the icon library names its own tooltip.
+        "LibStub", "LibDBIconTooltip",
+    }
+    ALLOWED_PREFIXES = (
+        "SLASH_",       # the slash bindings, which must be global
+        "BINDING_",     # keybinding names, read out of _G by the client
+        "YippYapp",     # named frames and the saved variables table
+        "YYH",          # the scan tooltip, and the harness's own hooks
+    )
+    leaked = sorted(
+        g for g in (set(str(dump_globals()).split("|")) - globals_before)
+        if g and g not in ALLOWED_GLOBALS
+        and not g.startswith(ALLOWED_PREFIXES))
+    if leaked:
+        print("  FAIL globals: %d leaked into _G: %s"
+              % (len(leaked), ", ".join(leaked)))
+        failures.append(("globals", ", ".join(leaked)))
+    else:
+        print("  ok   globals: nothing leaked into _G beyond named frames, "
+              "the saved variables table and the slash bindings")
 
     # What the gear window cost just by the addon being loaded.
     #
@@ -2366,6 +2497,253 @@ def main():
         print("  FAIL healer trinkets: %s" % healers)
         failures.append(("healer trinkets", str(healers)))
 
+    # The guide tier list, which is a different claim from the sim and
+    # has to survive being one. Three things are worth deciding here.
+    #
+    # Augmentation Evoker is the whole reason the file exists: no sim
+    # covers it, so if the tier list ever stops carrying it that spec
+    # silently goes back to having nothing, and nothing is exactly what
+    # it looked like before.
+    #
+    # The tooltip's negative line -- "not on the X trinket list" -- is
+    # only honest while HasTierList and GetTier mean different things.
+    # Collapse those two and every unlisted trinket starts getting a
+    # verdict the guide never gave.
+    #
+    # And the grade colours key off ladder position rather than the
+    # letter, because the forty guides do not share a ladder.
+    tiers = L.eval("""
+        function(ns)
+            local T = ns.Trinkets
+            if not (T and T.GetTier) then return "tier index absent" end
+            if not ns.TrinketTiers then return "TrinketTiers did not load" end
+
+            local specs, graded, noted = 0, 0, 0
+            for key in pairs(T.SPEC_LABEL or {}) do
+                if not T:HasTierList(key) then
+                    return key .. " has no tier list"
+                end
+                specs = specs + 1
+                local seen, prev = {}, 0
+                for _, tier in ipairs(T:TierList(key)) do
+                    if tier.rank ~= prev + 1 then
+                        return key .. " tier ranks skip at " .. tostring(tier.label)
+                    end
+                    prev = tier.rank
+                    for _, item in ipairs(tier.items or {}) do
+                        if seen[item.id] then
+                            return key .. " lists " .. item.id .. " twice"
+                        end
+                        seen[item.id] = true
+                        graded = graded + 1
+                        if item.note then noted = noted + 1 end
+                    end
+                end
+                if prev == 0 then return key .. " has an empty ladder" end
+            end
+
+            -- Augmentation by name, not by count. It is the one spec the
+            -- sims cannot reach, so a total that happens to come out
+            -- right proves nothing about it.
+            local aug = T:TierList("EVOKER_AUGMENTATION")
+            if not aug or #aug == 0 then
+                return "Augmentation Evoker has no tier list"
+            end
+            local augGraded = 0
+            for _, tier in ipairs(aug) do
+                augGraded = augGraded + #(tier.items or {})
+            end
+            if augGraded == 0 then return "Augmentation's ladder is empty" end
+            if ns.TrinketData["EVOKER_AUGMENTATION"] then
+                return "Augmentation gained sim data -- this check is stale"
+            end
+
+            -- Absent from a list is not the same as having no list. A
+            -- trinket some other spec grades, held against a spec that
+            -- does not, has to come back nil while HasTierList stays
+            -- true -- that gap is what the tooltip line reports.
+            local sample, holder
+            for _, tier in ipairs(T:TierList("MAGE_FIRE")) do
+                for _, item in ipairs(tier.items or {}) do
+                    if not holder then
+                        for key in pairs(T.SPEC_LABEL or {}) do
+                            if key ~= "MAGE_FIRE" and not T:GetTier(item.id, key) then
+                                sample, holder = item.id, key
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            if not holder then
+                return "every spec grades every trinket -- nothing to test absence with"
+            end
+            if not T:HasTierList(holder) then
+                return holder .. " lost its list while omitting a trinket"
+            end
+
+            -- Colour follows position. Same letter, two ladders, and the
+            -- bottom of a short one must not read like the middle of a
+            -- long one.
+            local top = { rank = 1, of = 5 }
+            local bottom = { rank = 5, of = 5 }
+            local middle = { rank = 3, of = 7 }
+            if T:TierColorKey(top) ~= "good" then return "top tier is not good" end
+            if T:TierColorKey(bottom) ~= "warn" then return "last tier is not warn" end
+            if T:TierColorKey(middle) ~= "muted" then return "mid tier is not muted" end
+
+            return string.format("ok:%d:%d:%d:%d", specs, graded, noted, augGraded)
+        end
+    """)(ns)
+    if tiers and str(tiers).startswith("ok:"):
+        specs, graded, noted, aug = str(tiers)[3:].split(":")
+        print("  ok   guide tiers: %s specs, %s graded trinkets, %s author "
+              "notes; Augmentation covered with %s where no sim reaches it"
+              % (specs, graded, noted, aug))
+    else:
+        print("  FAIL guide tiers: %s" % tiers)
+        failures.append(("guide tiers", str(tiers)))
+
+    # The tooltip itself, driven the way the client drives it.
+    #
+    # The three outcomes are a set, and the middle one is the reason the
+    # feature exists: a hover that adds nothing looks the same as a hover
+    # on an item the addon never heard of, so "not on your list" has to
+    # be said out loud. It also has to STOP being said for an item
+    # nobody ranks, or every trinket ever made gets a verdict.
+    #
+    # Driven through TooltipDataProcessor rather than by calling the
+    # formatter, because the gate that decides whether the tooltip is
+    # re-shown lives in the hook and not in the formatter.
+    tooltip = L.eval("""
+        function(ns)
+            local T = ns.Trinkets
+            if not T then return "Trinkets index absent" end
+
+            local posted
+            TooltipDataProcessor = {
+                AddTooltipPostCall = function(_, fn) posted = fn end,
+            }
+            Enum = Enum or {}
+            Enum.TooltipDataType = Enum.TooltipDataType or { Item = 0 }
+            if FireEvent("PLAYER_LOGIN") == 0 then
+                return "nothing listened for PLAYER_LOGIN"
+            end
+            if not posted then return "the tooltip hook never registered" end
+
+            local function hover(id)
+                local lines, shown = {}, false
+                local fake = {
+                    GetName = function() return "GameTooltip" end,
+                    AddLine = function(_, text) lines[#lines + 1] = text or "" end,
+                    Show = function() shown = true end,
+                }
+                posted(fake, { id = id })
+                return table.concat(lines, "\\n"), shown
+            end
+
+            -- A trinket the player's own guide grades. Pinning the spec
+            -- keeps the assertions decidable, and it is put back before
+            -- returning: the council grouping and the healer page below
+            -- both read the player's spec off this same function, and
+            -- leaving it pinned quietly fails them instead of this.
+            local realSpec = T.GetPlayerSpecKey
+            local specKey = T:GetPlayerSpecKey() or "MAGE_FIRE"
+            T.GetPlayerSpecKey = function() return specKey end
+            local function done(result)
+                T.GetPlayerSpecKey = realSpec
+                return result
+            end
+
+            local graded, note
+            for _, tier in ipairs(T:TierList(specKey)) do
+                for _, item in ipairs(tier.items or {}) do
+                    if item.note and not graded then graded, note = item.id, item.note end
+                end
+            end
+            if not graded then return done(specKey .. " has no annotated trinket") end
+
+            local text, shown = hover(graded)
+            if not text:find("Guide", 1, true) then
+                return done("a graded trinket got no guide block")
+            end
+            if not text:find(note:sub(1, 24), 1, true) then
+                return done("the author's note did not reach the tooltip")
+            end
+            if not shown then return done("the tooltip was not re-shown after adding lines") end
+
+            -- Solo, the tooltip answers "is this good for me" and stops.
+            -- It used to list five other specs on every hover, which on
+            -- a character whose own sim is a tier behind was the entire
+            -- tooltip -- eight lines about specs you are not playing and
+            -- nothing about you.
+            local function rankLines(s)
+                local n, at = 0, 1
+                while true do
+                    local i = s:find("  #", at, true)
+                    if not i then return n end
+                    n, at = n + 1, i + 3
+                end
+            end
+            if text:find("Also wanted by", 1, true) then
+                return done("other specs were listed while solo")
+            end
+
+            -- Grouped, they come back -- capped, and never the player's
+            -- own spec twice.
+            local realGroup = IsInGroup
+            IsInGroup = function() return true end
+            local grouped = hover(graded)
+            IsInGroup = realGroup
+            if not grouped:find("Also wanted by", 1, true) then
+                return done("no other specs appeared in a group")
+            end
+            local others = rankLines(grouped)
+            if others == 0 then return done("the group block listed nobody") end
+            if others > 3 then
+                return done("the group block listed " .. others .. " specs")
+            end
+            if grouped:find("for " .. T:SpecName(specKey), 1, true)
+                and grouped:find("#" .. tostring(specKey), 1, true) then
+                return done("the player's own spec was listed twice")
+            end
+
+            -- A trinket somebody ranks but this spec's guide does not.
+            local absent
+            for _, other in ipairs({ "DEATHKNIGHT_BLOOD", "PALADIN_HOLY",
+                                     "WARLOCK_AFFLICTION", "MONK_BREWMASTER" }) do
+                for _, tier in ipairs(T:TierList(other) or {}) do
+                    for _, item in ipairs(tier.items or {}) do
+                        if not absent and not T:GetTier(item.id, specKey) then
+                            absent = item.id
+                        end
+                    end
+                end
+            end
+            if not absent then return done("no trinket is ranked elsewhere but not here") end
+            text = hover(absent)
+            if not text:find("not on the", 1, true) then
+                return done("an unlisted trinket said nothing")
+            end
+
+            -- And an id nobody ranks stays silent, sim or guide.
+            local quiet, quietShown = hover(4306)
+            if quiet ~= "" then return done("an unranked item drew: " .. quiet) end
+            if quietShown then return done("an unranked item still re-showed the tooltip") end
+
+            return done(string.format("ok:%s:%d:%d", specKey, graded, absent))
+        end
+    """)(ns)
+    if tooltip and str(tooltip).startswith("ok:"):
+        spec, graded, absent = str(tooltip)[3:].split(":")
+        print("  ok   trinket tooltip: %s gets a grade and the author's note on "
+              "%s, is told %s is not on its list, stays silent on an item "
+              "nobody ranks, and sees other specs only in a group"
+              % (spec, graded, absent))
+    else:
+        print("  FAIL trinket tooltip: %s" % tooltip)
+        failures.append(("trinket tooltip", str(tooltip)))
+
     # An equipped character, so the advisor has something to advise on.
     #
     # The client stubs return no equipment at all, which every check
@@ -2764,6 +3142,178 @@ def main():
     else:
         print("  FAIL achievement blockers: %s" % achieve)
         failures.append(("achievement blockers", str(achieve)))
+
+    # Crossing a track boundary should not carpet the panel.
+    #
+    # The player's report: pushing past Veteran of the Mist put eight
+    # slots under the Champion threshold at once, and every one of them
+    # came back green with the same wallet-wide sentence -- "7 slots to
+    # Champion of the Mist, 460 crests total" -- over a wallet holding
+    # 180. Rule 5.5 sat AHEAD of the spend plan and returned before the
+    # ordering and affordability rules ever ran, so the one piece of
+    # advice a player actually needs here (which of the eight, tonight)
+    # was the one thing the panel would not say.
+    #
+    # The achievement is a reason to prefer a slot, not a budget. This
+    # pins both halves: the rule still speaks for slots the crests reach,
+    # and it stays quiet on the ones they do not so the plan can answer.
+    carpet = L.eval("""
+        function(ns)
+            local T = ns.GEAR_TRACKS
+            local realSlot   = ns.GetSlotInfo
+            local realCount  = ns.GetCrestCountByTrack
+            local realAchvGet = GetAchievementInfo
+
+            -- Adventurer and Veteran earned, Champion not: the chase is
+            -- Champion, which is the boundary the report was about.
+            GetAchievementInfo = function(id)
+                local done = (id == ns.DISCOUNT_ACHIEVEMENTS.Adventurer
+                    or id == ns.DISCOUNT_ACHIEVEMENTS.Veteran)
+                return id, "fixture", 10, done
+            end
+            ns:InvalidateDiscountCache()
+
+            -- Every slot filled, because an EMPTY one is filed as
+            -- needing a drop and Rule 5.5 only speaks when nothing does.
+            -- Eight under the Champion cap, eight over it.
+            local under, bySlot = {}, {}
+            for i, si in ipairs(ns.SLOT_IDS) do
+                local track, rank = "Hero", 3
+                if i <= 8 then
+                    track, rank = "Champion", 2
+                    under[#under + 1] = si.slot
+                end
+                bySlot[si.slot] = {
+                    link = "|cffa335ee|Hitem:1::::::::80:::::|h[Shot]|h|r",
+                    ilvl = T[track][rank], quality = 4, icon = 134400,
+                    track = track, rank = rank, maxRank = #T[track],
+                    crafted = false,
+                }
+            end
+            ns.GetSlotInfo = function(self, slotID) return bySlot[slotID] end
+            -- The wallet off the report: nowhere near the whole bill.
+            ns.GetCrestCountByTrack = function(self, track)
+                return track == "Champion" and 180 or 0
+            end
+            ns:InvalidateCrestPlans()
+
+            local function restore(msg)
+                ns.GetSlotInfo = realSlot
+                ns.GetCrestCountByTrack = realCount
+                GetAchievementInfo = realAchvGet
+                ns:InvalidateDiscountCache()
+                ns:InvalidateCrestPlans()
+                return msg
+            end
+
+            local cap = ns:GetMaxIlvlForTrack("Champion")
+            if T.Hero[3] < cap then
+                return restore("the fixture's filler pieces sit under the "
+                    .. "Champion cap, so every slot is 'remaining'")
+            end
+
+            local chase = ns:GetChasedAchievement()
+            if not chase or chase.track ~= "Champion" then
+                return restore("the chased achievement is "
+                    .. (chase and chase.track or "nothing") .. ", not Champion")
+            end
+            if chase.remaining ~= #under then
+                return restore(chase.remaining .. " slots remaining, not the "
+                    .. #under .. " placed under the cap")
+            end
+
+            local plan = ns:GetCrestPlan("Champion")
+            local green, quiet, example = 0, 0, nil
+            for _, slotID in ipairs(under) do
+                local rec, reason = ns:GetRecommendation(slotID)
+                reason = reason or ""
+
+                -- The wallet-wide bill is gone from every row. It is one
+                -- fact about sixteen slots and it belongs on the wallet.
+                for _, wallet in ipairs({ "crests total", "slots to Champion of" }) do
+                    if reason:find(wallet, 1, true) then
+                        return restore("slot " .. slotID .. " carries the "
+                            .. "whole-achievement bill: " .. reason)
+                    end
+                end
+
+                local mine = plan and plan.slots and plan.slots[slotID]
+                local paid = (mine and mine.paidRanks or 0) > 0
+                if reason:find(chase.name, 1, true) then
+                    if rec ~= ns.RECOMMEND.UPGRADE_NOW then
+                        return restore("slot " .. slotID .. " chases the "
+                            .. "achievement without saying to spend")
+                    end
+                    if not paid then
+                        return restore("slot " .. slotID .. " is told to "
+                            .. "upgrade for the achievement with no crests "
+                            .. "reaching it: " .. reason)
+                    end
+                    -- Its own price, not the tier's.
+                    if not reason:find("Champion", 1, true) then
+                        return restore("an achievement row does not name what "
+                            .. "this slot costs: " .. reason)
+                    end
+                    green = green + 1
+                else
+                    quiet = quiet + 1
+                    example = example or reason
+                    -- Silence is not the fix either -- the plan has to
+                    -- have answered instead.
+                    local ok = rec == ns.RECOMMEND.HOLD_CRESTS
+                        or rec == ns.RECOMMEND.UPGRADE_LATER
+                        or rec == ns.RECOMMEND.SAVE_FOR_DROP
+                        or rec == ns.RECOMMEND.UPGRADE_NOW
+                    if not ok or reason == "" then
+                        return restore("slot " .. slotID .. " fell through to "
+                            .. "nothing usable: " .. tostring(rec and rec.label)
+                            .. " / " .. reason)
+                    end
+                end
+            end
+
+            if green == 0 then
+                return restore("the achievement stopped being mentioned at all")
+            end
+            if quiet == 0 then
+                return restore("all " .. #under .. " slots still say upgrade "
+                    .. "for the achievement, which is the reported bug")
+            end
+
+            -- And the fact the rows gave up is on the wallet, once.
+            local line = ns:GetTrackPolicyLine("Champion")
+            if not line or not line:find(chase.name, 1, true) then
+                return restore("the crest tile never mentions the achievement "
+                    .. "the rows stopped explaining")
+            end
+            local seen, at = 0, 1
+            while true do
+                local s = line:find(chase.name, at, true)
+                if not s then break end
+                seen, at = seen + 1, s + 1
+            end
+            if seen ~= 1 then
+                return restore("the crest tile names the achievement "
+                    .. seen .. " times")
+            end
+            if not line:find(tostring(chase.remaining), 1, true) then
+                return restore("the crest tile does not say how many slots "
+                    .. "are short: " .. line)
+            end
+
+            return restore(string.format("ok:%d:%d:%d:%s",
+                green, quiet, chase.cost, example or ""))
+        end
+    """)(ns)
+    if carpet and str(carpet).startswith("ok:"):
+        green, quiet, cost, example = str(carpet)[3:].split(":", 3)
+        print("  ok   achievement rows: 180 Champion against a %s crest "
+              "achievement lights %s slot(s) and leaves %s to the spend "
+              "plan (\"%s\"); the bill is stated once, on the wallet"
+              % (cost, green, quiet, example))
+    else:
+        print("  FAIL achievement rows: %s" % carpet)
+        failures.append(("achievement rows", str(carpet)))
 
     # The panel that started all of this, replayed.
     #
@@ -3181,7 +3731,7 @@ def main():
             -- Conditional, because raid item level is per BOSS: the same
             -- slot comes off an early boss low and a late one high, so
             -- the mark pays on some kills and not others.
-            if not joined:find("depending on the boss", 1, true) then
+            if not joined:find("vary by boss", 1, true) then
                 return restore("the hover states the mark payout as certain")
             end
             -- Where the player stands on being DONE with the track, and
@@ -3192,10 +3742,21 @@ def main():
             -- as filler at best and absurd at worst: on a character with
             -- none of the track finished it announced "0 of your 16, and
             -- this makes 1".
-            if not (joined:find("more Champion pieces to max would cost", 1, true)
-                and joined:find("and you have", 1, true)) then
+            if not (joined:find("Champion pieces", 1, true)
+                and joined:find("short of the cap", 1, true)) then
                 return restore("the hover never says what the rest of the track "
                     .. "costs against what is in hand")
+            end
+            -- And in the tense it is actually in. The count, the bill and
+            -- the balance are all AFTER this upgrade -- the slot leaves
+            -- all three -- so a row that spends has to say so, or the
+            -- player checks the count against their own gear and the
+            -- balance against the crest tile and finds both off by this
+            -- slot.
+            if not (joined:find("After this:", 1, true)
+                and joined:find("against your ", 1, true)) then
+                return restore("a spending row states its leftovers as though "
+                    .. "they were the balance now: " .. joined)
             end
             -- The shortfall ends in a decision, and the thing that
             -- decides it is the CAP.
@@ -3218,10 +3779,34 @@ def main():
                         .. "'" .. gate .. "'")
                 end
             end
+            -- What the REST of the tier costs is a fact about sixteen
+            -- slots and belongs on the wallet, said once. It spent a
+            -- version on every slot row instead, and four sentences of
+            -- tier arithmetic under each piece of advice is a panel
+            -- nobody finishes reading. Asserted from the other side:
+            -- the hover must not grow it back.
+            for _, tierTalk in ipairs({ "more slots want", "more slot wants",
+                                        "keep it back" }) do
+                if joined:find(tierTalk, 1, true) then
+                    return restore("the hover carries wallet-wide arithmetic "
+                        .. "that belongs on the crest tile: '" .. tierTalk .. "'")
+                end
+            end
             -- Six lines of reasoning was a briefing, not a tip.
             if #d > 4 then
                 return restore("the hover runs to " .. #d .. " lines")
             end
+
+            -- The weapon a tier is worth waiting for gets named -- and
+            -- only ever a weapon the character actually uses.
+            --
+            -- ns.SLOT_PRIORITY already puts both weapon slots a step
+            -- above everything else, but the plan can only order slots
+            -- it can SPEND on, and a Champion 6/6 main hand under Hero
+            -- is invisible to it. The clause is the only thing pointing
+            -- at it. The guard is the other half: this fixture's off
+            -- hand is EMPTY, and "Off Hand is the one to hold for" on a
+            -- staff user is worse advice than silence.
 
             return restore("ok:" .. said[16])
         end
@@ -4159,6 +4744,124 @@ def main():
                 return restore("one crest short and it still says do not worry")
             end
 
+            ------------------------------------------------------------
+            -- The weapon a tier is waiting on.
+            --
+            -- A main hand maxed on Champion is the commonest shape there
+            -- is, and it is invisible to the plan: ns.SLOT_PRIORITY puts
+            -- it a step above every other slot, but the ordering can
+            -- only rank slots it can SPEND on, and no Hero crest reaches
+            -- a Champion 6/6. So the tier's best home never enters the
+            -- plan at all and the crests get spread over rings.
+            --
+            -- The hover's clause keys off exactly this: slot 16 present
+            -- in the season demand's awaited set. Asserted on the input
+            -- rather than the sentence because this fixture drives
+            -- GetSeasonDemand, not GetRecommendation.
+            ------------------------------------------------------------
+            -- slots[] follows ns.SLOT_IDS, where the last two entries
+            -- are Main Hand (16) and Off Hand (17). Indexing by inventory
+            -- slot instead lands on the off hand and quietly tests the
+            -- wrong half of the pair.
+            local MAIN_HAND, OFF_HAND = slots[15], slots[16]
+            if MAIN_HAND ~= 16 or OFF_HAND ~= 17 then
+                return restore("the doll's last two slots are " .. MAIN_HAND
+                    .. "/" .. OFF_HAND .. ", not main hand and off hand")
+            end
+
+            -- Built on BARE slots only. slots[11] is carrying the
+            -- Champion piece the overlap case above needs and `bill` is
+            -- priced with it in place; borrowing it here and handing it
+            -- back as bare took the tier off abundant three checks later,
+            -- a good hundred lines from the cause.
+            put(MAIN_HAND, "Champion", #T.Champion)
+            marks[MAIN_HAND] = ns:GetMaxIlvlForTrack("Champion")
+            -- One Hero piece worn, or the track reads `awaiting` and
+            -- speaks in slots already -- a verdict this never appends to.
+            put(slots[12], "Hero", 1)
+
+            local armed = at(6 * perSlot, 0)
+            local sawArm = nil
+            for _, pc in ipairs(armed.pieces or {}) do
+                if pc.slotID == MAIN_HAND then sawArm = pc end
+            end
+            if not sawArm then
+                return restore("a Champion 6/6 main hand is off the Hero bill "
+                    .. "entirely, so nothing can point at it")
+            end
+            if not sawArm.awaited then
+                return restore("a Champion 6/6 main hand reads as worn on Hero")
+            end
+            -- And it is cheaper than a bare slot, because its own cap
+            -- already paid for the ranks underneath.
+            if sawArm.cost >= perSlot then
+                return restore("a Champion-capped main hand prices "
+                    .. sawArm.cost .. ", no better than a bare slot")
+            end
+
+            local arms = ns:GetAwaitedSlots(armed)
+            -- The off hand is bare in this fixture. A staff user's never
+            -- fills, and the advisor cannot tell them from a dual wielder
+            -- waiting on a drop, so it must not be banked for.
+            for _, name in ipairs(arms.arms) do
+                if name:find("Off Hand", 1, true) then
+                    return restore("an empty off hand is named as a slot to "
+                        .. "hold crests for")
+                end
+            end
+            if #arms.arms ~= 1 or arms.armCost ~= sawArm.cost then
+                return restore(#arms.arms .. " weapons waiting at "
+                    .. arms.armCost .. ", not one at " .. sawArm.cost)
+            end
+
+            ------------------------------------------------------------
+            -- And the wallet says so only where it changes something.
+            --
+            -- Three bands, and only the middle one is advice. Under the
+            -- weapon's own bill the player cannot have it either way;
+            -- over the worn pieces PLUS the weapon, both happen and
+            -- holding retires item level for nothing. The first draft
+            -- fired on all three and told a player with 200 Hero not to
+            -- spend 60 on gloves that left 140 against an 80 weapon.
+            ------------------------------------------------------------
+            local worn = ns:GetTrackPolicy("Hero").demand
+            local mid = { arms.armCost, arms.armCost + worn - 1 }
+            for _, probe in ipairs({
+                { held = arms.armCost - 1,        want = false, why = "under the weapon's own bill" },
+                { held = mid[1],                  want = true,  why = "exactly the weapon's bill" },
+                { held = mid[2],                  want = true,  why = "one short of covering both" },
+                { held = arms.armCost + worn,     want = false, why = "enough for both" },
+            }) do
+                at(probe.held, 0)
+                local said = ns:GetTrackPolicyLine("Hero") or ""
+                local holds = said:find("keep it back", 1, true) ~= nil
+                if holds ~= probe.want then
+                    return restore("holding " .. probe.held .. " (" .. probe.why
+                        .. ") " .. (holds and "banks" or "does not bank")
+                        .. " for the weapon: " .. said)
+                end
+                if holds and not said:find("Main Hand", 1, true) then
+                    return restore("the wallet banks for a weapon it does not "
+                        .. "name: " .. said)
+                end
+            end
+
+            -- And the waiting slots themselves, once, on the wallet.
+            at(mid[1], 0)
+            local walletLine = ns:GetTrackPolicyLine("Hero") or ""
+            if not walletLine:find("more slots want Hero once drops land",
+                                   1, true) then
+                return restore("the wallet prices only the pieces worn on the "
+                    .. "track: " .. walletLine)
+            end
+            if not walletLine:find(tostring(arms.cost), 1, true) then
+                return restore("the wallet hides what the waiting slots cost: "
+                    .. walletLine)
+            end
+
+            bySlot[MAIN_HAND], marks[MAIN_HAND] = nil, nil
+            bySlot[slots[12]] = nil
+
             -- Nothing precious about a tier that covers itself, so the
             -- overlap warnings -- go and find a Champion piece to skip
             -- the first Hero rank -- stop firing. That trick is for
@@ -4594,8 +5297,8 @@ def main():
             -- not was the record of WHICH item each one was about, so
             -- every session re-asked all sixteen from scratch.
             ------------------------------------------------------------
-            if not (YippYappHelperDB.watermarkLinks
-                and YippYappHelperDB.watermarkLinks[1]) then
+            local saved = ns.StoredWatermarks and ns:StoredWatermarks()
+            if not (saved and saved.links and saved.links[1]) then
                 return done("the answered item was not written down, so the "
                     .. "next session cannot know what the mark was about")
             end
@@ -4636,6 +5339,682 @@ def main():
     else:
         print("  FAIL watermark sweep: %s" % watermark)
         failures.append(("watermark sweep", str(watermark)))
+
+    # Whose ceiling the free rank follows.
+    #
+    # The client answers this query twice over: how high THIS character
+    # has been in the slot, and how high the account has. The addon took
+    # the larger of the two and called everything under it free -- so an
+    # off hand at 305 wore a cyan "Free upgrade!" and the vendor charged
+    # crests for the rank, because the number that promised it belonged
+    # to something else entirely.
+    #
+    # Only the character figure may be quoted. The account one is a
+    # fallback for the client not answering in that shape at all.
+    markrule = L.eval("""
+        function(ns)
+            if not (ns.GetMarkRead and ns.InvalidateWatermarkQueries) then
+                return "no mark reader to test"
+            end
+            local realSlot = ns.GetSlotInfo
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local realFor  = C_ItemUpgrade.GetHighWatermarkForSlot
+            local function done(msg)
+                ns.GetSlotInfo = realSlot
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                ns.watermarkCache[8] = nil
+                if YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[8] = nil
+                end
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+
+            ns.GetSlotInfo = function(_, slotID)
+                if slotID ~= 8 then return nil end
+                return { link = "|Hitem:8|h[Boot]|h", ilvl = 300 }
+            end
+
+            -- The warband has been higher than this character.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 300, 500 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function() return 300, 500 end
+            ns.watermarkCache[8] = nil
+            local read = ns:GetMarkRead(8)
+            if read ~= 300 then
+                return done("character 300 and account 500 read as " .. read)
+            end
+
+            -- And a character who has been nowhere reads nowhere, however
+            -- high the rest of the account has been.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 0, 500 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function() return 0, 500 end
+            ns.watermarkCache[8] = nil
+            if YippYappHelperDB.watermarks then
+                YippYappHelperDB.watermarks[8] = nil
+            end
+            local silent = ns:GetMarkRead(8)
+            if silent ~= 0 then
+                return done("a character mark of zero read " .. silent
+                    .. ", so the account number stood in for it")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(markrule) == "ok":
+        print("  ok   watermark rule: free ranks follow the character mark, "
+              "never the account one")
+    else:
+        print("  FAIL watermark rule: %s" % markrule)
+        failures.append(("watermark rule", str(markrule)))
+
+    # Whose marks are on disk.
+    #
+    # The saved variables file is account-wide -- one table, every
+    # character writing into it -- and the mark cache was keyed by slot
+    # alone. So an alt read the last character's marks, in exactly the
+    # situation the cache exists for: away from the upgrade vendor, where
+    # the live query answers nothing and the read falls through to disk.
+    #
+    # A druid inheriting a demon hunter's weapon line is not a stale
+    # number, it is somebody else's.
+    percharacter = L.eval("""
+        function(ns)
+            if not ns.StoredWatermarks then return "no mark store to test" end
+            local realGUID, realSlot = UnitGUID, ns.GetSlotInfo
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local who, answer = "Player-1-AAAA", 331
+            local function done(msg)
+                UnitGUID, ns.GetSlotInfo = realGUID, realSlot
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                YippYappHelperDB.watermarks = nil
+                wipe(ns.watermarkCache)
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+            UnitGUID = function() return who end
+            ns.GetSlotInfo = function(_, sl)
+                if sl ~= 8 then return nil end
+                return { link = "|Hitem:8|h[Boot]|h", ilvl = 100 }
+            end
+            C_ItemUpgrade.GetHighWatermarkForItem = function()
+                return answer, 0
+            end
+
+            YippYappHelperDB.watermarks = nil
+            wipe(ns.watermarkCache)
+            if ns:GetMarkRead(8) ~= 331 then
+                return done("the first character's own mark did not read back")
+            end
+
+            -- Another character, same file, client silent.
+            who, answer = "Player-1-BBBB", 0
+            wipe(ns.watermarkCache)
+            ns:LoadWatermarks()
+            local inherited = ns:GetMarkRead(8)
+            if inherited ~= 0 then
+                return done("an alt read " .. inherited
+                    .. " out of another character's marks")
+            end
+
+            -- And the first one still has its own when it comes back.
+            who = "Player-1-AAAA"
+            wipe(ns.watermarkCache)
+            ns:LoadWatermarks()
+            if ns:GetMarkRead(8) ~= 331 then
+                return done("the first character lost its marks to the alt")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(percharacter) == "ok":
+        print("  ok   marks are per character: an alt inherits nothing and "
+              "the owner keeps its own")
+    else:
+        print("  FAIL per-character marks: %s" % percharacter)
+        failures.append(("per-character marks", str(percharacter)))
+
+    # Crafted gear DOES raise the high-water mark.
+    #
+    # It was excluded for a day on the opposite belief, which is a
+    # misreading with a long life: players report crafted gear "not
+    # counting" towards the Dawn achievements, and what is really
+    # happening is that max-quality Heroic crafted tops out below fully
+    # upgraded Heroic. The piece is under the threshold, not outside it.
+    #
+    # Pinned here because a crafted piece is routinely the highest thing
+    # a slot has ever held, so this one decision moves the line further
+    # than any other -- in whichever direction it is wrong.
+    crafted = L.eval("""
+        function(ns)
+            if not ns.GetFreeUpgradeIlvl then return "no floor to test" end
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local realFor  = C_ItemUpgrade.GetHighWatermarkForSlot
+            local worn, spares = {}, {}
+            local function done(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                for _, s in ipairs({ 5, 13, 14 }) do
+                    ns.watermarkCache[s] = nil
+                    if YippYappHelperDB.watermarks then
+                        YippYappHelperDB.watermarks[s] = nil
+                    end
+                end
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+            ns.GetSlotInfo = function(_, s) return worn[s] end
+            ns.GetBagSpares = function(_, s) return spares[s] or {} end
+            -- The client says nothing, so only the floor speaks.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 0, 0 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function() return 0, 0 end
+            local function line(slot)
+                ns.watermarkCache[slot] = nil
+                if YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[slot] = nil
+                end
+                return ns:GetFreeUpgradeIlvl(slot)
+            end
+
+            -- A bound drop above the worn piece lifts the line. The
+            -- control: without this the rest proves nothing.
+            worn[5] = { link = "|Hitem:5|h[Chest]|h", ilvl = 311 }
+            spares[5] = { { ilvl = 324, unbound = false } }
+            if line(5) ~= 324 then
+                return done("a bound 324 in the bags did not lift the chest "
+                    .. "line, so this fixture cannot see the bug")
+            end
+
+            -- The same piece, crafted: it counts the same.
+            spares[5] = { { ilvl = 324, unbound = false, crafted = true } }
+            local got = line(5)
+            if got ~= 324 then
+                return done("a crafted 324 in the bags left the chest line at "
+                    .. got)
+            end
+
+            -- And worn, on a paired slot, where the crafted piece is one
+            -- of the two the pair remembers -- so the line follows the
+            -- LOWER of them, which is the piece that is not crafted.
+            worn[13] = { link = "|Hitem:13|h[Made]|h", ilvl = 337, crafted = true }
+            worn[14] = { link = "|Hitem:14|h[Won]|h",  ilvl = 311 }
+            spares[13], spares[14] = {}, {}
+            local pairLine = line(14)
+            if pairLine ~= 311 then
+                return done("the trinket pair's line came out at " .. pairLine
+                    .. " rather than the lower of the two")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(crafted) == "ok":
+        print("  ok   crafted gear sets the line like anything else, and "
+              "counts as one of the two on a paired slot")
+    else:
+        print("  FAIL crafted watermark: %s" % crafted)
+        failures.append(("crafted watermark", str(crafted)))
+
+    # The line follows gear that is FOR you.
+    #
+    # A shaman spent sixty Hero crests taking an Agility staff from 311
+    # to 321 and the watermark did not move. A shaman can hold a staff;
+    # an Agility staff is nobody's shaman weapon. "Can equip it" and "it
+    # is for you" come apart on exactly the piece a player is most likely
+    # to be hanging on to -- an off-stat one kept for its item level.
+    #
+    # Excluded on positive evidence only, so the rule cannot quietly
+    # swallow the pieces that have no primary stat at all.
+    offstat = L.eval("""
+        function(ns)
+            if not ns.PieceIsOffStat then return "no off-stat rule to test" end
+            local realStats = C_Item.GetItemStats
+            local realKey, realGuide = ns.PlayerSpecKey, ns.ClassGuideData
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local realFor  = C_ItemUpgrade.GetHighWatermarkForSlot
+            local stats, worn, spares = {}, {}, {}
+            local function done(msg)
+                C_Item.GetItemStats = realStats
+                ns.PlayerSpecKey, ns.ClassGuideData = realKey, realGuide
+                -- The spec stat is memoised on the specialization index,
+                -- which does not change when a test swaps the guide out
+                -- from under it. Drop it on the way in and on the way
+                -- out, or the answer leaks between checks.
+                ns:InvalidateSpecPrimaryStat()
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                ns.watermarkCache[5] = nil
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[5] = nil end
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+
+            C_Item.GetItemStats = function(link) return stats[link] end
+            ns.PlayerSpecKey = function() return "TEST_SPEC" end
+            ns.ClassGuideData = {
+                TEST_SPEC = {
+                    statPriority = {
+                        { stats = { "Haste", "Agility", "Mastery" } },
+                    },
+                },
+            }
+
+            ns:InvalidateSpecPrimaryStat()
+
+            -- The first PRIMARY stat, not the first stat. A guide that
+            -- opens on Haste does not make Haste a primary stat.
+            local mine = ns:SpecPrimaryStat()
+            if mine ~= "Agility" then
+                return done("read the spec's primary stat as " .. tostring(mine))
+            end
+
+            stats.agi  = { ITEM_MOD_AGILITY_SHORT = 100 }
+            stats.str  = { ITEM_MOD_STRENGTH_SHORT = 100 }
+            stats.bare = { ITEM_MOD_STAMINA_SHORT = 100 }
+            if ns:PieceIsOffStat("agi") then
+                return done("called an on-stat piece off-stat")
+            end
+            if not ns:PieceIsOffStat("str") then
+                return done("a Strength piece passed as usable by an "
+                    .. "Agility spec")
+            end
+            if ns:PieceIsOffStat("bare") then
+                return done("a piece with no primary stat at all was "
+                    .. "excluded -- that is most necks and trinkets")
+            end
+
+            -- And it reaches the floor, which is where the crests go.
+            ns.GetSlotInfo = function(_, sl) return worn[sl] end
+            ns.GetBagSpares = function(_, sl) return spares[sl] or {} end
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 0, 0 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function() return 0, 0 end
+            local function line()
+                ns.watermarkCache[5] = nil
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[5] = nil end
+                return ns:GetFreeUpgradeIlvl(5)
+            end
+
+            worn[5] = { link = "agi", ilvl = 311 }
+            spares[5] = { { link = "agi", ilvl = 331, unbound = false } }
+            if line() ~= 331 then
+                return done("a bound on-stat 331 did not lift the line, so "
+                    .. "this fixture cannot see the bug")
+            end
+
+            spares[5] = { { link = "str", ilvl = 331, unbound = false } }
+            local got = line()
+            if got ~= 311 then
+                return done("an off-stat 331 in the bags took the line to "
+                    .. got)
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(offstat) == "ok":
+        print("  ok   off-stat gear sets no line, and pieces with no primary "
+              "stat are left alone")
+    else:
+        print("  FAIL off-stat rule: %s" % offstat)
+        failures.append(("off-stat rule", str(offstat)))
+
+    # /yh marks -- the whole watermark state, named.
+    #
+    # The one command that answers questions this addon cannot: every
+    # bucket the client keeps, and which one each worn piece answers to.
+    # Run it, change a piece, run it again, and whatever moved is the
+    # rule. It has to print all seventeen and it has to name them, or it
+    # is a column of numbers nobody can act on.
+    marks = L.eval("""
+        function(ns)
+            local yh = SlashCmdList.YIPPYAPPHELPER
+            if not yh then return "no /yh handler" end
+            local realPrint, realFor = print, C_ItemUpgrade.GetHighWatermarkForSlot
+            local realSlotFor = C_ItemUpgrade.GetHighWatermarkSlotForItem
+            local lines, asked = {}, {}
+            local function done(msg)
+                print = realPrint
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                C_ItemUpgrade.GetHighWatermarkSlotForItem = realSlotFor
+                return msg
+            end
+            print = function(...)
+                local out = {}
+                for i = 1, select("#", ...) do
+                    out[#out + 1] = tostring((select(i, ...)))
+                end
+                lines[#lines + 1] = table.concat(out, " ")
+            end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function(i)
+                asked[i] = true
+                return 300 + i, 0
+            end
+            C_ItemUpgrade.GetHighWatermarkSlotForItem = function() return 14 end
+
+            local ok, err = pcall(yh, "marks")
+            if not ok then return done("/yh marks raised: " .. tostring(err)) end
+
+            for i = 0, 16 do
+                if not asked[i] then
+                    return done("bucket " .. i .. " was never asked about")
+                end
+            end
+
+            local body = table.concat(lines, " | ")
+            -- Named, not numbered. OnehandWeaponSecond is the one the
+            -- whole dual-wield rule turns on, so it is the one to check.
+            for _, want in ipairs({ "OnehandWeaponSecond", "Twohand",
+                                    "Offhand", "Finger", "Trinket" }) do
+                if not body:find(want, 1, true) then
+                    return done("the dump never names " .. want)
+                end
+            end
+            if not body:find("316", 1, true) then
+                return done("bucket 16's value never reached the output")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(marks) == "ok":
+        print("  ok   /yh marks: all 17 buckets asked, named and printed with "
+              "what each worn piece answers to")
+    else:
+        print("  FAIL /yh marks: %s" % marks)
+        failures.append(("/yh marks", str(marks)))
+
+    # The crest discount is an achievement, and it lands mid-session.
+    #
+    # It is account-wide -- cross an item level in every slot on any
+    # character and every character pays half -- and the answer was
+    # cached from login, so a discount earned while the panel was open
+    # left every price doubled until a reload. That is the one moment
+    # the numbers matter most.
+    discount = L.eval("""
+        function(ns)
+            if not ns.InvalidateDiscountCache then
+                return "no discount cache to invalidate"
+            end
+            local realGet = GetAchievementInfo
+            local realDB = YippYappHelperDB.discounts
+            local earned = false
+            local function done(msg)
+                GetAchievementInfo = realGet
+                YippYappHelperDB.discounts = realDB
+                ns:InvalidateDiscountCache()
+                return msg
+            end
+            -- No manual override in the way: this is about the client's
+            -- answer, not the /yh discount toggle.
+            YippYappHelperDB.discounts = nil
+            GetAchievementInfo = function(id)
+                return id, "Champion of the Mist", 10, earned
+            end
+
+            ns:InvalidateDiscountCache()
+            if ns:GetCrestCost("Champion") ~= ns.BASE_CREST_COST then
+                return done("an unearned achievement was already priced as "
+                    .. "a discount")
+            end
+
+            -- It lands. Without the invalidation the cached false stands.
+            earned = true
+            if ns:GetCrestCost("Champion") ~= ns.BASE_CREST_COST then
+                return done("the cache was never consulted, so this test "
+                    .. "cannot see the bug")
+            end
+            ns:InvalidateDiscountCache()
+            if ns:GetCrestCost("Champion") ~= ns.DISCOUNTED_CREST_COST then
+                return done("the discount stayed unread after the "
+                    .. "achievement landed")
+            end
+
+            -- And it is the account-wide flag that is read. The fourth
+            -- return of GetAchievementInfo is `completed`, true when ANY
+            -- character earned it; `wasEarnedByMe` is the thirteenth and
+            -- would make every alt pay full price.
+            GetAchievementInfo = function(id)
+                return id, "Champion of the Mist", 10, true, nil, nil, nil,
+                    "desc", 0, 1, "", false, false, "Someone Else", false
+            end
+            ns:InvalidateDiscountCache()
+            if ns:GetCrestCost("Champion") ~= ns.DISCOUNTED_CREST_COST then
+                return done("an achievement earned by another character on "
+                    .. "the account did not discount this one")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(discount) == "ok":
+        print("  ok   crest discount: account-wide, and re-read the moment "
+              "the achievement lands")
+    else:
+        print("  FAIL crest discount: %s" % discount)
+        failures.append(("crest discount", str(discount)))
+
+    # The raid scan is about the group you are in.
+    #
+    # It was written from INSPECT_READY -- which fires for a group member
+    # whoever asked, this addon or any other -- cleared only by starting
+    # another scan, and saved to disk on every logout. Measured on a real
+    # account: 673 players, 152KB, three times the size of everything
+    # else in the file put together, nearly all of it strangers from pugs
+    # weeks earlier.
+    #
+    # A loading screen can put the roster briefly at zero, so an empty
+    # one has to read as "ask again later" rather than "you are alone" --
+    # otherwise the page blanks for a raid that is still there.
+    raidprune = L.eval("""
+        function(ns)
+            local frame = ns.RaidInspectFrame
+            if not ns.RaidInspectData then return "no scan data to prune" end
+            local realIn, realRaid = IsInGroup, IsInRaid
+            local realNum, realGUID = GetNumGroupMembers, UnitGUID
+            local realExists = UnitExists
+            local roster = {}
+            local function done(msg)
+                IsInGroup, IsInRaid = realIn, realRaid
+                GetNumGroupMembers, UnitGUID = realNum, realGUID
+                UnitExists = realExists
+                wipe(ns.RaidInspectData)
+                return msg
+            end
+            IsInRaid = function() return false end
+            IsInGroup = function() return #roster > 0 end
+            GetNumGroupMembers = function()
+                return #roster > 0 and (#roster + 1) or 0
+            end
+            UnitExists = function(u)
+                if u == "player" then return true end
+                local i = tonumber(tostring(u):match("^party(%d+)$"))
+                return i ~= nil and roster[i] ~= nil
+            end
+            UnitGUID = function(u)
+                if u == "player" then return "Player-ME" end
+                local i = tonumber(tostring(u):match("^party(%d+)$"))
+                return i and roster[i] or nil
+            end
+
+            local function count()
+                local n = 0
+                for _ in pairs(ns.RaidInspectData) do n = n + 1 end
+                return n
+            end
+
+            -- Two pugs ago, plus the group you are in now.
+            wipe(ns.RaidInspectData)
+            for _, g in ipairs({ "Player-ME", "Player-A", "Player-B",
+                                 "Player-OLD1", "Player-OLD2" }) do
+                ns.RaidInspectData[g] = { name = g }
+            end
+            roster = { "Player-A", "Player-B" }
+            ns:RefreshRaidUnits()
+            if count() ~= 3 then
+                return done("pruning to a 3-person group left " .. count()
+                    .. " rows")
+            end
+            if not ns.RaidInspectData["Player-A"] then
+                return done("pruning dropped somebody who IS in the group")
+            end
+
+            -- Mid-loading-screen: the roster is briefly nothing, and
+            -- that must not read as "you are alone".
+            roster = {}
+            ns:RefreshRaidUnits()
+            if count() ~= 3 then
+                return done("an empty roster wiped " .. (3 - count())
+                    .. " rows -- that is a loading screen, not an empty group")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(raidprune) == "ok":
+        print("  ok   raid scan prunes to the current group, and survives an "
+              "empty roster mid-zone")
+    else:
+        print("  FAIL raid scan pruning: %s" % raidprune)
+        failures.append(("raid scan pruning", str(raidprune)))
+
+    # Difficulty notes answer per difficulty.
+    #
+    # `changesUnknown` used to short-circuit the whole section, so a boss
+    # whose Heroic notes existed and whose Mythic ones did not printed
+    # "Not recorded" on top of the Heroic notes it had -- a claim of
+    # ignorance the guide disproves two lines further down.
+    #
+    # Ula'tek is the case: mythictrap publishes a Heroic Changes block
+    # for him and no Mythic one. Pinned here so an edit that drops either
+    # half of that arrangement fails rather than quietly going silent.
+    halfknown = L.eval("""
+        function(ns)
+            local G = ns.RaidGuide
+            if not (G and G.ChangesFor) then return "no guide to read" end
+            local boss
+            for _, b in ipairs(G.bosses or {}) do
+                if b.id == "ulatek" then boss = b end
+            end
+            if not boss then return "ulatek not found" end
+
+            if not boss.changesUnknown then
+                return "ulatek no longer admits Mythic is unrecorded"
+            end
+            local h = G:ChangesFor(boss, "heroic")
+            if not (h and #h > 0) then
+                return "ulatek has no Heroic notes, so the page can only "
+                    .. "say Not recorded for a difficulty that IS recorded"
+            end
+            if G:ChangesFor(boss, "mythic") then
+                return "ulatek grew Mythic notes -- if they are real, drop "
+                    .. "changesUnknown with them"
+            end
+            return "ok"
+        end
+    """)(ns)
+    if str(halfknown) == "ok":
+        print("  ok   difficulty notes: Heroic recorded and Mythic admitted "
+              "unknown, on the same boss")
+    else:
+        print("  FAIL difficulty notes: %s" % halfknown)
+        failures.append(("difficulty notes", str(halfknown)))
+
+    # Two one-handers are a pair, and the pair is why the bug needed two.
+    #
+    # Enum.ItemRedundancySlot keeps the one-hand marks in a RANKED pair --
+    # OnehandWeapon (14) and OnehandWeaponSecond (15) -- the same shape
+    # rings and trinkets have. GetHighWatermarkForItem answers about the
+    # item's own bucket, which is the higher one, so a 331 in the main
+    # hand answered 331 for an off hand at 305 and every rank to 308 was
+    # offered for nothing.
+    #
+    # With a two-hander, a shield or a holdable in the picture the buckets
+    # never touch, which is why this only ever showed up dual-wielding.
+    onehand = L.eval("""
+        function(ns)
+            if not ns.DualWieldingOneHanders then
+                return "no one-hand pairing to test"
+            end
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realInstant = GetItemInfoInstant
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local realFor  = C_ItemUpgrade.GetHighWatermarkForSlot
+            local worn, loc = {}, {}
+            local function done(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                GetItemInfoInstant = realInstant
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                for _, s in ipairs({ 16, 17 }) do
+                    ns.watermarkCache[s] = nil
+                    if YippYappHelperDB.watermarks then
+                        YippYappHelperDB.watermarks[s] = nil
+                    end
+                end
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+            ns.GetSlotInfo = function(_, s) return worn[s] end
+            ns.GetBagSpares = function() return {} end
+            GetItemInfoInstant = function(link)
+                return 1, "Weapon", "Axe", loc[link]
+            end
+            -- The client answers about the item's bucket -- the higher of
+            -- the pair -- and answers the second bucket honestly when
+            -- asked for it by name.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 331, 0 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function(bucket)
+                if bucket == 15 then return 305, 0 end
+                return 331, 0
+            end
+            local function reread(slot)
+                ns.watermarkCache[slot] = nil
+                if YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[slot] = nil
+                end
+                return ns:GetMarkRead(slot)
+            end
+
+            -- The screenshot: a crafted 331 in one hand, 305 in the other.
+            worn[16] = { link = "mh", ilvl = 331, crafted = true }
+            worn[17] = { link = "oh", ilvl = 305 }
+            loc.mh, loc.oh = "INVTYPE_WEAPON", "INVTYPE_WEAPON"
+            local read = reread(17)
+            if read ~= 305 then
+                return done("dual-wielding, the off hand read " .. read
+                    .. " -- the other hand's line rather than its own")
+            end
+            local free = ns:GetFreeUpgradeIlvl(17)
+            if free > 305 then
+                return done("the off hand was offered free ranks to " .. free)
+            end
+
+            -- The same pair without the crafted piece: the floor is the
+            -- SECOND highest of the two hands, so one good weapon still
+            -- buys the other hand nothing.
+            worn[16] = { link = "mh", ilvl = 331 }
+            if ns:GetFreeUpgradeIlvl(17) > 305 then
+                return done("one 331 one-hander lifted the other hand")
+            end
+
+            -- A holdable is a bucket of its own. No pair, no cap: the
+            -- client's answer about that slot stands.
+            loc.oh = "INVTYPE_HOLDABLE"
+            local solo = reread(17)
+            if solo ~= 331 then
+                return done("with a holdable in the off hand the pair rule "
+                    .. "still fired, reading " .. solo)
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(onehand) == "ok":
+        print("  ok   one-hand pair: dual-wielding follows the second bucket, "
+              "a holdable keeps its own")
+    else:
+        print("  FAIL one-hand pair: %s" % onehand)
+        failures.append(("one-hand pair", str(onehand)))
 
     # The load gate, which is only worth having if it holds anything.
     #
@@ -5431,9 +6810,8 @@ def main():
                 -- after this one, and slot 16 is the weapon every other
                 -- gear fixture uses -- they would start reporting free
                 -- upgrades and pass or fail for reasons of ours.
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[16] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[16] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -5462,7 +6840,8 @@ def main():
             -- a remembered one is at worst behind -- but a forgotten one
             -- makes the rule unreachable, which is what shipped.
             YippYappHelperDB = YippYappHelperDB or {}
-            local stored = (YippYappHelperDB.watermarks or {})[16]
+            local savedMarks = ns.StoredWatermarks and ns:StoredWatermarks()
+            local stored = savedMarks and savedMarks.marks[16]
             if stored ~= T.Champion[5] then
                 return restore("the mark was not written to SavedVariables")
             end
@@ -5520,9 +6899,8 @@ def main():
                 ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
                 YYH_WATERMARKS[16] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[16] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[16] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -5631,9 +7009,8 @@ def main():
                 ns.IsCrestFree = realPrecious
                 YYH_WATERMARKS[13] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[13] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[13] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -5665,9 +7042,8 @@ def main():
             -- quoting a price built out of a zero.
             YYH_WATERMARKS[13] = nil
             wipe(ns.watermarkCache)
-            if YippYappHelperDB and YippYappHelperDB.watermarks then
-                YippYappHelperDB.watermarks[13] = nil
-            end
+            local st = ns.StoredWatermarks and ns:StoredWatermarks()
+            if st then st.marks[13] = nil end
             if ns:GetMarkLaunder(13) ~= nil then
                 return restore("a slot with no mark read still gets priced")
             end
@@ -5728,9 +7104,8 @@ def main():
                 ns.IsCrestFree = realFree
                 YYH_WATERMARKS[13] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[13] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[13] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -5820,9 +7195,8 @@ def main():
                 ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
                 YYH_WATERMARKS[8] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[8] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[8] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -5906,9 +7280,8 @@ def main():
             -- answer under it may be read one way and not the other.
             YYH_WATERMARKS[8] = nil
             wipe(ns.watermarkCache)
-            if YippYappHelperDB and YippYappHelperDB.watermarks then
-                YippYappHelperDB.watermarks[8] = nil
-            end
+            local st = ns.StoredWatermarks and ns:StoredWatermarks()
+            if st then st.marks[8] = nil end
             if ns:GetMarkRead(8) ~= 0 then
                 return restore("a slot the client never answered for "
                     .. "reads as answered")
@@ -6080,9 +7453,8 @@ def main():
                 ns.GetSlotInfo = realSlot
                 YYH_WATERMARKS[8] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[8] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[8] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -6176,9 +7548,8 @@ def main():
                 ns.GetSlotInfo = realSlot
                 YYH_WATERMARKS[8] = nil
                 wipe(ns.watermarkCache)
-                if YippYappHelperDB and YippYappHelperDB.watermarks then
-                    YippYappHelperDB.watermarks[8] = nil
-                end
+                local st = ns.StoredWatermarks and ns:StoredWatermarks()
+                if st then st.marks[8] = nil end
                 ns:InvalidateCrestPlans()
                 return msg
             end
@@ -6418,7 +7789,7 @@ def main():
                 end
             end
             -- The pair rule still has to be sayable without it.
-            if not joined:find("count as a pair", 1, true) then
+            if not joined:find("as a pair", 1, true) then
                 return restore("the pair rule is not explained: " .. joined)
             end
             -- And said once. The stranded warning used to repeat it as a
@@ -8869,6 +10240,127 @@ def main():
         print("  FAIL BiS doll: %s" % doll)
         failures.append(("BiS doll", str(doll)))
 
+    # Feeding a piece to the Catalyst destroys it, so a row the player
+    # did exactly what the page said with went from collected back to
+    # missing at the moment it was most finished. The page infers it
+    # back from the one thing that survives the conversion -- the
+    # secondaries -- and the inference has an order to keep: anything
+    # the client can state outright beats it, and it never runs on a
+    # row that already names the set piece, where it could only
+    # disagree with an item ID.
+    cat = L.eval("""
+        function(ns)
+            local owned = ns.__bisOwnedState
+            if not owned then return "the page never published its ownership check" end
+
+            local realID, realLink = GetInventoryItemID, GetInventoryItemLink
+            local realSlot, realSec = ns.GetSlotInfo, ns.ItemSecondaries
+            local realJournal = ns.GetJournalItemLink
+
+            local worn = {}
+            GetInventoryItemID = function(_, slot) return worn[slot] and worn[slot].id or nil end
+            GetInventoryItemLink = function(_, slot) return worn[slot] and worn[slot].link or nil end
+            ns.GetSlotInfo = function(_, slot)
+                local w = worn[slot]
+                if not w then return nil end
+                return { link = w.link, ilvl = w.ilvl, setPiece = w.setPiece }
+            end
+            -- Every row's link is "row:<itemID>", so a stub can answer
+            -- for the guide's item and the worn item separately.
+            ns.GetJournalItemLink = function(_, itemID) return "row:" .. itemID end
+            local sec = {}
+            ns.ItemSecondaries = function(_, link) return link and sec[link] or nil end
+
+            local function restore()
+                GetInventoryItemID, GetInventoryItemLink = realID, realLink
+                ns.GetSlotInfo, ns.ItemSecondaries = realSlot, realSec
+                ns.GetJournalItemLink = realJournal
+            end
+            local function fail(why)
+                restore()
+                return why
+            end
+
+            local HEAD, BACK = 1, 15
+            local row = { itemID = 500, slot = "Head" }
+            sec["row:500"] = "crit+mastery"
+
+            -- Nothing worn: missing, and no inference to make.
+            if owned(HEAD, row, {}) ~= nil then
+                return fail("an empty slot came back owned")
+            end
+
+            -- Class set armour, same secondaries, in a set slot.
+            worn[HEAD] = { id = 900, link = "worn:900", ilvl = 311, setPiece = true }
+            sec["worn:900"] = "crit+mastery"
+            local state, lvl = owned(HEAD, row, {})
+            if state ~= "catalyst" then
+                return fail("a converted piece read as " .. tostring(state))
+            end
+            if lvl ~= 311 then
+                return fail("the converted piece reported item level " .. tostring(lvl))
+            end
+
+            -- The same worn piece with the other pair is somebody
+            -- else's conversion, or a direct drop.
+            sec["worn:900"] = "haste+vers"
+            if owned(HEAD, row, {}) ~= nil then
+                return fail("a set piece with different secondaries was credited")
+            end
+            sec["worn:900"] = "crit+mastery"
+
+            -- Not class set armour at all: the test says nothing about
+            -- the Catalyst, only that two items share a stat pair.
+            worn[HEAD].setPiece = false
+            if owned(HEAD, row, {}) ~= nil then
+                return fail("a plain item with matching stats was credited")
+            end
+            worn[HEAD].setPiece = true
+
+            -- An item still loading reads as no answer, not as a match.
+            sec["row:500"] = nil
+            if owned(HEAD, row, {}) ~= nil then
+                return fail("a row whose item data had not loaded was credited")
+            end
+            sec["row:500"] = "crit+mastery"
+
+            -- A +cat row names the set piece itself. If they had
+            -- converted into it the item ID would match outright, so an
+            -- inference here could only contradict a fact.
+            local tierRow = { itemID = 500, slot = "Head", catalystFrom = 44 }
+            if owned(HEAD, tierRow, {}) ~= nil then
+                return fail("a +cat row was credited by inference")
+            end
+
+            -- Class set armour does not come in every slot.
+            worn[BACK] = { id = 901, link = "worn:901", ilvl = 311, setPiece = true }
+            sec["worn:901"] = "crit+mastery"
+            if owned(BACK, { itemID = 500, slot = "Back" }, {}) ~= nil then
+                return fail("a cloak slot was credited as converted")
+            end
+
+            -- Order: a copy in the bags is a fact, and beats a guess.
+            if owned(HEAD, row, { [500] = 305 }) ~= "bags" then
+                return fail("an inference beat a copy in the bags")
+            end
+
+            -- ...and wearing the row's own item beats both.
+            worn[HEAD] = { id = 500, link = "worn:500", ilvl = 320, setPiece = true }
+            if owned(HEAD, row, { [500] = 305 }) ~= "equipped" then
+                return fail("wearing the item itself did not read as equipped")
+            end
+
+            restore()
+            return "ok"
+        end
+    """)(ns)
+    if cat == "ok":
+        print("  ok   catalyst: a converted row is credited by its secondaries, "
+              "and equipped, bagged and +cat rows all beat the inference")
+    else:
+        print("  FAIL catalyst: %s" % cat)
+        failures.append(("catalyst", str(cat)))
+
     # Tabs. Every strip in the addon goes through these three functions,
     # so the contract is worth stating: a tab reads as selected by TWO
     # signals, and it sits on a rail whether or not its container drew
@@ -9583,6 +11075,59 @@ def main():
         print("  ok   lua 5.1: no post-5.1 standard library calls in %d addon file(s)"
               % len([r for r in toc_files() if not r.startswith("Libs")]))
 
+    # No event is registered inside a page builder.
+    #
+    # ns:CreateSomethingFrame runs the first time that page is OPENED,
+    # not at load. A CreateFrame():RegisterEvent inside one therefore
+    # registers nothing until the player has already been to the page by
+    # hand -- and a feature whose whole job is to act before they go
+    # there is then dead on arrival, silently, with no error to see.
+    #
+    # This is not hypothetical either. The Auction House popout shipped
+    # with its watcher inside ns:CreateConsumablesFrame and the symptom
+    # was "it only appears after I open it myself". Every runtime check
+    # passed, because the harness builds every page before it asks
+    # anything -- which is exactly the state a real session is not in.
+    #
+    # Static for that reason: the harness cannot un-build a page, so the
+    # only place to see this is the source.
+    def enclosing_functions(src):
+        """(line, header) for each function open at each line, in order."""
+        stack, out = [], []
+        for n, raw in enumerate(src.split(chr(10)), 1):
+            line = re.sub("--[^" + chr(10) + "]*", " ", raw)
+            line = re.sub(chr(34) + "[^" + chr(34) + "]*" + chr(34), "", line)
+            out.append((n, raw, list(stack)))
+            for tok in re.findall("[A-Za-z_][A-Za-z_0-9]*", line):
+                if tok in ("function", "if", "do"):
+                    stack.append((n, tok, raw))
+                elif tok == "end" and stack:
+                    stack.pop()
+        return out
+
+    dead_events = []
+    for rel in toc_files():
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path) or rel.startswith("Libs"):
+            continue
+        src = open(path, encoding="utf-8-sig").read()
+        for n, raw, stack in enclosing_functions(src):
+            if "RegisterEvent" not in raw and "RegisterUnitEvent" not in raw:
+                continue
+            if raw.lstrip().startswith("--"):
+                continue
+            for _ln, kind, head in stack:
+                if kind == "function" and re.search(r"function ns[:.]Create[A-Za-z]*Frame", head):
+                    dead_events.append("%s:%d is inside %s"
+                                       % (rel, n, head.strip().rstrip("(")[:48]))
+                    break
+    if dead_events:
+        print("  FAIL dead events: %s" % "; ".join(dead_events))
+        failures.append(("dead events", "; ".join(dead_events)))
+    else:
+        print("  ok   no events registered inside a page builder, "
+              "where they would not register until the page is opened by hand")
+
     # The loot scan does not run for a whole frame.
     #
     # It is thousands of Encounter Journal calls -- every tier of every
@@ -9735,9 +11280,15 @@ def main():
                 return finish("the filter asked for during a prewarm was never scanned")
             end
 
-            return string.format(
+            -- Through finish, like every failing path above it. Passing
+            -- used to return straight out, which left this check's stubs
+            -- -- pcall, GetItemInfo, the Encounter Journal table -- in
+            -- place for every check that runs after it. Nothing complained,
+            -- because a leaked stub does not fail: it quietly answers for
+            -- the client in tests that never asked it to.
+            return finish(string.format(
                 "ok:%d journal calls over %d frames, %d rows cached, a prewarm yields to a real ask",
-                calls, frames, #second)
+                calls, frames, #second))
         end
     """)(ns)
     if loot and str(loot).startswith("ok:"):
@@ -10099,6 +11650,432 @@ def main():
     else:
         print("  FAIL open on login: %s" % login)
         failures.append(("open on login", str(login)))
+
+    # The consumables popout meeting the Auction House.
+    #
+    # Three claims, and the third is the one worth the harness: a window
+    # that opens itself has to know which windows it may close again.
+    # Auto-opened is ours to take away; hand-opened is not, and the only
+    # difference between the two is a flag no screenshot can show.
+    #
+    # AuctionHouseFrame is faked rather than loaded. Blizzard_AuctionHouseUI
+    # is load-on-demand and not in this harness at all, and what the addon
+    # actually depends on is narrow: a frame of that name, on screen, with
+    # a top right corner to hang off.
+    ah = L.eval("""
+        function(ns)
+            if not ns.ConsumablesPopoutAtAuctionHouse then
+                return "the auction house is not wired to the popout"
+            end
+
+            YippYappHelperDB = YippYappHelperDB or {}
+            YippYappHelperDB.consumablesPopout = nil
+            ns.SetModuleEnabled("consumablesAtAH", true)
+
+            local ah = CreateFrame("Frame", "AuctionHouseFrame", UIParent)
+            ah:SetSize(830, 550)
+            ah:Hide()
+
+            local function done(msg)
+                _G.AuctionHouseFrame = nil
+                local f = _G.YippYappConsumablesPopout
+                if f and f:IsShown() then f:Hide() end
+                YippYappHelperDB.consumablesPopout = nil
+                ns.SetModuleEnabled("consumablesAtAH", true)
+                return msg
+            end
+
+            -- Nothing opens on its own with no auctioneer in sight.
+            ns.ConsumablesPopoutAtAuctionHouse(false)
+            local f = _G.YippYappConsumablesPopout
+            if f and f:IsShown() then
+                return done("the popout was up with no auction house")
+            end
+
+            -- The watcher is the whole feature: everything below is
+            -- unreachable in a real session if this is not armed, and it
+            -- was not armed once -- it sat inside the page builder, so
+            -- nothing registered until the page had been opened by hand.
+            if not (ns.ConsumablesAHWatcher and ns.ConsumablesAHWatcher.IsEventRegistered
+                    and ns.ConsumablesAHWatcher:IsEventRegistered("AUCTION_HOUSE_SHOW")) then
+                return done("nothing is listening for AUCTION_HOUSE_SHOW")
+            end
+
+            -- Walking up to one opens it, pinned beside the frame.
+            ah:Show()
+            if not ns.ConsumablesPopoutAtAuctionHouse(true) then
+                return done("the auction house did not open the popout")
+            end
+            f = _G.YippYappConsumablesPopout
+            if not (f and f:IsShown()) then return done("nothing was put on screen") end
+
+            local point, rel, relPoint, x = f:GetPoint()
+            if point ~= "TOPLEFT" or rel ~= ah or relPoint ~= "TOPRIGHT" then
+                return done(string.format("anchored %s to %s, not the top right corner",
+                    tostring(point), tostring(relPoint)))
+            end
+            -- Beside it, not over it: a shopping list covering the search
+            -- box is worse than no shopping list.
+            if (x or 0) < 0 then return done("pinned inside the auction house, not beside it") end
+
+            if not f.pin:IsShown() then return done("no pin box while pinned") end
+            if not f.pin:GetChecked() then return done("the pin box is not ticked while pinned") end
+
+            -- Pinned means it does not follow the cursor.
+            local moved = false
+            local realStart = f.StartMoving
+            f.StartMoving = function() moved = true end
+            f:GetScript("OnDragStart")(f)
+            if moved then return done("a pinned window still followed the cursor") end
+
+            -- Unticking the box is the unlock: off the auction house, and
+            -- draggable.
+            f.pin:SetChecked(false)
+            f.pin:GetScript("OnClick")(f.pin)
+            local _, rel2 = f:GetPoint()
+            if rel2 == ah then return done("unticking the pin left it on the auction house") end
+            -- Frozen where it stood, not released to wherever it last sat
+            -- loose. On a fresh install there is no saved position at
+            -- all, so without this the unlock throws the window at the
+            -- far right edge of the screen and then invites a drag.
+            if not YippYappHelperDB.consumablesPopout.point then
+                return done("unticking the pin saved no position, so it jumped to the default")
+            end
+            moved = false
+            f:GetScript("OnDragStart")(f)
+            if not moved then return done("an unpinned window still would not move") end
+
+            -- And ticking it again puts it back.
+            f.pin:SetChecked(true)
+            f.pin:GetScript("OnClick")(f.pin)
+            local _, rel3 = f:GetPoint()
+            if rel3 ~= ah then return done("re-ticking the pin did not put it back") end
+            f.StartMoving = realStart
+
+            -- Leaving takes away the window that arrived with it.
+            ah:Hide()
+            ns.ConsumablesPopoutAtAuctionHouse(false)
+            if f:IsShown() then return done("the popout outlived the auction house that opened it") end
+            local _, rel4 = f:GetPoint()
+            if rel4 == ah then return done("left anchored to a hidden auction house") end
+
+            -- But not one the player opened for themselves. Same window,
+            -- same events, and it has to survive them.
+            ns:ToggleConsumablesPopout()
+            if not f:IsShown() then return done("the popout would not open by hand") end
+            ah:Show()
+            if ns.ConsumablesPopoutAtAuctionHouse(true) then
+                return done("re-opened a popout that was already up")
+            end
+            ah:Hide()
+            ns.ConsumablesPopoutAtAuctionHouse(false)
+            if not f:IsShown() then return done("closed a popout the player had opened") end
+            f:Hide()
+
+            -- Switched off, it stays off -- the negative control, without
+            -- which every pass above is just "the module is on".
+            ns.SetModuleEnabled("consumablesAtAH", false)
+            ah:Show()
+            if ns.ConsumablesPopoutAtAuctionHouse(true) then
+                return done("opened itself with the setting off")
+            end
+            if f:IsShown() then return done("a window appeared with the setting off") end
+
+            -- And the diagnostic that explains all of the above when it
+            -- goes wrong has to survive too. It reads six things that can
+            -- each be renamed out from under it, and a broken
+            -- troubleshooter is worse than none: it answers confidently.
+            local realPrint = print
+            print = function() end
+            local told, perr = pcall(SlashCmdList.YIPPYAPPHELPER, "ah")
+            print = realPrint
+            if not told then return done("/yh ah threw: " .. tostring(perr)) end
+
+            return done("ok:opens pinned beside the frame, unlocks in place and re-pins from "
+                .. "the box, takes back only what it opened, silent when switched off, "
+                .. "and /yh ah reports on all of it")
+        end
+    """)(ns)
+    if ah and str(ah).startswith("ok:"):
+        print("  ok   auction house: %s" % str(ah)[3:])
+    else:
+        print("  FAIL auction house: %s" % ah)
+        failures.append(("auction house", str(ah)))
+
+    # Item names arriving after the popout has already drawn.
+    #
+    # The window that opens beside the Auction House is usually the only
+    # one on screen, and on the first visit of a session the client has
+    # not sent it any of these items yet. So every row draws as a red
+    # question mark and the literal string "item:273072", and the redraw
+    # that fixes that has to be one the POPOUT gets -- it was wired to
+    # the page alone, which is closed, so the names landed with nobody
+    # listening and the list stayed unreadable until it was reopened.
+    #
+    # Item and C_Timer.After are both swapped for ones that HAND BACK
+    # what they were given: the harness's own Item stub swallows the
+    # load callback, which is precisely the moment under test.
+    late = L.eval("""
+        function(ns)
+            if not ns.ToggleConsumablesPopout then
+                return "there is no popout to draw"
+            end
+
+            local page = _G.YippYappConsumablesFrame
+            if page and page:IsShown() then page:Hide() end
+
+            local pending = {}
+            local realItem = Item
+            Item = { CreateFromItemID = function()
+                return setmetatable({}, { __index = function(_, key)
+                    if key == "ContinueOnItemLoad" then
+                        return function(_, fn) pending[#pending + 1] = fn end
+                    end
+                    return function() end
+                end })
+            end }
+
+            local queued
+            local realAfter = C_Timer.After
+            C_Timer.After = function(_, fn) queued = fn end
+
+            local redrawn = 0
+            local realRefresh = ns.RefreshConsumablesPopout
+            ns.RefreshConsumablesPopout = function(self)
+                redrawn = redrawn + 1
+                return realRefresh(self)
+            end
+
+            local function done(msg)
+                Item = realItem
+                C_Timer.After = realAfter
+                ns.RefreshConsumablesPopout = realRefresh
+                local f = _G.YippYappConsumablesPopout
+                if f and f:IsShown() then f:Hide() end
+                return msg
+            end
+
+            ns:ToggleConsumablesPopout()
+            local f = _G.YippYappConsumablesPopout
+            if not (f and f:IsShown()) then return done("the popout did not open") end
+            if #pending == 0 then
+                return done("nothing asked the client for an item name")
+            end
+
+            -- One item's data lands, with the page shut behind it.
+            redrawn, queued = 0, nil
+            pending[1]()
+            if not queued then
+                return done("an item landing behind the popout scheduled nothing")
+            end
+            queued()
+            if redrawn == 0 then
+                return done("the redraw ran without reaching the popout")
+            end
+
+            return done("ok:a name landing with the page shut still redraws the popout ("
+                .. #pending .. " items asked for)")
+        end
+    """)(ns)
+    if late and str(late).startswith("ok:"):
+        print("  ok   late item names: %s" % str(late)[3:])
+    else:
+        print("  FAIL late item names: %s" % late)
+        failures.append(("late item names", str(late)))
+
+    # What a click does in the popout.
+    #
+    # AFTER the check above, and it has to stay after it: this one warms
+    # the item cache that one needs cold, and the cache is module-level
+    # with no way to empty it.
+    #
+    # Three claims. The rows do NOT open a tooltip on hover -- this
+    # window sits on top of the Auction House and the cursor crosses it
+    # on the way elsewhere. A plain click opens one instead. And a
+    # shift-click in front of an auctioneer drives Blizzard's search bar
+    # rather than the game's shift-click router, which would put the link
+    # in the chat box. That last one reaches two Blizzard frames by name,
+    # which is exactly the kind of thing that is renamed out from under
+    # an addon between patches.
+    clicks = L.eval("""
+        function(ns)
+            local realItem, realGII = Item, GetItemInfo
+            local realAfter, realShift = C_Timer.After, IsShiftKeyDown
+            local realTipLink, realTipHide = GameTooltip.SetHyperlink, GameTooltip.Hide
+            local realRouter = HandleModifiedItemClick
+
+            local function done(msg)
+                Item, GetItemInfo = realItem, realGII
+                C_Timer.After, IsShiftKeyDown = realAfter, realShift
+                GameTooltip.SetHyperlink, GameTooltip.Hide = realTipLink, realTipHide
+                HandleModifiedItemClick = realRouter
+                _G.AuctionHouseFrame = nil
+                local f = _G.YippYappConsumablesPopout
+                if f and f:IsShown() then f:Hide() end
+                return msg
+            end
+
+            -- Item data that is simply there, so the rows draw with real
+            -- names and the search has something to search for.
+            GetItemInfo = function(which)
+                local id = tonumber(which) or 0
+                return "Test Reagent", "|Hitem:" .. id .. "|h[Test Reagent]|h",
+                    1, 0, 0, "", "", 1, "", 134400
+            end
+            Item = { CreateFromItemID = function()
+                return setmetatable({}, { __index = function(_, key)
+                    if key == "ContinueOnItemLoad" then
+                        return function(_, fn) fn() end
+                    end
+                    return function() end
+                end })
+            end }
+            C_Timer.After = function(_, fn) fn() end
+
+            local shown, hidden = nil, 0
+            GameTooltip.SetHyperlink = function(_, link) shown = link end
+            GameTooltip.Hide = function() hidden = hidden + 1 end
+
+            ns:ToggleConsumablesPopout()
+            local rows = ns.__consPopRows
+            local r = rows and rows[1]
+            if not r then return done("the popout drew no rows") end
+
+            if r:GetScript("OnEnter") then
+                return done("a row still opens its tooltip on hover")
+            end
+            local click = r:GetScript("OnClick")
+            if not click then return done("a row does not answer a click") end
+
+            -- Plain click: the tooltip opens. Again: it closes.
+            IsShiftKeyDown = function() return false end
+            shown = nil
+            click(r)
+            if not shown then return done("a click opened no tooltip") end
+            hidden = 0
+            click(r)
+            if hidden == 0 then
+                return done("clicking the same row twice left the tooltip up")
+            end
+
+            -- Shift-click at an auctioneer: the search bar, not chat.
+            local searched, started, routed = nil, false, false
+            HandleModifiedItemClick = function() routed = true; return true end
+            local ah = CreateFrame("Frame", "AuctionHouseFrame", UIParent)
+            ah:Show()
+            ah.SearchBar = {
+                SearchBox = { SetText = function(_, text) searched = text end },
+                StartSearch = function() started = true end,
+            }
+            IsShiftKeyDown = function() return true end
+            click(r)
+            if routed then
+                return done("a shift-click at the Auction House went to chat")
+            end
+            if searched ~= "Test Reagent" then
+                return done("the search box was handed '" .. tostring(searched) .. "'")
+            end
+            if not started then return done("the search was typed but never run") end
+
+            -- Away from one, the game's own router gets it back.
+            ah:Hide()
+            _G.AuctionHouseFrame = nil
+            routed, searched = false, nil
+            click(r)
+            if not routed then
+                return done("a shift-click with no auctioneer did nothing at all")
+            end
+
+            return done("ok:no tooltip on hover, one on click, and a shift-click "
+                .. "that searches at the Auction House and links away from it")
+        end
+    """)(ns)
+    if clicks and str(clicks).startswith("ok:"):
+        print("  ok   popout clicks: %s" % str(clicks)[3:])
+    else:
+        print("  FAIL popout clicks: %s" % clicks)
+        failures.append(("popout clicks", str(clicks)))
+
+    # The options page builds, all the way to the bottom.
+    #
+    # The Settings API adds controls in order and an error partway
+    # through simply stops -- everything after it is missing, with no
+    # message anywhere. Each entry on that page reaches into a different
+    # feature module through a getter, so removing a feature is exactly
+    # what breaks it, and the half of the page that survives looks
+    # entirely normal.
+    #
+    # Named controls rather than a count, because a count passes when one
+    # thing is swapped for another.
+    options = L.eval("""
+        function(ns)
+            if not ns.OpenBlizzardSettings then return "no settings entry point" end
+
+            -- NOT reset first. The page registers itself at PLAYER_LOGIN
+            -- and guards against doing it twice, so what is in the table
+            -- by now is the real build -- wiping it and asking again
+            -- returns the cached category and records nothing, which
+            -- reads as an empty options page.
+            local ok, err = pcall(ns.OpenBlizzardSettings)
+            if not ok then return "the options page threw: " .. tostring(err) end
+
+            local built = YYH_SETTINGS_BUILT
+            if not built or #built.order == 0 then
+                return "the options page registered nothing at all"
+            end
+
+            local seen = {}
+            for _, name in ipairs(built.order) do seen[name] = built.kind[name] end
+
+            -- Present, and of the right kind. A header where a checkbox
+            -- should be is a control that silently stopped being one.
+            local want = {
+                ["Features"] = "header",
+                ["Ready Check overview"] = "checkbox",
+                ["Mythic+ summary"] = "checkbox",
+                ["Utility advisor"] = "checkbox",
+                ["Consumables at the Auction House"] = "checkbox",
+                ["Utility advisor display"] = "dropdown",
+                ["Utility advisor icon size"] = "slider",
+                ["Trinket sim rankings"] = "checkbox",
+                ["Open on login"] = "checkbox",
+                ["Minimap button"] = "checkbox",
+                ["Keybinding"] = "header",
+                ["Open YippYapp"] = "button",
+            }
+            for name, kind in pairs(want) do
+                if not seen[name] then
+                    return string.format("%q never reached the options page", name)
+                end
+                if seen[name] ~= kind then
+                    return string.format("%q is a %s, not a %s", name, seen[name], kind)
+                end
+            end
+
+            -- And the retired ones are actually gone, not merely hidden.
+            for _, dead in ipairs({ "Battle Res Timer", "Show between pulls",
+                                    "All YippYapp frames" }) do
+                if seen[dead] then
+                    return string.format("%q is still on the options page", dead)
+                end
+            end
+
+            -- The last thing registered has to be the last thing written,
+            -- or the page stopped early somewhere above it.
+            if built.order[#built.order] ~= "Open YippYapp" then
+                return "the page ends at " .. tostring(built.order[#built.order])
+                    .. ", not the keybinding button"
+            end
+
+            return string.format("ok:%d controls, in order, ending where the source does",
+                                 #built.order)
+        end
+    """)(ns)
+    if options and str(options).startswith("ok:"):
+        print("  ok   options page: %s" % str(options)[3:])
+    else:
+        print("  FAIL options page: %s" % options)
+        failures.append(("options page", str(options)))
 
     # The layout solver itself.
     #

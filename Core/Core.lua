@@ -121,6 +121,23 @@ do
     end
 end
 
+--- The line every class set piece carries and nothing else does.
+---
+--- "Set: " in English, off the client's own format string so it survives
+--- a locale, with the English fallback for the load harness. Same
+--- treatment UNBOUND_LINES gets, for the same reason, and matched on the
+--- fixed part before the substitution.
+---
+--- This is how the addon already counts tier on a raid roster
+--- (Features/Raid/RaidInspect.lua), so it is a test with in-game
+--- mileage on it rather than a guess at an API.
+local SET_BONUS_PREFIX
+do
+    local s = ITEM_SET_BONUS or "Set: %s"
+    SET_BONUS_PREFIX = s:match("^(.-)%%") or s
+    if SET_BONUS_PREFIX == "" then SET_BONUS_PREFIX = "Set:" end
+end
+
 --- Read the upgrade line off whatever was last put in the scan tooltip.
 ---
 --- Split out of ScanUpgradeTrack because the same three numbers have to
@@ -168,6 +185,11 @@ local function ParseUpgradeTooltip()
             if text:find("Professions%-Icon%-Quality") or text:find("Professions%-ChatIcon%-Quality") then
                 found.crafted = true
             end
+            -- Class set armour, however it got there: a direct drop and
+            -- a Catalyst conversion produce the same item.
+            if text:find(SET_BONUS_PREFIX, 1, true) then
+                found.setPiece = true
+            end
         end
     end
 
@@ -177,7 +199,8 @@ end
 local function ScanUpgradeTrack(slotID)
     -- Return cached result if available
     if scanCache[slotID] then
-        return scanCache[slotID].track, scanCache[slotID].rank, scanCache[slotID].maxRank, scanCache[slotID].crafted
+        local hit = scanCache[slotID]
+        return hit.track, hit.rank, hit.maxRank, hit.crafted, hit.setPiece
     end
     upgradeScanTooltip:ClearLines()
     local ok = pcall(upgradeScanTooltip.SetInventoryItem, upgradeScanTooltip, "player", slotID)
@@ -187,7 +210,7 @@ local function ScanUpgradeTrack(slotID)
     if not found then return nil, nil, nil, false end
 
     scanCache[slotID] = found
-    return found.track, found.rank, found.maxRank, found.crafted
+    return found.track, found.rank, found.maxRank, found.crafted, found.setPiece
 end
 
 ------------------------------------------------------------
@@ -382,7 +405,7 @@ function ns:GetSlotInfo(slotID)
     end
 
     -- Scan tooltip for actual upgrade track and crafted status
-    local trackName, currRank, maxRank, isCrafted = ScanUpgradeTrack(slotID)
+    local trackName, currRank, maxRank, isCrafted, isSetPiece = ScanUpgradeTrack(slotID)
 
     local info = {
         link = itemLink,
@@ -393,6 +416,7 @@ function ns:GetSlotInfo(slotID)
         rank = currRank,
         maxRank = maxRank,
         crafted = isCrafted,
+        setPiece = isSetPiece,
     }
     -- Handed out by reference from here on. Nothing writes to what this
     -- returns -- every one of the seventeen call sites reads and
@@ -601,6 +625,75 @@ ns.watermarkCache = {}
 --- again in here -- a cache hit in the client, but a second read all the
 --- same, and the invariant worth being able to state is "one slot read
 --- per frame", not "one, plus however many the callee repeats".
+--- The two numbers the client hands back, reduced to the one a price
+--- may be quoted from.
+---
+--- It was math.max of the pair, and that is what put a cyan "Free
+--- upgrade!" on an off hand the vendor then charged for. The character
+--- figure is the one a free rank follows. The account figure is how
+--- high the rest of the warband has been in that slot, and whatever
+--- that is worth, this addon has never established that it is worth a
+--- free rank HERE -- so it is a fallback and nothing more, standing in
+--- only when the client did not hand back a character figure at all.
+---
+--- Wrong in the safe direction on purpose, which is the rule the whole
+--- free-rank half of the addon is built on: a mark that is too low
+--- hands out too FEW free ranks, and a row that says "hold" about a
+--- rank that turned out to be free costs the player a walk to the
+--- vendor. Too high spends crests that do not come back.
+local function CharacterMark(charMark, accountMark)
+    if type(charMark) == "number" then return charMark end
+    return tonumber(accountMark) or 0
+end
+
+--- The second hand's line, when the client has answered about the
+--- first one's.
+---
+--- GetHighWatermarkForItem answers about the bucket the ITEM belongs
+--- to, and for a one-hander that is OnehandWeapon (14) -- the higher
+--- of the ranked pair. Handed to the other hand it is a promise about
+--- a weapon the player is not upgrading: a crafted 331 in the main
+--- hand answered 331 for an off hand sitting at 305, and every rank to
+--- 308 was offered for nothing.
+---
+--- OnehandWeaponSecond (15) is the line the second hand actually
+--- follows, and it can be asked for directly. The lower of the two is
+--- the only one safe to quote, because nothing here knows which hand
+--- holds the better weapon.
+---
+--- A zero from that query is silence, not "this pair has been
+--- nowhere" -- the same silence every query in here can return, and
+--- lowering a real answer to it would be inventing a fact rather than
+--- declining one. So it only ever lowers on a positive answer.
+---
+--- Applied where the mark is READ rather than where it is stored. What
+--- the client said is worth caching as the client said it; which
+--- bucket a hand may quote from is a question about both hands, and
+--- answering it costs a look at the other one. The sweep that fills
+--- the cache is held to one slot read per frame -- it is the six-second
+--- freeze in this file's history -- and two more reads inside it would
+--- put that straight back.
+local function OneHandSecondBucket()
+    local e = Enum and Enum.ItemRedundancySlot
+    return e and e.OnehandWeaponSecond or 15
+end
+
+local function SecondHandCap(slotID, mark)
+    if mark <= 0 then return mark end
+    if slotID ~= 16 and slotID ~= 17 then return mark end
+    if not (C_ItemUpgrade and C_ItemUpgrade.GetHighWatermarkForSlot) then
+        return mark
+    end
+    if not ns:DualWieldingOneHanders() then return mark end
+
+    local ok, charMark, accountMark =
+        pcall(C_ItemUpgrade.GetHighWatermarkForSlot, OneHandSecondBucket())
+    if not ok then return mark end
+    local second = CharacterMark(charMark, accountMark)
+    if second > 0 and second < mark then return second end
+    return mark
+end
+
 local function QueryWatermark(slotID, knownLink)
     if not C_ItemUpgrade then return 0 end
 
@@ -618,7 +711,7 @@ local function QueryWatermark(slotID, knownLink)
         local ok, charMark, accountMark =
             pcall(C_ItemUpgrade.GetHighWatermarkForItem, itemLink)
         if ok then
-            local mark = math.max(charMark or 0, accountMark or 0)
+            local mark = CharacterMark(charMark, accountMark)
             if mark > 0 then return mark end
         end
     end
@@ -631,7 +724,7 @@ local function QueryWatermark(slotID, knownLink)
             local ok2, charMark, accountMark =
                 pcall(C_ItemUpgrade.GetHighWatermarkForSlot, redundancySlot)
             if ok2 then
-                return math.max(charMark or 0, accountMark or 0)
+                return CharacterMark(charMark, accountMark)
             end
         end
     end
@@ -639,16 +732,70 @@ local function QueryWatermark(slotID, knownLink)
     return 0
 end
 
+--- Whose marks these are.
+---
+--- The saved variables file is account-wide -- one `## SavedVariables`
+--- line, one table, every character on the account writing into it.
+--- That is right for settings and window positions and wrong for this:
+--- a high-water mark is a fact about ONE character's slot, and the
+--- cache was keyed by slot alone.
+---
+--- So every alt read the last character's marks. And it reads them in
+--- the one situation the cache exists for -- away from the upgrade
+--- vendor, where the live query answers nothing and GetMarkRead falls
+--- through to whatever is on disk. A druid logging in after a demon
+--- hunter inherited the demon hunter's weapon line and was told ranks
+--- were free that its own vendor charges for.
+---
+--- The GUID rather than the name: a rename or a transfer does not
+--- change it, and two characters on different realms can share a name.
+local function CharKey()
+    return UnitGUID and UnitGUID("player") or nil
+end
+
+--- The stored table for this character, created on demand.
+local function MarkStore(create)
+    local key = CharKey()
+    if not key then return nil end
+    YippYappHelperDB = YippYappHelperDB or {}
+    local all = YippYappHelperDB.watermarks
+    if type(all) ~= "table" then
+        if not create then return nil end
+        all = {}
+        YippYappHelperDB.watermarks = all
+    end
+    local mine = all[key]
+    if type(mine) ~= "table" then
+        if not create then return nil end
+        mine = { marks = {}, links = {} }
+        all[key] = mine
+    end
+    mine.marks = type(mine.marks) == "table" and mine.marks or {}
+    mine.links = type(mine.links) == "table" and mine.links or {}
+    return mine
+end
+
+--- This character's stored marks, or nil if nothing is saved for it.
+---
+--- Published so that /yh debug and the load harness can look at what is
+--- on disk without either of them knowing how it is laid out -- the
+--- last shape change cost twenty edits in the harness alone.
+function ns:StoredWatermarks()
+    return MarkStore(false)
+end
+
 --- Persist a mark, so a later session can still see it.
 ---
 --- Marks only ever go up, so a remembered one is never wrong -- at
 --- worst it is behind, and the live query corrects it the moment it
---- answers. That asymmetry is what makes caching safe here.
+--- answers. That asymmetry is what makes caching safe here, and it only
+--- holds within one character: another character's mark is not behind,
+--- it is about somebody else.
 local function RememberWatermark(slotID, mark, link)
     ns.watermarkCache[slotID] = mark
-    YippYappHelperDB = YippYappHelperDB or {}
-    YippYappHelperDB.watermarks = YippYappHelperDB.watermarks or {}
-    YippYappHelperDB.watermarks[slotID] = mark
+    local store = MarkStore(true)
+    if not store then return end
+    store.marks[slotID] = mark
     -- The item the answer was about, kept beside the answer.
     --
     -- A reload does not change what is equipped, so a mark recorded last
@@ -658,23 +805,48 @@ local function RememberWatermark(slotID, mark, link)
     -- knowledge of WHAT they were about did not, so every session
     -- re-asked from scratch.
     if link then
-        YippYappHelperDB.watermarkLinks = YippYappHelperDB.watermarkLinks or {}
-        YippYappHelperDB.watermarkLinks[slotID] = link
+        store.links[slotID] = link
     end
 end
 
 --- Read the stored marks back at login.
 function ns:LoadWatermarks()
+    local store = MarkStore(false)
+    if not store then return 0 end
+
+    ------------------------------------------------------------
+    -- Every other character's item links, dropped.
+    --
+    -- Keying the marks per character fixed an alt reading somebody
+    -- else's line, and left a table that grows by one entry per
+    -- character ever played and never shrinks. The MARKS in it are
+    -- sixteen numbers and worth keeping -- that is the whole point of
+    -- the file.
+    --
+    -- The links are not. They exist for one job: letting a reload skip
+    -- re-asking about a slot whose item has not changed. That is only
+    -- ever useful for the character sitting in front of you, and they
+    -- are full item links -- two kilobytes a character, against a few
+    -- dozen bytes for the marks they sit beside.
+    ------------------------------------------------------------
+    local mine = CharKey()
+    local all = YippYappHelperDB and YippYappHelperDB.watermarks
+    if mine and type(all) == "table" then
+        for guid, entry in pairs(all) do
+            if guid ~= mine and type(entry) == "table" then
+                entry.links = nil
+            end
+        end
+    end
+
     -- Which item each stored mark was an answer about, so a slot whose
     -- piece has not changed is not asked again. Read before the marks
     -- themselves so a malformed table cannot leave the two disagreeing.
-    local links = YippYappHelperDB and YippYappHelperDB.watermarkLinks
-    if type(links) == "table" and ns.SeedWatermarkQueries then
-        ns:SeedWatermarkQueries(links)
+    if ns.SeedWatermarkQueries then
+        ns:SeedWatermarkQueries(store.links)
     end
 
-    local stored = YippYappHelperDB and YippYappHelperDB.watermarks
-    if type(stored) ~= "table" then return 0 end
+    local stored = store.marks
     local n = 0
     for slotID, mark in pairs(stored) do
         if type(slotID) == "number" and type(mark) == "number" and mark > 0 then
@@ -829,9 +1001,8 @@ ns.WatermarkRunner = markRunner
 --- the 292 it always was -- and a SECOND 295 landing after it, where
 --- the top two are 295 and 295 and both worn trinkets go free to 295.
 ---
---- Weapons are deliberately not in here. Whether main hand and off hand
---- share a line is not something this addon has established, and the
---- one-handers that could go in either are declined below instead.
+--- Weapons are not in here as a constant, because whether the two hands
+--- share a line depends on what is in them -- see PairFor below.
 local PAIRED_SLOTS = {
     [11] = { 11, 12 },  -- rings
     [12] = { 11, 12 },
@@ -839,9 +1010,243 @@ local PAIRED_SLOTS = {
     [14] = { 13, 14 },
 }
 
+local WEAPON_PAIR = { 16, 17 }
+
+--- The inventory types that go in a hand as a ONE-hander.
+---
+--- Not a two-hander, a shield or a holdable: each of those has a
+--- redundancy slot to itself and pairs with nothing.
+local ONE_HAND_TYPES = {
+    INVTYPE_WEAPON         = true,
+    INVTYPE_WEAPONMAINHAND = true,
+    INVTYPE_WEAPONOFFHAND  = true,
+}
+
+local function IsOneHander(link)
+    if not (link and GetItemInfoInstant) then return false end
+    local ok, _, _, _, equipLoc = pcall(GetItemInfoInstant, link)
+    if not ok or not equipLoc then return false end
+    return ONE_HAND_TYPES[equipLoc] or false
+end
+
+--- Both hands holding a one-hander, which is the ONLY configuration in
+--- which the two weapon slots share a line.
+---
+--- Enum.ItemRedundancySlot keeps five weapon buckets -- Twohand (12),
+--- MainhandWeapon (13), OnehandWeapon (14), OnehandWeaponSecond (15)
+--- and Offhand (16). Fourteen and fifteen are a ranked pair: the
+--- highest one-hander the character has reached and the second highest.
+--- That is the same shape rings and trinkets have, and it is there for
+--- the same reason the pair rule is -- so that one good one-hander
+--- cannot hand the other hand free ranks.
+---
+--- Which is the bug this was written for. A crafted 331 in the main
+--- hand, an off hand sitting at 305, and the row offered every rank to
+--- 308 for nothing. The vendor charged twenty crests. It takes two
+--- one-handers to see it: with a two-hander, a shield or a holdable in
+--- the picture the buckets never touch.
+function ns:DualWieldingOneHanders()
+    if not ns.GetSlotInfo then return false end
+    local mh = ns:GetSlotInfo(16)
+    local oh = ns:GetSlotInfo(17)
+    return IsOneHander(mh and mh.link) and IsOneHander(oh and oh.link)
+end
+
+--- The slots this one shares a line with, or nil for a slot that keeps
+--- its own.
+local function PairFor(slotID)
+    if slotID == 16 or slotID == 17 then
+        return ns:DualWieldingOneHanders() and WEAPON_PAIR or nil
+    end
+    return PAIRED_SLOTS[slotID]
+end
+
+------------------------------------------------------------
+-- Off-stat pieces set no line.
+--
+-- The mark follows CLASS-APPROPRIATE gear, not everything the character
+-- can physically equip. A shaman spent sixty Hero crests taking an
+-- Agility staff from 311 to 321 and the watermark did not move: a
+-- shaman can hold a staff, and an Agility staff is nobody's shaman
+-- weapon.
+--
+-- Which is the difference that matters, and it is not the one people
+-- expect. "Can equip it" and "it is for you" come apart on exactly the
+-- pieces a player is most likely to be holding on to -- an off-stat
+-- weapon kept because the item level is high.
+--
+-- Only ever excluded on POSITIVE evidence: this spec's primary stat
+-- read, the item's primary stat read, and the two different. Anything
+-- unknown counts, which keeps the rule off pieces that legitimately
+-- have no primary stat at all -- most necks, rings and trinkets --
+-- and off every spec whose guide the addon has not got.
+------------------------------------------------------------
+local PRIMARY_STATS = { Strength = true, Agility = true, Intellect = true }
+
+-- An array rather than a hash, so the answer does not depend on table
+-- order. An item carries one primary stat and the loop stops at the
+-- first, which makes `pairs` a coin toss on the day one carries two.
+local PRIMARY_STAT_KEY = {
+    { key = "ITEM_MOD_STRENGTH_SHORT",  name = "Strength"  },
+    { key = "ITEM_MOD_AGILITY_SHORT",   name = "Agility"   },
+    { key = "ITEM_MOD_INTELLECT_SHORT", name = "Intellect" },
+}
+
+-- An item link's stats never change, so this never needs clearing.
+local itemStatCache = {}
+
+--- The stat table for a link, off whichever of the two APIs the client
+--- has. Split out because the secondaries reader below needs the same
+--- branch, and two copies of it is how one of them ends up on the older
+--- call for a season without anyone noticing.
+local function ReadItemStats(link)
+    if C_Item and C_Item.GetItemStats then
+        local ok, out = pcall(C_Item.GetItemStats, link)
+        if ok then return out end
+        return nil
+    elseif _G.GetItemStats then
+        local out = {}
+        pcall(_G.GetItemStats, link, out)
+        return out
+    end
+    return nil
+end
+
+--- The primary stat on a piece, or nil when it has none to read.
+function ns:ItemPrimaryStat(link)
+    if not link then return nil end
+    local hit = itemStatCache[link]
+    if hit ~= nil then
+        if hit == false then return nil end
+        return hit
+    end
+
+    local stats = ReadItemStats(link)
+
+    local found = nil
+    for _, entry in ipairs(PRIMARY_STAT_KEY) do
+        local v = stats and stats[entry.key]
+        if type(v) == "number" and v > 0 then found = entry.name break end
+    end
+
+    itemStatCache[link] = found or false
+    return found
+end
+
+--- The two secondaries a piece rolled, as one comparable string.
+---
+--- In a fixed order, so "crit+mastery" is the answer whichever way round
+--- the item lists them and two pieces can be compared without caring
+--- which is which. nil when the item carries none the addon knows, or
+--- when its data has not loaded yet -- both of which callers have to
+--- treat as "no answer" rather than as "no secondaries".
+---
+--- This exists for the Catalyst. A converted piece keeps the secondaries
+--- of the item fed to it (see ns.CATALYST_NOTE), so the pair is the one
+--- thing that survives the conversion and can still be read afterwards:
+--- the item ID does not, and the item you fed in is gone.
+local SECONDARY_STAT_KEY = {
+    { key = "ITEM_MOD_CRIT_RATING_SHORT",    name = "crit"    },
+    { key = "ITEM_MOD_HASTE_RATING_SHORT",   name = "haste"   },
+    { key = "ITEM_MOD_MASTERY_RATING_SHORT", name = "mastery" },
+    { key = "ITEM_MOD_VERSATILITY",          name = "vers"    },
+}
+
+local itemSecondaryCache = {}
+
+function ns:ItemSecondaries(link)
+    if not link then return nil end
+    local hit = itemSecondaryCache[link]
+    if hit ~= nil then
+        if hit == false then return nil end
+        return hit
+    end
+
+    local stats = ReadItemStats(link)
+
+    local parts = {}
+    for _, entry in ipairs(SECONDARY_STAT_KEY) do
+        local v = stats and stats[entry.key]
+        if type(v) == "number" and v > 0 then parts[#parts + 1] = entry.name end
+    end
+
+    local sig = #parts > 0 and table.concat(parts, "+") or false
+    itemSecondaryCache[link] = sig
+    return sig or nil
+end
+
+--- This spec's primary stat, off the guide's own priority list.
+---
+--- The first entry that IS a primary stat rather than the first entry
+--- full stop: the list is written for a player reading it, and a spec
+--- whose guide opens on Haste would otherwise be read as having no
+--- primary stat at all -- or worse, as having Haste for one.
+--- Memoised on the specialization INDEX, and it has to be.
+---
+--- This is called once per piece from BoundBagFloor, which runs per
+--- row, on a panel whose redraw already has a history of reading a slot
+--- a thousand times. Resolving the spec from scratch in there is the
+--- shape of every stall this file carries a comment about.
+---
+--- The index rather than ns:PlayerSpecKey, which is what the answer is
+--- really keyed to: PlayerSpecKey is three client calls, a gsub and two
+--- concatenations, and checking a memo with it costs the thing the memo
+--- exists to avoid. GetSpecialization is one call returning a number,
+--- it changes exactly when the answer changes, and it needs no event to
+--- stay honest.
+local specStatCache, specStatFor = nil, nil
+
+--- For the harness, and for anything that changes the guide underneath
+--- a spec that has not itself changed.
+function ns:InvalidateSpecPrimaryStat()
+    specStatCache, specStatFor = nil, nil
+end
+
+function ns:SpecPrimaryStat()
+    local idx = GetSpecialization and GetSpecialization() or 0
+    if specStatFor == idx then return specStatCache end
+
+    local key = ns.PlayerSpecKey and ns:PlayerSpecKey()
+    local data = key and ns.ClassGuideData and ns.ClassGuideData[key]
+    local list = data and data.statPriority
+
+    local found = nil
+    if type(list) == "table" then
+        for _, entry in ipairs(list) do
+            for _, stat in ipairs(entry.stats or {}) do
+                if PRIMARY_STATS[stat] then found = stat break end
+            end
+            if found then break end
+        end
+    end
+
+    specStatFor, specStatCache = idx, found
+    return found
+end
+
+--- Whether a piece is KNOWN to be off-stat for this character.
+function ns:PieceIsOffStat(link)
+    local mine = ns:SpecPrimaryStat()
+    if not mine then return false end
+    local theirs = ns:ItemPrimaryStat(link)
+    if not theirs then return false end
+    return theirs ~= mine
+end
+
 --- How high this slot is provably known to have been, from pieces the
 --- addon can actually see: what is worn in it, and anything bound
 --- sitting in the bags.
+---
+--- Off-stat pieces do not -- see ns:PieceIsOffStat above.
+---
+--- Crafted pieces DO. They were excluded here for a day on the
+--- belief that the game does not track them, and the belief is a
+--- misreading with a long life: players report crafted gear "not
+--- counting" towards the Dawn achievements, and what is actually
+--- happening is that max-quality Heroic crafted tops out BELOW fully
+--- upgraded Heroic. The piece is not excluded from the threshold, it is
+--- under it. Nothing about being made rather than won changes what a
+--- slot remembers.
 ---
 --- A floor and never a ceiling. It counts only pieces the tooltip
 --- positively showed as bound -- an unbound one has given the slot
@@ -854,14 +1259,15 @@ local PAIRED_SLOTS = {
 --- population. On a single slot the second highest of one piece would
 --- be nothing, so it takes the highest.
 local function BoundBagFloor(slotID)
-    local pair = PAIRED_SLOTS[slotID]
+    local pair = PairFor(slotID)
     local seen = {}
 
     -- Worn counts. It is bound by definition, and on a paired slot the
     -- twin's piece is half of what sets the line.
     for _, s in ipairs(pair or { slotID }) do
         local info = ns.GetSlotInfo and ns:GetSlotInfo(s)
-        if info and info.ilvl and info.ilvl > 0 then
+        if info and info.ilvl and info.ilvl > 0
+            and not ns:PieceIsOffStat(info.link) then
             seen[#seen + 1] = info.ilvl
         end
     end
@@ -871,7 +1277,8 @@ local function BoundBagFloor(slotID)
         -- hand and nothing here knows which line it moved. On a slot
         -- that is genuinely paired, shared is the whole point.
         if not spare.unbound and (pair or not spare.shared)
-            and spare.ilvl and spare.ilvl > 0 then
+            and spare.ilvl and spare.ilvl > 0
+            and not ns:PieceIsOffStat(spare.link) then
             seen[#seen + 1] = spare.ilvl
         end
     end
@@ -896,9 +1303,9 @@ function ns:GetMarkRead(slotID)
     local mark = QueryWatermark(slotID)
     if mark > 0 then
         RememberWatermark(slotID, mark)
-        return mark
+        return SecondHandCap(slotID, mark)
     end
-    return ns.watermarkCache[slotID] or 0
+    return SecondHandCap(slotID, ns.watermarkCache[slotID] or 0)
 end
 
 --- How high this slot is KNOWN to have been. Never an over-statement.
@@ -959,6 +1366,12 @@ eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
 -- signalled by anything else the addon listens for.
 eventFrame:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 eventFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
+-- The crest discount is an ACHIEVEMENT, and an account-wide one: reach
+-- an item level in every slot on any character and every character pays
+-- half. Nothing else the addon listens for fires when one lands, so the
+-- prices stayed at full until a reload -- at exactly the moment they had
+-- just halved.
+eventFrame:RegisterEvent("ACHIEVEMENT_EARNED")
 -- Filtered to the player. The handler already tested `arg1 == "player"`
 -- and threw the rest away, but the throwing-away happened in Lua: in a
 -- raid this event fires for every member whose gear changes, and each
@@ -976,6 +1389,22 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         -- Restore previous raid scan (with type validation)
         if type(YippYappHelperDB.raidInspect) == "table" then
             ns.RaidInspectData = YippYappHelperDB.raidInspect
+        end
+
+        -- Marks written under the old rule are max(character, account)
+        -- and nothing about a stored number says which half it came
+        -- from -- so a slot could be carrying another character's
+        -- ceiling as this one's free line. The cache goes once, and
+        -- refills from the client within a few frames of login.
+        --
+        -- Rule 3 drops them again for a second reason: they were stored
+        -- account-wide, so a number on disk cannot be attributed to the
+        -- character it was about. Whatever is in there is some
+        -- character's marks, and there is no telling which.
+        if YippYappHelperDB.watermarkRule ~= 3 then
+            YippYappHelperDB.watermarks = nil
+            YippYappHelperDB.watermarkLinks = nil
+            YippYappHelperDB.watermarkRule = 3
         end
 
         -- Free upgrades are only visible if the marks are, and the live
@@ -1010,13 +1439,20 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
             -- and assumed the class's default kick. It had been guessing
             -- wrong for all of 12.1.
             "interrupts",
+            -- The battle res timer, removed. EllesmereUI and BigWigs both
+            -- draw one from the same pool the game already publishes, so
+            -- for most raiders this was a second copy of a number already
+            -- on screen -- and it was on screen during a pull, which is
+            -- when there is least room for one.
+            "battleResTimer",
         }) do
             YippYappHelperDB[dead] = nil
         end
-        -- The tracker's Edit Mode position is a level deeper, keyed per
-        -- layout, so the sweep above cannot reach it.
+        -- Edit Mode positions are a level deeper, keyed per layout, so
+        -- the sweep above cannot reach them. Both removed frames had one.
         if type(YippYappHelperDB.editMode) == "table" then
             YippYappHelperDB.editMode.interrupts = nil
+            YippYappHelperDB.editMode.brez = nil
         end
 
         print("|cff00ff00YippYapp Helper|r loaded \226\128\148 type |cff00ff00/yh|r to open")
@@ -1086,11 +1522,18 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
         or event == "ITEM_UPGRADE_MASTER_UPDATE"
         or event == "BAG_UPDATE_DELAYED"
         or event == "WEEKLY_REWARDS_UPDATE"
-        or event == "CHALLENGE_MODE_COMPLETED" then
+        or event == "CHALLENGE_MODE_COMPLETED"
+        or event == "ACHIEVEMENT_EARNED" then
         -- A bagged spare is a drop that has not been equipped yet, so
         -- the advice that reads one is exactly the advice that goes
         -- stale the moment the bags move.
         if event == "BAG_UPDATE_DELAYED" then ns:InvalidateBagSpares() end
+        -- Any achievement, not just the five that carry a discount:
+        -- asking the client about five ids is cheaper than keeping a
+        -- list of which ids matter in two places.
+        if event == "ACHIEVEMENT_EARNED" and ns.InvalidateDiscountCache then
+            ns:InvalidateDiscountCache()
+        end
         ns:RefreshGearViews()
     end
 end)
@@ -1394,12 +1837,13 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh lootreset — throw away saved loot browser data and rescan")
         print("  /yh loadtest — hold back load-time work, then run it by hand")
         print("  /yh trace — time our own functions; finds what stalls a frame")
+        print("  /yh ah — why the consumables popout did or did not open at the Auction House")
         print("  /yh guide — boss guide for the current raid")
         print("  /yh profile — show/set player profile")
         print("  /yh profile <name> — set profile (normal, heroic, mythic)")
         print("  /yh discount <track> — toggle crest discount for a track (adventurer, veteran, champion, hero, myth)")
         print("  /yh discounts — show current discount status")
-        print("  /yh brez — Battle Res Timer options")
+        print("  /yh marks — every high-water mark the client keeps, named")
         print("  /yh settings — open the options panel")
         print("  /yh skin [id] — list or choose a skin")
         print("  /yh edit — move YippYapp frames via Edit Mode")
@@ -1506,6 +1950,59 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
             print(("     |cff666666or: %s|r"):format(names))
         end
         print("  /yh test off      |cff888888dismiss whatever is up|r")
+        return
+    end
+
+    -- /yh ah — why the consumables popout did or did not meet the
+    -- Auction House.
+    --
+    -- Every step of that path is invisible from the outside. The event
+    -- may never have been registered (it lives at the bottom of a file
+    -- whose body is one big page builder, and it was inside that builder
+    -- once). The page may not be built. The work happens in a C_Timer
+    -- callback, whose errors are swallowed for anyone without script
+    -- errors on. All three failures look identical from the chair:
+    -- nothing happens. This walks the path and names the step.
+    if cmd == "ah" or cmd == "auction" then
+        print("|cff00ff00=== YippYapp at the Auction House ===|r")
+
+        local watch = ns.ConsumablesAHWatcher
+        local armed = watch and watch.IsEventRegistered
+            and watch:IsEventRegistered("AUCTION_HOUSE_SHOW")
+        print("  watcher: " .. (armed and "|cff40ff40armed|r"
+            or "|cffff5555not registered — /reload|r"))
+
+        print("  consumables page: " .. (ns.ConsumablesFrame and "built" or "not built yet"))
+
+        local on = (not ns.ModuleEnabled) or ns.ModuleEnabled("consumablesAtAH")
+        print("  setting: " .. (on and "|cff40ff40on|r"
+            or "|cffff5555off — Options, AddOns, YippYapp Helper|r"))
+
+        local ah = _G.AuctionHouseFrame
+        print("  AuctionHouseFrame: " .. (ah and (ah:IsShown() and "open" or "loaded, closed")
+            or "not loaded — visit an auctioneer once"))
+
+        if not (ns.ConsumablesAHReady and ns.ConsumablesAHReady()) then
+            print("  |cffff5555the popout could not be built — nothing above this line matters|r")
+            return
+        end
+        print("  popout: ready")
+
+        -- Run it for real. With no Auction House on screen it opens
+        -- loose rather than pinned, which is the correct answer and
+        -- still proves every part except the anchor.
+        local ok, err = pcall(ns.ConsumablesPopoutAtAuctionHouse, true)
+        if not ok then
+            print("  |cffff5555it threw:|r " .. tostring(err))
+            return
+        end
+        local shown = _G.YippYappConsumablesPopout
+            and _G.YippYappConsumablesPopout:IsShown()
+        print("  result: " .. (shown and "|cff40ff40the popout is on screen|r"
+            or "|cffff5555it ran and opened nothing|r"))
+        if shown and not (ah and ah:IsShown()) then
+            print("  |cff888888(loose, not pinned — there is no Auction House to pin to)|r")
+        end
         return
     end
 
@@ -1678,13 +2175,84 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
-    -- /yh brez [subcommand] — Battle Res Timer
-    if cmd == "brez" or cmd == "battleres" then
-        if ns.BattleResTimer and ns.BattleResTimer.HandleSlash then
-            ns.BattleResTimer:HandleSlash(arg)
-        else
-            print("|cff00ff00YippYapp Helper|r: Battle Res Timer module not loaded.")
+    ------------------------------------------------------------
+    -- /yh marks — the whole high-water state, read rather than inferred.
+    --
+    -- Everything else in this addon reaches the marks through one item
+    -- at a time: ask the client which bucket a piece belongs to, ask
+    -- what that bucket has reached. That is the right shape for pricing
+    -- a rank and the wrong shape for answering "why did this not go
+    -- free", because it can only ever show you one bucket and never the
+    -- seventeen they sit among.
+    --
+    -- There are seventeen and they are cheap, so print them all. The
+    -- technique is off the wiki's own Dawn achievement page, which
+    -- hands out a macro doing exactly this to find the slot holding a
+    -- character back.
+    --
+    -- What it is FOR, beyond curiosity: every open question about this
+    -- system is one equip-and-compare away once the whole state is on
+    -- screen. Does an off-stat two-hander count -- run it, equip the
+    -- thing, run it again, see which line moved. No amount of reading
+    -- forum threads answers that; two runs of this do.
+    ------------------------------------------------------------
+    if cmd == "marks" then
+        if not (C_ItemUpgrade and C_ItemUpgrade.GetHighWatermarkForSlot) then
+            print("|cff00ff00YippYapp|r this client has no high-water query.")
+            return
         end
+
+        -- Named, because a column of seventeen numbers is not an answer.
+        -- The client's own enum rather than a copy of it: a table in
+        -- here would be the thing that goes stale.
+        local names = {}
+        local e = Enum and Enum.ItemRedundancySlot
+        if type(e) == "table" then
+            for name, value in pairs(e) do
+                if type(value) == "number" then names[value] = name end
+            end
+        end
+
+        print("|cff00ff00=== High-water marks ===|r")
+        print("character / account. A rank at or under the mark for its "
+            .. "bucket costs no crests.")
+        for i = 0, 16 do
+            local ok, charMark, accountMark =
+                pcall(C_ItemUpgrade.GetHighWatermarkForSlot, i)
+            if ok then
+                print(string.format("  %2d  %-20s %s / %s", i,
+                    names[i] or "?", tostring(charMark or 0),
+                    tostring(accountMark or 0)))
+            else
+                print(string.format("  %2d  %-20s ERROR %s", i,
+                    names[i] or "?", tostring(charMark)))
+            end
+        end
+
+        -- And which bucket each worn piece answers to, which is the half
+        -- that turns the list above into advice. Two one-handers land in
+        -- two DIFFERENT buckets; a staff and a shield land in two more.
+        print("--- what you are wearing answers to ---")
+        for _, slotInfo in ipairs(ns.SLOT_IDS) do
+            local info = ns:GetSlotInfo(slotInfo.slot)
+            if info then
+                local bucket = nil
+                if C_ItemUpgrade.GetHighWatermarkSlotForItem then
+                    local ok, b = pcall(C_ItemUpgrade.GetHighWatermarkSlotForItem,
+                        info.link)
+                    if ok then bucket = b end
+                end
+                local off = ns.PieceIsOffStat and ns:PieceIsOffStat(info.link)
+                print(string.format("  %-10s ilvl %-4s -> %s%s%s",
+                    slotInfo.name, tostring(info.ilvl),
+                    bucket and (tostring(bucket) .. " "
+                        .. (names[bucket] or "?")) or "no bucket",
+                    info.crafted and "  |cff888888crafted|r" or "",
+                    off and "  |cffff6666off-stat|r" or ""))
+            end
+        end
+        print("|cff888888Run it, change one piece, run it again -- the line "
+            .. "that moved is the answer.|r")
         return
     end
 
@@ -1771,8 +2339,13 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
                 local known = ns:GetFreeUpgradeIlvl(slotInfo.slot)
                 local wmStr = read > 0 and ("wm:" .. read) or "wm:none"
                 if known > read then wmStr = wmStr .. " (bags:" .. known .. ")" end
-                print(string.format("  %s: %s | %s | risk: %s | %s | %s",
-                    slotInfo.name, upStr, wmStr, risk, rec.label, reason))
+                -- Crafted, called out. A crafted piece has no track,
+                -- reads as "no track" in the panel, and is the first
+                -- thing to suspect when a mark is higher than anything
+                -- the slot can account for.
+                print(string.format("  %s%s: %s | %s | risk: %s | %s | %s",
+                    slotInfo.name, info.crafted and " [crafted]" or "",
+                    upStr, wmStr, risk, rec.label, reason))
             end
         end
 
@@ -1784,14 +2357,35 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         -- it can answer nothing -- absent, erroring, or returning a
         -- flat zero -- decides whether this is fixable here at all, and
         -- there is no way to tell them apart from the outside.
-        print("--- High-water query (Feet) ---")
+        ------------------------------------------------------------
+        -- Which slot to probe: /yh debug 17 for the off hand.
+        --
+        -- Feet by default, because the question this started as was
+        -- "does the query answer at all" and any slot answers that. It
+        -- is a different question now. A row promised a free rank the
+        -- vendor charged crests for, on an off hand whose partner is a
+        -- crafted piece with no track, and the only number that can
+        -- produce that promise is the one the client hands back here.
+        -- So the probe has to be pointable at the slot that lied.
+        ------------------------------------------------------------
+        local probeSlot = tonumber(strtrim(arg or "")) or 8
+        local probeName = "slot " .. probeSlot
+        for _, slotInfo in ipairs(ns.SLOT_IDS) do
+            if slotInfo.slot == probeSlot then probeName = slotInfo.name end
+        end
+        print("--- High-water query (" .. probeName .. ") ---")
         if not C_ItemUpgrade then
             print("  C_ItemUpgrade: MISSING")
         else
-            local info = ns:GetSlotInfo(8)
+            local info = ns:GetSlotInfo(probeSlot)
             local link = info and info.link
             print("  item link: " .. tostring(link and link:gsub("|", "||")))
+            print("  worn: ilvl " .. tostring(info and info.ilvl)
+                .. (info and info.crafted and " (crafted)" or ""))
             print("  vendor open: " .. tostring(ns.upgradeVendorOpen or false))
+            -- Both queries answer character first, then account, and
+            -- only the first of the two may be quoted as free.
+            print("  (answers read: character, account)")
             local function try(name, fn, arg)
                 if type(fn) ~= "function" then
                     print("  " .. name .. ": MISSING")
@@ -1818,6 +2412,10 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
             else
                 print("  GetHighWatermarkForSlot: no redundancy slot to ask about")
             end
+            print("  addon reads: mark " .. ns:GetMarkRead(probeSlot)
+                .. ", free to " .. ns:GetFreeUpgradeIlvl(probeSlot)
+                .. " -- anything above the worn level here is a rank "
+                .. "this addon will call free")
         end
         print("  (run this again standing at an upgrade vendor -- if the "
             .. "numbers only appear there, the cache is the fix)")

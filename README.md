@@ -115,8 +115,10 @@ the page says so itself.
 
 ### Trinkets
 SimulationCraft rankings from [bloodmallet.com](https://bloodmallet.com),
-and healer rankings from [QE Live](https://questionablyepic.com/live/trinkets)
-— bloodmallet sims damage and publishes nothing for the healing specs.
+healer rankings from [QE Live](https://questionablyepic.com/live/trinkets)
+— bloodmallet sims damage and publishes nothing for the healing specs —
+and the tier list Wowhead's own class guides publish, which is a
+different kind of answer from either sim.
 
 - **My Spec** — your trinkets ranked, each showing how far behind the
   best pick it sims, at the item level it was simmed at. Trinkets no
@@ -156,12 +158,36 @@ and healer rankings from [QE Live](https://questionablyepic.com/live/trinkets)
   drift. A shortlist rather than a slot assignment: when two trinkets
   are within a percent of each other, "I want this" is true of both and
   only one of them is going to drop.
+- **Guide** — the S-to-D tier list your spec's Wowhead guide publishes,
+  with the author's own note on each trinket they chose to annotate and
+  the pairing advice above it. A different question from the sim's: it
+  grades knowing which on-use wants a specific cooldown, which drop is
+  Vault-only, and which pair nobody would wear together. Drawn in bands
+  rather than numbered, because within a tier the guide states no order.
+  Every band is shown, including the bottom ones — that is where the
+  "don't bother" information lives. The letters are the authors' own and
+  are not normalised: the forty guides use six different ladders between
+  them, so the colour follows a grade's position in its own ladder.
 - **Tooltip integration** — hover any trinket anywhere (loot window,
-  bags, chat links, Encounter Journal) to see which specs want it and
-  where it lands for you. Toggle in Settings → General → Trinkets.
+  bags, chat links, Encounter Journal) to see your guide grade, the
+  author's note, and where the sim puts it for you. A trinket your guide
+  does not list says so, provided some other spec ranks it — otherwise
+  the guide's silence is about its own scope rather than about the item.
+  Other specs' rankings appear only while you are in a group, which is
+  the only time "who else wants this" has a reader; the Loot Council tab
+  has the full list either way. Toggle in Settings → General → Trinkets.
 
-Coverage is 38 of 40 specs: 31 from bloodmallet and the seven healers
-from QE Live. Augmentation and Brewmaster are in neither.
+Sim coverage is 39 of 40 specs: 32 from bloodmallet and the seven healers
+from QE Live. Augmentation is in neither — bloodmallet will not sim a
+support spec and QE Live covers only healers — so the Wowhead tier list
+is the only trinket advice it has, and the only reason the Guide tab
+reaches all 40.
+
+What bloodmallet can publish is decided upstream of it: it runs
+SimulationCraft, so a spec with no profile in simc's `profiles/MID2`
+cannot appear however long you wait. That is why the list grows in
+steps — Brewmaster, Windwalker and Devourer arrived once their profiles
+did.
 
 The two sources measure different things — DPS against HPS — so nothing
 compares a number from one with a number from the other; every ranking
@@ -171,8 +197,8 @@ single target and AoE, and the footer names whichever site the list on
 screen came from.
 
 bloodmallet re-sims a new season a few specs at a time, so the file holds
-both while that runs. 21 of its 31 specs are fully on Season 2 numbers;
-the other 10 keep a Season 1 ranking for at least one fight style rather
+both while that runs. 27 of its 32 specs are fully on Season 2 numbers;
+the other 5 keep a Season 1 ranking for at least one fight style rather
 than being dropped, and say so in the list, on the loot council rows and
 in the tooltip. This is per fight style — a spec can be Season 2 on
 single target and Season 1 on 5-target.
@@ -212,11 +238,6 @@ Optimised for 30-man raids — single-pass aura scanner, debounced
 Group roster by subgroup with role prefixes, composition counts, a
 raid-buff strip (present lit, missing greyed), a consumable audit naming
 who's missing flask/food/rune, and a tier-set piece scan.
-
-### Battle Res Timer
-Combat-res charges with cooldown swipe and countdown, driven by the
-game's own brez pool. Shows in raid difficulties and keystones, hidden
-where no pool exists. Draggable and scalable.
 
 ### Progression Reference
 Item level and crest payout for every source: M+ keys, the raid by
@@ -260,8 +281,6 @@ whatsoever and is not going anywhere.
 | `/yh skin [id]` | List or choose a skin |
 | `/yh guide` | Boss guide for the current raid |
 | `/yh test [panel]` | Show a pop-up window with sample content (`/yh test off` to dismiss) |
-| `/yh brez` | Battle Res Timer options (also `battleres`) |
-| `/yh edit` | Open Edit Mode to move frames |
 | `/yh profile [name]` | Switch profile (normal / heroic / mythic) |
 | `/yh discount <track>` | Toggle a crest discount |
 | `/yh discounts` | Show current discount status |
@@ -298,30 +317,33 @@ One page: what each feature does and when it appears. Anything about how
 a frame *looks* lives in Edit Mode instead, where you can see the change
 as you make it.
 
-### Edit Mode
-Every movable frame — interrupt tracker, battle res timer, ready check
-overview, Mythic+ summary and utility advisor — positions through
-Blizzard's Edit Mode, with native selection outlines, grid snapping and
-per-frame settings dialogs. Uses
-[LibEditMode](https://github.com/p3lim-wow/LibEditMode), embedded.
+### Moving things
+Every window moves itself: drag it where you want it while it is open,
+and it stays there. The ready check overview, the Mythic+ summary and the
+utility advisor each own their own position, and the consumables popout
+remembers its own — or pins to the Auction House, which is a tick-box on
+the window.
 
-Entering Edit Mode conjures each frame with sample content, since most
-only exist during their own encounter and cannot be positioned otherwise.
-A small panel beside the Edit Mode manager picks which ones appear.
-Positions are stored per layout, so a raid layout and a solo layout can
-place the same frame differently.
+The Blizzard Edit Mode integration
+([LibEditMode](https://github.com/p3lim-wow/LibEditMode), embedded) is
+still here but has nothing left to place. The battle res timer was the
+last frame that needed a mode of its own to position, because it was the
+one that appeared mid-pull. `/yh edit` says as much rather than opening
+an empty manager.
 
 ---
 
 ## Data provenance
 
-Most of the addon reads live game APIs. Three things can't be, and are
-generated instead:
+Most of the addon reads live game APIs. A handful of things can't, and
+are generated instead:
 
 | File | Source | Refresh |
 |---|---|---|
 | `Features/Consumables/ConsumablesData.lua` | Wowhead per-spec guides | `python Tools/scrape_consumables.py` |
+| `Features/Gear/ClassGuideData.lua` | Wowhead per-spec stat priority and BiS pages | `python Tools/scrape_class_guides.py` |
 | `Features/Trinkets/TrinketData.lua` | bloodmallet.com sims | `python Tools/scrape_trinkets.py` |
+| `Features/Trinkets/TrinketTiers.lua` | The tier list inside Wowhead's per-spec BiS page | `python Tools/scrape_trinket_tiers.py` |
 | `Features/Trinkets/TrinketDataHealer.lua` | QE Live healer charts | capture with `Tools/qe_capture.js`, then `python Tools/scrape_healer_trinkets.py` |
 | `Features/Raid/RaidGuideData.lua` | mythictrap.com (Warcraft Logs) for structure, spell IDs and per-difficulty changes; a PTR video walkthrough for tactics | Hand-written per boss |
 | Gear tracks, crests, progression tables | In-game currency descriptions + community sheets | Hand-verified per season |
@@ -336,9 +358,13 @@ own icon and the client's own tooltip, so the numbers a player reads
 come from the game rather than from a guide that may have been written
 against the PTR.
 
-Both scrapers record the season/tier their data came from, and the addon
-says so in-game when that's behind the current season. Neither ships to
-CurseForge — `Tools/` is excluded via `.pkgmeta` and `.gitignore`.
+The tier list is not a separate fetch: it lives inside the same
+`/bis-gear` page the class-guide scrape already downloads, and shares
+that scraper's page cache.
+
+Every scraper records the season or tier its data came from, and the
+addon says so in-game when that's behind the current season. None of
+them ship to CurseForge — `Tools/` is excluded via `.pkgmeta`.
 
 Gear track item levels were cross-checked against two independent
 sources that agree exactly: the in-game Mistcrest currency descriptions

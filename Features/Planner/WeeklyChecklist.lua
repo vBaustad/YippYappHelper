@@ -140,20 +140,90 @@ end
 local BOUNTY_USED_QUEST   = 86371
 local BOUNTY_SOURCE_QUEST = 95520
 
---- Lady Liadrin's rotating weekly, all sixteen variants.
+--- Lady Liadrin's weekly is ONE quest, and this is not it.
 ---
---- Hoisted because TWO rows read it and a copy each would drift: the
---- Liadrin row asks whether the weekly is done, and the spark row asks
---- whether this week's spark is in, and doing one of these is the same
---- event answering both. Two lists would eventually disagree on screen
---- about a single quest hand-in, which is worse than either being
---- slightly wrong on its own.
+--- 93744 Unity Against the Void is the weekly: a meta quest she hands over
+--- that offers a choice of the Midnight: X quests below and completes
+--- itself the moment you finish any one of them. The sixteen are its
+--- CHILDREN, not sixteen weeklies, which is the thing this file had wrong.
+--- Source: warcraft.wiki.gg/wiki/Unity_Against_the_Void, and the id shows
+--- up flagged alongside its children on a character who has done it.
+---
+--- That explains the flags. A meta closing closes every option it was
+--- offering, so one hand-in flags the lot -- read in game 2026-08-26, the
+--- second week of the season, where eleven of the sixteen were flagged on
+--- a character who could have done at most one. Any-of over the children
+--- therefore answers "has the meta ever closed", never "is this week's
+--- done", so the children NAME the row and LIADRIN_META answers it.
+---
+--- All sixteen variants below.
+---
+--- ONE EXCLUSIVE GROUP, which is the whole difficulty in reading them.
+--- She shows four or five, you accept one, and that hand-in closes the
+--- rest for the week -- which the client records by flagging all sixteen
+--- complete, not only the one you did. So any-of over this list does not
+--- answer "which did I do this week". It answers "is the group closed",
+--- and nothing narrower is available from these ids.
+---
+--- AND THEY DO NOT CLEAR AT RESET, which is why nothing here answers the
+--- row. Read in game 2026-08-26, the second week of the season: eleven of
+--- the sixteen were flagged on a character who could have done at most one
+--- or two, they were still flagged after the reset, and Lady Liadrin had
+--- nothing to offer that character while an alt on the same account could
+--- take one freely.
+---
+--- So any-of over this list does not mean "this week is done". It means
+--- "this character has taken one at some point", which is true from week
+--- one onward and stays true. A row answered by that is green forever.
+---
+--- Hence questsNameOnly on the row: the ids name the quest while it is in
+--- the log and the tick is the player's. Replacing that with a real answer
+--- needs a hidden per-week lockout id in the style of BOUNTY_USED_QUEST
+--- above. Narrowed once already: of the unnamed ids that scan as complete
+--- near this family, 93891, 93893, 93908 and 93916-93919 are set on a
+--- locked character and clear on one she will still talk to. 93880 and
+--- 93881 are set on both and are ruled out.
+---
+--- Seven is too many for a single "you spent this week's pick", and they
+--- interleave with the visible metas -- 93891 between Abundance and
+--- Stormarion, 93908 immediately before Delves -- which reads like a
+--- hidden partner per meta rather than one shared lockout. Narrowing
+--- further needs a scan either side of a hand-in on a character who can
+--- still take one, and then a scan after the following reset to see which
+--- of them clears. Nothing shorter will do it: a lockout has to be both
+--- set by the hand-in AND cleared by the reset, and one week of samples
+--- cannot show the second half.
+---
+--- Two theories died on the way here, both worth not reviving: that she
+--- skips weeks entirely (an alt had her quest the same week), and that the
+--- sixteen are once-per-character and this one had exhausted them (it was
+--- week two).
 ---
 --- Four of the sixteen were checked directly and every one pays a Spark
 --- of Tides -- 93910, 93911, 93766 and 98232. The other twelve are
 --- assumed to match because they are the same quest family from the same
---- giver. That assumption is what this list rests on, and it is the first
---- thing to test if the spark row ever reads done without a spark.
+--- giver.
+--- The meta itself. One id, weekly, and the only thing here whose flag
+--- means what the row is asking.
+---
+--- ON ONE CHARACTER IT SURVIVED A RESET, and that is almost certainly the
+--- Blizzard bug rather than a fact about metas. Unity Against the Void has
+--- been missing since Silvermoon shipped in 12.1 -- NA first, then EU --
+--- reported on some characters while alts on the same account still get it
+--- (Kaivax, 2026-08-18, checking "it's being offered by Lady Liadrin as
+--- intended"). A completion flag stuck on means she has nothing to offer,
+--- which is what an affected character looks like from here.
+---
+--- Green is the right screen for that. The quest cannot be obtained, so a
+--- row nagging weekly for it would be worse than one that stays quiet, and
+--- the same read is correct on a character who really did it.
+---
+--- STILL OWED: an unaffected character completing it and clearing at the
+--- following reset. That is the one case never observed, and it is what
+--- separates "this character is stuck" from "the meta never clears" -- the
+--- second would put the row back to green-forever for everyone.
+local LIADRIN_META = { 93744 }   -- Unity Against the Void
+
 local LIADRIN_WEEKLY = {
     93890,  -- Midnight: Abundance
     93767,  -- Midnight: Arcantina
@@ -376,6 +446,14 @@ end
 --- if none is in the log does a completed one get named, which is what turns
 --- a ticked row from "done" into "you did Midnight: Prey".
 ---
+--- `namesQuest = "active"` drops that second half, for a row whose completed
+--- flags cannot single one out. Lady Liadrin's sixteen are the case: one
+--- hand-in flags all sixteen, so the fallback named whichever sorted first
+--- and put "Midnight: Abundance" on the row for no better reason than the
+--- A -- a coin toss among sixteen presented as the thing you did. A row
+--- like that says nothing rather than guessing, and falls back to its own
+--- label.
+---
 --- Returns id, state ("active" or "done"), title, progress. Everything after
 --- id can be nil: a title the client has not loaded yet is a redraw away,
 --- and the row has its own label to fall back on meanwhile.
@@ -387,6 +465,7 @@ function Wk:ResolveQuest(item)
     -- row about an item, picked for no better reason than being first in
     -- the array -- which is a coin toss presented as a fact.
     if not (item and item.namesQuest) then return nil end
+    local logOnly = (item.namesQuest == "active")
 
     local ids = item.quests
     if not (ids and #ids > 0) then return nil end
@@ -403,7 +482,7 @@ function Wk:ResolveQuest(item)
         end
     end
 
-    if Q.IsQuestFlaggedCompleted then
+    if Q.IsQuestFlaggedCompleted and not logOnly then
         for _, id in ipairs(ids) do
             local ok, done = pcall(Q.IsQuestFlaggedCompleted, id)
             if ok and done then return id, "done", questTitle(id) end
@@ -716,13 +795,20 @@ local ITEMS = {
     ------------------------------------------------------------
     {
         id = "liadrinweekly",
-        label = "Choose a weekly from Lady Liadrin",
+        label = "Pick up Lady Liadrin's weekly",
         detail = "Lady Liadrin, Silvermoon City. She shows you four or five "
             .. "and you accept one; whichever you take is your week, and it "
             .. "pays a Spark of Tides.",
         category = "delves",
-        namesQuest = true,
+        -- The sixteen NAME this row; the meta ANSWERS it. Naming from the
+        -- children is the useful half -- "Complete Midnight: Prey" is a
+        -- thing you can go and do, where the meta's own title is not -- and
+        -- answering from them is the half that was wrong. See the note on
+        -- LIADRIN_WEEKLY.
+        namesQuest = "active",
+        questsNameOnly = true,
         quests = LIADRIN_WEEKLY,
+        auto = function() return questsDone(LIADRIN_META) end,
     },
     {
         id = "halduronweekly",
@@ -767,7 +853,8 @@ local ITEMS = {
             .. "Liadrin's, and none of it pays a spark.",
         category = "delves",
         -- A different set entirely: the Timewalking "Path Through Time"
-        -- quests, the Call to / Emissary / Arena weeklies, and a
+        -- quests -- read off a live quest log rather than guessed, and the
+        -- gaps in 93607-93613 mean the set is probably not complete -- the Call to / Emissary / Arena weeklies, and a
         -- three-week training chain. Two were checked for a spark and
         -- neither pays one, which is what makes this its own row rather
         -- than more ids on the one above.
@@ -778,8 +865,8 @@ local ITEMS = {
         -- quest, and any-of over the two together would let week 1 of a
         -- training chain tick the row for a weekly nobody did.
         --
-        -- The eight Timewalking entries are typed Weekly and stay, but
-        -- they are only OFFERED during a Timewalking week. That is fine
+        -- The Timewalking entries are typed Weekly and stay, but they
+        -- are only OFFERED during a Timewalking week. That is fine
         -- for any-of and it is the part to suspect first if this row ever
         -- reads wrong.
         namesQuest = true,
@@ -787,6 +874,7 @@ local ITEMS = {
             93497,  -- A Soaring Path Through Time
             93607,  -- An Original Path Through Time
             93608,  -- A Burning Path Through Time
+            93610,  -- A Frozen Path Through Time
             93611,  -- A Shattered Path Through Time
             93612,  -- A Shrouded Path Through Time
             93613,  -- A Savage Path Through Time
@@ -816,7 +904,14 @@ function Wk:IsDone(item)
     -- Quest flags first. Where one exists it is the client's own record
     -- of this character's week, which beats both a bespoke auto check
     -- and anything the player has claimed.
-    local answer = questsDone(item.quests)
+    --
+    -- Unless the row says its ids cannot carry that. `questsNameOnly` is
+    -- for a family whose flags are set together and never cleared: they
+    -- still identify the quest for the label, and answering the week with
+    -- them would pin the row green from the first hand-in on. See
+    -- LIADRIN_WEEKLY.
+    local answer
+    if not item.questsNameOnly then answer = questsDone(item.quests) end
     if answer ~= nil then return answer, false end
 
     if item.auto then

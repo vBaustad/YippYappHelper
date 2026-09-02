@@ -36,21 +36,20 @@ local EM = ns.EditMode
 
 -- `show` is what makes the frame visible while positioning. `frame` is
 -- resolved lazily because several are built the first time they are used.
+--
+-- EMPTY, since the Battle Res Timer went. It was the last entry: every
+-- other window in this addon moves itself, dragged where you want it
+-- while it is open, and only the timer -- which is up during a pull,
+-- when dragging anything is the last thing you want to be doing --
+-- needed a mode of its own to place it.
+--
+-- Kept as a table rather than deleted with the feature. Everything
+-- around it is machinery, not a feature: the lifecycle below still
+-- registers whatever is in here, the library is still embedded, and one
+-- entry brings the whole thing back. Deleting it would be deleting the
+-- ability to have a placeable frame at all, which is not what retiring
+-- one timer means.
 local FRAMES = {
-    {
-        key   = "brez",
-        label = "Battle Res Timer",
-        frame = function() return _G.YYH_BattleResTimer end,
-        isLocked  = function() local BR = ns.BattleResTimer; return not BR or BR:IsLocked() end,
-        setLocked = function(v) if ns.BattleResTimer then ns.BattleResTimer:SetLocked(v) end end,
-        show      = function() if ns.BattleResTimer then ns.BattleResTimer:Preview() end end,
-        hide      = function() if ns.BattleResTimer then ns.BattleResTimer:ClearPreview() end end,
-        available = function() return ns.BattleResTimer ~= nil end,
-        enabled   = function()
-            local BR = ns.BattleResTimer
-            return not BR or not BR.IsEnabled or BR:IsEnabled()
-        end,
-    },
 }
 
 function EM:Frames() return FRAMES end
@@ -120,6 +119,14 @@ end
 --- Opens Blizzard's Edit Mode. LibEditMode's enter callback takes it from
 --- here, so this is the only entry point the options panel needs.
 function EM:Open()
+    -- Nothing to place. Said out loud rather than opening an Edit Mode
+    -- with no outlines in it, which reads as the feature being broken
+    -- instead of empty.
+    if #FRAMES == 0 then
+        print("|cff00ff00YippYapp|r has no frames to position - every window "
+            .. "moves itself. Drag one while it is open.")
+        return false
+    end
     if InCombatLockdown() then
         print("|cffff5555YippYapp:|r Edit Mode cannot be opened in combat.")
         return false

@@ -1707,8 +1707,31 @@ G.bosses = {
 
     ----------------------------------------------------------
     -- Ula'tek, written 2026-08-20 from two video transcripts, because no
-    -- written guide covers him -- not ours, not mythictrap's, whose page
-    -- for him is still empty.
+    -- written guide covered him -- not ours, not mythictrap's, whose page
+    -- for him was empty at the time.
+    --
+    -- UPDATED 2026-08-28: mythictrap has published him. What that added,
+    -- and it is the half transcripts cannot give:
+    --
+    --   * Real spell ids for Mother's Wrath, Unchecked Rage, Necrotic
+    --     Vapors, Anguished Cry and Vicious Echoes. Those five draw the
+    --     client's own icon and tooltip now instead of being matched by
+    --     name through RaidGuideEJ:ResolveMechanics.
+    --   * Two phase-one abilities nobody had captioned: Unchecked Rage
+    --     is WHY both tanks hold their targets -- drift out of melee and
+    --     the raid eats it -- and Necrotic Vapors is the rot underneath
+    --     the phase.
+    --   * The interrupts, by name, one per later phase.
+    --   * Heroic changes, which go on the two mechanics they change.
+    --     `changesUnknown` STAYS anyway: mythictrap publishes a Heroic
+    --     block for this boss and no Mythic one.
+    --
+    -- It corroborated the transcripts everywhere else, including the two
+    -- things they were most likely to have invented: the eggs breaking
+    -- weak or hatching strong, and phase three's marked players being
+    -- soaked rather than run from. `unsure` STAYS: the timers and the
+    -- pickup order in phase two are still transcript-only, and those are
+    -- the parts a pull actually runs on.
     --
     -- The second transcript (Squishy's, explicitly a NORMAL guide) is the
     -- primary one. It is sequenced, specific and internally consistent,
@@ -1760,7 +1783,22 @@ G.bosses = {
         lust    = "the first Rage of the Shackled -- her heart takes double damage",
         unsure  = true,
         guideOnly = true,
+        -- HEROIC is written: in the block below for the pre-pull summary,
+        -- and on the two mechanics it changes for the in-phase badges.
+        -- MYTHIC is not. mythictrap publishes a Heroic Changes block for
+        -- this boss and no Mythic one, and inventing the deltas would be
+        -- worse than admitting to none -- so the flag stays and the page
+        -- now applies it per difficulty rather than to both at once.
         changesUnknown = true,
+
+        changes = {
+            heroic = {
+                "Very little moves. The adds that come out of the eggs pick up "
+                    .. "a few small abilities of their own.",
+                "Breaking the phase two tether hits the WHOLE raid with a "
+                    .. "damage-over-time instead of only the tethered player.",
+            },
+        },
 
         rules = {
             "Pick the eggs up by walking over them and keep them away from any "
@@ -1787,7 +1825,14 @@ G.bosses = {
                                 .. "Coils.",
                             "You can also break an egg by damaging it to zero "
                                 .. "health, which gives the same weak add.",
+                            "Broken on purpose you get a Blightscale Rawling, which "
+                                .. "dies to any cleave. Hatched by venom you get a "
+                                .. "Blightscale Viper. One Viper is survivable; "
+                                .. "several is the wipe.",
                         },
+                        heroic = "The adds that come out of the eggs pick up a few "
+                            .. "small abilities of their own. Nothing that changes "
+                            .. "how the eggs are handled.",
                     },
                     {
                         name = "Ula'tek's tail",
@@ -1822,7 +1867,7 @@ G.bosses = {
                         },
                     },
                     {
-                        name = "Mother's Wrath",
+                        name = "Mother's Wrath", spell = 1298367,
                         tag = "Tank soak", todo = "Tank stands in the red circle",
                         lines = {
                             "She hits the tank, knocks them back a little and marks "
@@ -1830,6 +1875,29 @@ G.bosses = {
                                 .. "several hits.",
                             "Miss it and the debuff lands on the whole raid and hits "
                                 .. "more times, which wipes you.",
+                        },
+                    },
+                    {
+                        name = "Unchecked Rage", spell = 1286945,
+                        tag = "Stay close", todo = "Somebody in range at all times",
+                        lines = {
+                            "Leave Ula'tek with nobody in range and she casts. It "
+                                .. "is a wipe, not chip damage -- which is why the "
+                                .. "two tanks hold their targets rather than kite, "
+                                .. "and why neither leaves to chase an egg.",
+                            "The second target has its own version of the same "
+                                .. "rule, so both need somebody standing there.",
+                        },
+                    },
+                    {
+                        name = "Necrotic Vapors", spell = 1286834,
+                        tag = "Soft enrage", todo = "Push the phase, do not sit in it",
+                        lines = {
+                            "Raid-wide rot that STACKS and keeps climbing for as "
+                                .. "long as the fight runs. Nothing to dodge, and "
+                                .. "not a flat cost either -- it is the clock.",
+                            "A phase one that drags is a phase one the healers lose "
+                                .. "on their own.",
                         },
                     },
                     {
@@ -1868,6 +1936,18 @@ G.bosses = {
                                 .. "the tethered player running away from it.",
                             "Partway through it teleports and starts hatching eggs. "
                                 .. "Kill those eggs to break them before it finishes.",
+                        },
+                        heroic = "Breaking the tether puts a damage-over-time on the "
+                            .. "WHOLE raid rather than only the player who was "
+                            .. "tethered, so break it when the healers are not "
+                            .. "already holding something together.",
+                    },
+                    {
+                        name = "Anguished Cry", spell = 1305650,
+                        tag = "Interrupt", todo = "Kick every cast",
+                        lines = {
+                            "The interrupt to keep somebody on for the whole of "
+                                .. "phase two.",
                         },
                     },
                     {
@@ -1946,6 +2026,14 @@ G.bosses = {
                             "Each cycle starts with an egg on every platform. Kill "
                                 .. "them to break them, then group the adds up and "
                                 .. "AoE them down.",
+                        },
+                    },
+                    {
+                        name = "Vicious Echoes", spell = 1310764,
+                        tag = "Interrupt", todo = "Kick every cast",
+                        lines = {
+                            "Phase three's interrupt. Keep it covered while the "
+                                .. "soak groups are moving.",
                         },
                     },
                     {

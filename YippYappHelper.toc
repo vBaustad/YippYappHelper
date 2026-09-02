@@ -1,8 +1,8 @@
-## Interface: 120100, 120007
+﻿## Interface: 120100, 120007
 ## Title: YippYapp Helper
 ## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
 ## Author: vbaustad
-## Version: 3.2.0
+## Version: 3.3.0
 ## SavedVariables: YippYappHelperDB
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
@@ -76,8 +76,9 @@ Features\Gear\Crests.lua
 Features\Gear\Recommend.lua
 
 # Stat priority and best-in-slot per spec, generated from Wowhead's class
-# guides (see Tools/scrape_class_guides.py). Pure data — nothing reads it
-# yet, but it loads here so a UI can.
+# guides (see Tools/scrape_class_guides.py). Pure data; the readers are
+# Features\Gear\StatPriority.lua just below and Features\Gear\BisUI.lua
+# further down, both of which load after it.
 Features\Gear\ClassGuideData.lua
 
 # Reads the priority half of that data: which build you are in, and which
@@ -98,7 +99,6 @@ Features\Gear\GearPage.lua
 Features\Raid\SpecMeta.lua
 Features\Raid\RaidInspect.lua
 Features\Raid\ReadyCheck.lua
-Features\Raid\BattleResTimer.lua
 Features\Raid\RaidUI.lua
 
 # The Boss Guide, and the arena that tests whether you read it.
@@ -126,6 +126,11 @@ Features\Consumables\ConsumablesUI.lua
 # into the same table, so the healer file has to load after it.
 Features\Trinkets\TrinketData.lua
 Features\Trinkets\TrinketDataHealer.lua
+# The tier list Wowhead's class guides publish -- the editorial read on
+# the same trinkets, and the only trinket data Augmentation Evoker has,
+# since neither sim covers it. Its own table, not merged into the sim
+# one: a letter grade and a percentage are not the same claim.
+Features\Trinkets\TrinketTiers.lua
 Features\Trinkets\TrinketIndex.lua
 Features\Trinkets\TrinketUI.lua
 

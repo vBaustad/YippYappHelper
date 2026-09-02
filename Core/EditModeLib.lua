@@ -231,21 +231,21 @@ local pct = function(v) return ("%d%%"):format(math.floor(v)) end
 
 local done = {}
 
+--- Registers the frames in ns.EditMode:Frames() that now exist.
+---
+--- Nothing to do while that list is empty, which it is since the Battle
+--- Res Timer was retired -- it was the only frame Edit Mode placed. The
+--- helpers above (Register, Caption, Checkbox, Slider) are what a new
+--- entry would be written with, so they stay; `done` keys off the frame
+--- so re-registration is still impossible once one comes back.
 local function RegisterAll()
-    -- Battle Res Timer
-    local BR = ns.BattleResTimer
-    if BR and _G.YYH_BattleResTimer and not done.brez then
-        done.brez = true
-        Register(_G.YYH_BattleResTimer, "brez",
-            { point = "CENTER", x = 0, y = -160 }, {
-                Caption("Shown in raids and keystone dungeons"),
-                Checkbox("Show between pulls", false,
-                    function() return BR:IsShowOutOfCombat() end,
-                    function(v) BR:SetShowOutOfCombat(v) end),
-                Slider("Scale", 100, 50, 250, 5,
-                    function() return (BR:GetScale() or 1) * 100 end,
-                    function(v) BR:SetScale(v / 100) end, pct),
-            }, "Battle Res Timer")
+    for _, def in ipairs(ns.EditMode and ns.EditMode:Frames() or {}) do
+        local f = def.frame and def.frame()
+        if f and not done[def.key] then
+            done[def.key] = true
+            Register(f, def.key, def.default or { point = "CENTER", x = 0, y = 0 },
+                     def.settings or {}, def.label or def.key)
+        end
     end
 end
 

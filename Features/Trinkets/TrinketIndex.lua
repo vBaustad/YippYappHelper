@@ -627,6 +627,191 @@ function T:StaleSpecText(tier, provider)
 end
 
 ------------------------------------------------------------
+-- Guide tier list.
+--
+-- The second opinion on the same trinkets, and a different kind of
+-- claim from the sim's. bloodmallet answers "how much damage", which is
+-- the whole question only when the two trinkets are otherwise
+-- interchangeable. Wowhead's authors grade knowing which on-use wants
+-- pairing with which cooldown, which drop is Vault-only, and which pair
+-- nobody would wear together -- and they grade for Augmentation Evoker,
+-- which no sim covers at all.
+--
+-- Kept beside the sim rather than blended into it. Averaging a letter
+-- with a percentage would produce a number neither source stands behind.
+------------------------------------------------------------
+local tierIndex
+
+local function buildTiers()
+    if tierIndex then return tierIndex end
+    tierIndex = {}
+    for key, block in pairs(ns.TrinketTiers or {}) do
+        local total = #(block.tiers or {})
+        for _, tier in ipairs(block.tiers or {}) do
+            for _, item in ipairs(tier.items or {}) do
+                local bySpec = tierIndex[item.id]
+                if not bySpec then
+                    bySpec = {}
+                    tierIndex[item.id] = bySpec
+                end
+                bySpec[key] = {
+                    label = tier.label,
+                    rank  = tier.rank,
+                    of    = total,
+                    from  = item.from,
+                    note  = item.note,
+                }
+            end
+        end
+    end
+    return tierIndex
+end
+
+--- The guide's grade for one trinket and one spec, or nil.
+---
+--- nil has two meanings and the caller has to keep them apart: the guide
+--- did not list this trinket, or there is no guide for the spec at all.
+--- HasTierList answers the second, so ask it before reading anything
+--- into the first.
+function T:GetTier(itemID, specKey)
+    if not itemID or not specKey then return nil end
+    local bySpec = buildTiers()[itemID]
+    return bySpec and bySpec[specKey] or nil
+end
+
+--- Every spec whose guide grades this trinket, best grade first.
+function T:GetTiersFor(itemID)
+    local bySpec = itemID and buildTiers()[itemID]
+    if not bySpec then return nil end
+    local out = {}
+    for key, entry in pairs(bySpec) do
+        out[#out + 1] = {
+            key = key, label = entry.label, rank = entry.rank,
+            of = entry.of, from = entry.from, note = entry.note,
+        }
+    end
+    table.sort(out, function(a, b)
+        if a.rank ~= b.rank then return a.rank < b.rank end
+        return a.key < b.key
+    end)
+    return out
+end
+
+--- True when the guide publishes a tier list for this spec.
+function T:HasTierList(specKey)
+    local block = specKey and (ns.TrinketTiers or {})[specKey]
+    return block ~= nil and #(block.tiers or {}) > 0
+end
+
+--- The spec's tiers in order, for a page that wants to draw the ladder.
+function T:TierList(specKey)
+    local block = specKey and (ns.TrinketTiers or {})[specKey]
+    return block and block.tiers or nil
+end
+
+--- The guide's prose above the tier list: which stats the spec wants out
+--- of the slot, and how it likes to pair on-use with passive. The part a
+--- ranking cannot say.
+function T:TierIntro(specKey)
+    local block = specKey and (ns.TrinketTiers or {})[specKey]
+    return block and block.intro or nil
+end
+
+--- True when this spec's sim data is behind, in either fight style.
+---
+--- Asked of the spec rather than of one style, because the question it
+--- answers is "should this character be reading the guide first" and a
+--- spec whose raid chart is current but whose dungeon chart is not is
+--- still a spec being shown last season's numbers on one of its tabs.
+function T:IsSpecSimStale(specKey)
+    local styles = specKey and (ns.TrinketData or {})[specKey]
+    if not styles then return false end
+    for _, block in pairs(styles) do
+        if type(block) == "table" and block.list and self:IsStaleTier(block.tier) then
+            return true
+        end
+    end
+    return false
+end
+
+--- True when the guide for this spec is written for an older season.
+function T:IsTierListStale(specKey)
+    local block = specKey and (ns.TrinketTiers or {})[specKey]
+    local want = ns.TRINKET_TIER_TARGET_SEASON
+    if not block or not want then return false end
+    return block.season ~= want
+end
+
+--- Skin colour for a grade, by where it sits in this spec's ladder.
+---
+--- By position, not by letter. The forty guides use six different
+--- ladders between them -- one runs S+ to F, another A+ to F, one stops
+--- at C -- so a table keyed on "D" would paint the bottom of a six-tier
+--- list the same as the middle of a seven-tier one.
+function T:TierColorKey(entry)
+    if not entry then return "faint" end
+    if entry.rank == 1 then return "good" end
+    if entry.rank == 2 then return "accent" end
+    if entry.of and entry.rank >= entry.of then return "warn" end
+    return "muted"
+end
+
+--- "S", coloured. The label is the guide author's own wording.
+function T:ColorTier(entry)
+    if not entry then return "" end
+    return ns.Widgets:Tint(self:TierColorKey(entry), entry.label)
+end
+
+--- A name for a trinket, for the search box to match on.
+---
+--- The tier list stores IDs alone, on purpose -- names resolve at
+--- runtime and localise for free. Search runs before anything is drawn
+--- though, so it needs a string from somewhere: the sim index holds one
+--- for most of the same trinkets and is asked first, the client second.
+--- Empty is an acceptable last answer. A row that fails to match is a
+--- row the reader can still see by clearing the box; guessing a name
+--- would be worse.
+function T:KnownName(itemID)
+    if not itemID then return "" end
+    for _, style in ipairs({ "ST", "AOE" }) do
+        local _, bucket = self:GetSpecsFor(itemID, style)
+        if bucket and bucket.name then return bucket.name end
+    end
+    if C_Item and C_Item.GetItemInfo then
+        local name = C_Item.GetItemInfo(itemID)
+        if name then return name end
+    end
+    return ""
+end
+
+--- The spec's tier list flattened into rows the page can draw.
+---
+--- Tier boundaries survive as `first` on the row that opens each band,
+--- so the view can put a heading above it without walking the nested
+--- shape a second time while it lays out.
+function T:GuideRows(specKey)
+    local tiers = self:TierList(specKey)
+    if not tiers then return nil end
+    local out = {}
+    for _, tier in ipairs(tiers) do
+        for i, item in ipairs(tier.items or {}) do
+            out[#out + 1] = {
+                id    = item.id,
+                name  = self:KnownName(item.id),
+                from  = item.from,
+                note  = item.note,
+                label = tier.label,
+                rank  = tier.rank,
+                of    = #tiers,
+                first = (i == 1),
+                count = #(tier.items or {}),
+            }
+        end
+    end
+    return out
+end
+
+------------------------------------------------------------
 -- Tooltip integration.
 --
 -- The point of the raid-night use case is not to open a window; it is to
@@ -634,7 +819,17 @@ end
 -- Hooking the tooltip covers every surface at once — loot windows, bags,
 -- chat links, the Encounter Journal, other people's gear.
 ------------------------------------------------------------
-local MAX_TOOLTIP_SPECS = 5
+-- Other people's specs, and only in a group.
+--
+-- This used to be five lines shown to everyone on every hover, and on a
+-- character whose own sim is a tier behind it was the entire tooltip:
+-- eight lines about five specs you are not playing, a "+29 more", and
+-- nothing at all about you. "Who else wants this" is a real question,
+-- but it is the loot council's question, and it only has an answer worth
+-- reading when there is a council -- so it is gated on being grouped and
+-- cut to three. The page's Loot Council tab is where the full list has
+-- always lived.
+local MAX_COUNCIL_SPECS = 3
 
 local function describeRank(entry)
     local suffix = entry.rel and entry.rel < -0.005
@@ -648,48 +843,138 @@ local function describeRank(entry)
     return ("  #%d %s%s"):format(entry.rank, T:ColorSpec(entry.key), suffix)
 end
 
+-- A guide note is a sentence or two on the commonest trinkets and a
+-- paragraph on a handful. Past this the tooltip stops being a glance,
+-- so it is cut at the last sentence that fits and the page keeps the
+-- rest. Cutting mid-word instead would be shorter and read as damage.
+local MAX_NOTE = 240
+
+local function shortenNote(note)
+    if #note <= MAX_NOTE then return note end
+    local head = note:sub(1, MAX_NOTE)
+    local stop = head:match(".*()[.!?]")
+    if stop and stop > MAX_NOTE / 2 then
+        return head:sub(1, stop)
+    end
+    return head:gsub("%s+%S*$", "") .. "..."
+end
+
+--- True when some other spec ranks or grades this trinket.
+---
+--- What licenses the "not on your list" line, and the reason it is not
+--- an item-type test. Two problems with asking the client what an item
+--- is: on a cold cache it answers by going and finding out, which is one
+--- more uncached lookup per hover and the shape of the freeze after a
+--- loading screen; and a level-20 trinket would pass it, so every spec
+--- would get told about every trinket ever made.
+---
+--- Membership in either dataset settles both at once. It proves the item
+--- is a trinket someone currently cares about, using tables already in
+--- memory, and it scopes the line to the case that prompted it: a drop
+--- other people are rolling on, and you want to know if it is for you.
+local function rankedBySomeone(itemID)
+    if T:GetTiersFor(itemID) then return true end
+    local specs = T:GetSpecsFor(itemID)
+    return specs ~= nil and #specs > 0
+end
+
+--- Appends the guide's verdict for the player's own spec.
+---
+--- The player's spec only, unlike the sim block. A percentage is a loot
+--- council argument -- everyone's numbers divide by the same thing --
+--- but a letter is graded inside one spec's own ladder, so "S for Fire
+--- Mage" and "S for Blood" are not comparable quantities and lining them
+--- up would invite exactly that comparison.
+---
+--- Says so when the guide does NOT list the trinket, which is the whole
+--- point for anything below the grades: a hover that adds nothing is
+--- indistinguishable from a hover on an item the addon has never heard
+--- of. Stated as a fact about the guide rather than about the item --
+--- the guide's silence is not a verdict, and several things it does not
+--- rate are simply out of its scope.
+local function addGuideLines(tooltip, itemID)
+    local specKey = T:GetPlayerSpecKey()
+    if not specKey or not T:HasTierList(specKey) then return false end
+
+    local entry = T:GetTier(itemID, specKey)
+    local faint = ns.Widgets:Hex("faint")
+
+    if entry then
+        tooltip:AddLine(" ")
+        local head = ("|cff00ccffGuide|r  %s |cff%sfor %s|r")
+            :format(T:ColorTier(entry), faint, T:SpecName(specKey))
+        if entry.from then
+            head = head .. ("  |cff%s%s|r"):format(faint, entry.from)
+        end
+        tooltip:AddLine(head)
+        if entry.note then
+            tooltip:AddLine(shortenNote(entry.note), 0.8, 0.8, 0.8, true)
+        end
+        if T:IsTierListStale(specKey) then
+            tooltip:AddLine(("|cff886600Guide written for %s|r")
+                :format((ns.TrinketTiers[specKey] or {}).season or "an older season"))
+        end
+        return true
+    end
+
+    if not rankedBySomeone(itemID) then return false end
+    tooltip:AddLine(" ")
+    tooltip:AddLine(("|cff%sGuide: not on the %s trinket list.|r")
+        :format(faint, T:SpecName(specKey)), nil, nil, nil, true)
+    return true
+end
+
 --- Appends the sim block. Returns true only if it actually added lines.
 ---
 --- The return value is the point: this runs on EVERY item tooltip in the
 --- game and the overwhelming majority are not trinkets we have data for,
 --- so the caller needs to know the difference between "added something"
 --- and "looked and left".
-local function addTrinketLines(tooltip, itemID)
-    if not itemID then return false end
+--- Where this trinket lands for the player's own spec, in one line.
+---
+--- One line, not a block. The guide line above it has already named the
+--- spec, so repeating it here would spend a third of the width saying
+--- "Balance Druid" twice; `named` is false when there was no guide line
+--- to do that, and only then does this say it itself.
+local function addOwnRank(tooltip, itemID, named)
+    local playerKey = T:GetPlayerSpecKey()
+    if not playerKey then return false end
     local specs = T:GetSpecsFor(itemID)
-    if not specs or #specs == 0 then return false end
-
-    -- Attributed to whoever is actually on the tooltip. A trinket good
-    -- for a Warlock and a Holy Priest is being ranked by two different
-    -- projects, and crediting one of them for both is wrong in the
-    -- direction that matters -- the healer numbers are the ones a reader
-    -- would otherwise assume bloodmallet publishes, which it does not.
-    local seen, names = {}, {}
+    if not specs then return false end
     for _, entry in ipairs(specs) do
-        local label = T:ProviderInfo(entry.provider).label
-        if not seen[label] then
-            seen[label] = true
-            names[#names + 1] = label
+        if entry.key == playerKey then
+            local rel = entry.rel and entry.rel < -0.005
+                and ("  |cff888888%.1f%%|r"):format(entry.rel) or ""
+            local who = named and ""
+                or ("  |cff%sfor %s|r"):format(ns.Widgets:Hex("faint"),
+                    T:SpecName(playerKey))
+            local stale = T:IsStaleTier(entry.tier)
+                and ("  |cff886600(%s)|r"):format(entry.tier or "old") or ""
+            tooltip:AddLine(("|cff00ccffSim|r  #%d%s%s%s")
+                :format(entry.rank, who, rel, stale))
+            return true
         end
     end
-    table.sort(names)
+    return false
+end
 
-    tooltip:AddLine(" ")
-    tooltip:AddLine("|cff00ccffTrinket sims|r |cff666666(" ..
-        table.concat(names, " + ") .. ")|r")
+--- Who else in the group wants it. Skipped entirely when solo.
+local function addCouncilLines(tooltip, itemID)
+    if IsInGroup and not IsInGroup() then return false end
 
+    local specs = T:GetSpecsFor(itemID)
+    if not specs or #specs == 0 then return false end
     local playerKey = T:GetPlayerSpecKey()
-    local shown, playerShown = 0, false
 
     -- Grouped for the same reason the page groups -- the percentages
-    -- divide by different things -- but with a second job here: five
-    -- lines sorted into one list is five damage specs, every time, and
-    -- a healer hovering a trinket would never see another healer on it.
+    -- divide by different things, DPS against HPS -- and with a second
+    -- job here: three lines sorted into one list is three damage specs
+    -- every time, and a healer would never see another healer on it.
     -- The budget is split so both sides get a look in, and whichever
     -- group the player is in goes first and takes the larger share.
     local groups = T:GroupedSpecsFor(itemID) or {}
     local budget = {}
-    local room = MAX_TOOLTIP_SPECS
+    local room = MAX_COUNCIL_SPECS
     for i = #groups, 1, -1 do
         -- Back to front, so the rounding lands on the player's group.
         local share = math.floor(room / i)
@@ -704,41 +989,76 @@ local function addTrinketLines(tooltip, itemID)
         budget[1] = budget[1] + ((room < want) and room or want)
     end
 
-    for i, group in ipairs(groups) do
-        local take = budget[i] or 0
-        if take > 0 and #groups > 1 then
-            tooltip:AddLine(("|cff666666%s — %s|r"):format(group.label,
-                group.source))
-        end
-        for n, entry in ipairs(group.entries) do
-            if n > take then break end
-            tooltip:AddLine(describeRank(entry))
-            if entry.key == playerKey then playerShown = true end
-            shown = shown + 1
-        end
+    -- Counted, not assumed: the player's spec is subtracted from the
+    -- "+N more" tail only when it was actually in the list to begin
+    -- with, which for a spec still on last tier's data it is not.
+    local mine = 0
+    for _, entry in ipairs(specs) do
+        if entry.key == playerKey then mine = 1 break end
     end
 
-    -- Always tell the player where it lands for them, even if their spec
-    -- ranks it far enough down to fall outside the top few.
-    if playerKey and not playerShown then
-        for _, entry in ipairs(specs) do
-            if entry.key == playerKey then
-                tooltip:AddLine(" ")
-                tooltip:AddLine("|cffffffffFor you:|r" .. describeRank(entry))
-                break
+    local lines, shown = {}, 0
+    for i, group in ipairs(groups) do
+        local take = budget[i] or 0
+        local head = false
+        for n, entry in ipairs(group.entries) do
+            if n > take then break end
+            -- The player's own spec is already above, under Sim.
+            if entry.key ~= playerKey then
+                if not head and #groups > 1 then
+                    -- Attributed per group. A trinket good for a Warlock
+                    -- and a Holy Priest is ranked by two different
+                    -- projects, and crediting one for both is wrong in
+                    -- the direction that matters: the healer numbers are
+                    -- the ones a reader would otherwise assume
+                    -- bloodmallet publishes, which it does not.
+                    lines[#lines + 1] = ("|cff666666%s — %s|r")
+                        :format(group.label, group.source)
+                    head = true
+                end
+                lines[#lines + 1] = describeRank(entry)
+                shown = shown + 1
             end
         end
     end
+    if shown == 0 then return false end
 
-    if #specs > shown then
-        tooltip:AddLine(("|cff%s+%d more specs — see the Trinkets page|r"):format(ns.Widgets:Hex("faint"), #specs - shown))
-    end
-    -- Only when the entire file is behind. Mixed tiers are already
-    -- called out on the individual lines by describeRank.
-    if T:IsStale() then
-        tooltip:AddLine("|cff886600" .. (ns.TRINKET_TIER or "old") .. " sim data|r")
+    tooltip:AddLine(" ")
+    tooltip:AddLine("|cff00ccffAlso wanted by|r")
+    for _, line in ipairs(lines) do tooltip:AddLine(line) end
+
+    local rest = #specs - shown - mine
+    if rest > 0 then
+        tooltip:AddLine(("|cff%s+%d more — see the Trinkets page|r")
+            :format(ns.Widgets:Hex("faint"), rest))
     end
     return true
+end
+
+--- Appends everything the addon has to say about a trinket.
+---
+--- Ordered by who is asking. The player's own answer comes first and is
+--- the only part shown when they are alone: hovering a trinket is nearly
+--- always "is this good for me", and the loot council's question needs a
+--- council before it is worth four lines.
+---
+--- The return value is the point: this runs on EVERY item tooltip in the
+--- game and the overwhelming majority are not trinkets we have data for,
+--- so the caller needs to know the difference between "added something"
+--- and "looked and left".
+local function addTrinketLines(tooltip, itemID)
+    if not itemID then return false end
+
+    local graded = addGuideLines(tooltip, itemID)
+    local own = addOwnRank(tooltip, itemID, graded)
+    local council = addCouncilLines(tooltip, itemID)
+
+    -- Only when the entire file is behind. A single spec on last tier's
+    -- data is marked on its own line by describeRank and by addOwnRank.
+    if (own or council) and T:IsStale() then
+        tooltip:AddLine("|cff886600" .. (ns.TRINKET_TIER or "old") .. " sim data|r")
+    end
+    return graded or own or council
 end
 
 local function enabled()

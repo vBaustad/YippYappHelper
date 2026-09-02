@@ -16,7 +16,7 @@ local _, ns = ...
 
 ns.ConsumablesDB = {}
 ns.CONSUMABLES_TARGET_SEASON = "Midnight Season 2"
-ns.CONSUMABLES_SCRAPED_AT = "2026-08-15"
+ns.CONSUMABLES_SCRAPED_AT = "2026-09-01"
 
 ns.ConsumablesDB["DEATHKNIGHT_BLOOD"] = {
     season = "Midnight Season 2",
@@ -108,7 +108,7 @@ ns.ConsumablesDB["DEATHKNIGHT_UNHOLY"] = {
 ns.ConsumablesDB["DEMONHUNTER_HAVOC"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 243971 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Chest",       itemID = 243977 },
@@ -116,15 +116,12 @@ ns.ConsumablesDB["DEMONHUNTER_HAVOC"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "Enchant Weapon - Jan'alai's Precision is the best weapon enchant, using one each of Enchant Weapon - Jan'alai's Precision and Enchant Weapon - Arcane Mastery can be better depending on your characters stats.",
+    enchantGuide = "Enchant Weapon - Rite of the Hash'ey is the best weapon enchant due to higher uptime and more stats in general, the proc rate on Critical Strike is typically exceptionally high.",
     gems = {
-        { label = "Eversong Diamond", itemID = 240967 },
+        { label = "Eversong Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240908 },
-        { label = "Gem", itemID = 240898 },
-        { label = "Gem", itemID = 240890 },
-        { label = "Gem", itemID = 240914 },
     },
-    gemGuide = "Havoc Demon Hunter will want to use Powerful Eversong Diamond as their single Unique Eversong Diamond. To buff it, one each of Flawless Masterful Garnet, Flawless Deadly Amethyst, Flawless Deadly Peridot, and Flawless Deadly Lapis. Fill any remaining gem sockets with Flawless Masterful Garnet",
+    gemGuide = "Havoc Demon Hunter will want to use Indecipherable Eversong Diamond as their single Unique Eversong Diamond, and all remaining gem sockets filled with Flawless Masterful Garnet",
     consumables = {
         { label = "Flask", itemID = 241326 },
         { label = "Combat Potion", itemID = 241288 },
@@ -146,7 +143,7 @@ ns.ConsumablesDB["DEMONHUNTER_VENGEANCE"] = {
         { slot = "Boots",       itemID = 244009, alt = 243953 },
         { slot = "Ring",        itemID = 243957, alt = 244015 },
     },
-    enchantGuide = "For Weapons, since we have several different options, I've listed them here. Note that the best option may vary depending on your current gear setup so it's best to sim them yourself:\n\nDouble Enchant Weapon - Acuity of the Ren'dorei defensively.\nAny combination of the secondary enchants offensively (Enchant Weapon - Berserker's Rage, Enchant Weapon - Jan'alai's Precision, Enchant Weapon - Worldsoul Tenacity, Enchant Weapon - Arcane Mastery)\n\nNote: It does not matter what weapon you enchant with which effect. Procs occur at the same rate for main-hand and off-hand weapons. The effect is doubled with the same proc rate, if used on both.",
+    enchantGuide = "For Weapons, since we have several different options, I've listed them here. Note that the best option may vary depending on your current gear setup so it's best to sim them yourself:\n\nDouble Enchant Weapon - Acuity of the Ren'dorei defensively.\nDouble Enchant Weapon - Rite of the Hash'ey offensively.\n\nNote: It does not matter what weapon you enchant with which effect. Procs occur at the same rate for main-hand and off-hand weapons. The effect is doubled with the same proc rate, if used on both.",
     gems = {
         { label = "Eversong Diamond", itemID = 240983, alt = 240967 },
         { label = "Other Gems", itemID = 240890, alt = 240894 },
@@ -171,8 +168,8 @@ ns.ConsumablesDB["DEMONHUNTER_VENGEANCE"] = {
 ns.ConsumablesDB["DEMONHUNTER_DEVOURER"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
-        { slot = "Off Hand",    itemID = 244031 },
+        { slot = "Weapon",      itemID = 273071 },
+        { slot = "Off Hand",    itemID = 273071 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Chest",       itemID = 243977 },
         { slot = "Shoulders",   itemID = 243991 },
@@ -180,7 +177,7 @@ ns.ConsumablesDB["DEMONHUNTER_DEVOURER"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "For Season Two, Devourer seeks to use Enchant Weapon - Arcane Mastery on both its weapons! Mastery is a very powerful stat for us, but its possible other enchants can be better depending on your gear. It's important to sim yourself as you gear to ensure you're always using the best!",
+    enchantGuide = "For Season Two, Devourer seeks to use Enchant Weapon - Rite of the Hash'ey on both its weapons! This is a very powerful enchant which gives more stats than the Season One options. Additionally, this enchant will always give your highest stat while above 80%, rather than a random stat. As a Devourer, our self-healing and general survivability will lead to us to have a naturally higher uptime of the preferred stat.",
     gems = {
         { label = "Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240898 },
@@ -201,7 +198,7 @@ ns.ConsumablesDB["DEMONHUNTER_DEVOURER"] = {
 ns.ConsumablesDB["DRUID_BALANCE"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Chest",       itemID = 243977 },
@@ -410,7 +407,7 @@ ns.ConsumablesDB["EVOKER_AUGMENTATION"] = {
 ns.ConsumablesDB["HUNTER_BEASTMASTERY"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Chest",       itemID = 243977 },
@@ -418,7 +415,7 @@ ns.ConsumablesDB["HUNTER_BEASTMASTERY"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "Your best Weapon enchants for most situations is Enchant Weapon - Arcane Mastery. Other enchants can win in specific scenarios.",
+    enchantGuide = "Your best Weapon enchants for most situations is Enchant Weapon - Rite of the Hash'ey. Other enchants can win in specific scenarios.",
     gems = {
         { label = "Gems", itemID = 240967 },
         { label = "Gem", itemID = 240898 },
@@ -434,15 +431,15 @@ ns.ConsumablesDB["HUNTER_BEASTMASTERY"] = {
         { label = "Health Potion", itemID = 271884 },
         { label = "Augment Rune", itemID = 259085 },
         { label = "Weapon Buff", itemID = 243734 },
-        { label = "Food", itemID = 275266, alt = { itemID = 275258 } },
+        { label = "Food", itemID = 255846, alt = { itemID = 242275 } },
     },
-    consumableGuide = "The best flask for Beast Mastery Hunters is Flask of the Magisters, for all scenarios, as it is our best stat.\n\nThe best choice combat potion in Midnight Season 2 is Light's Potential, until you are at a higher level of gear with low versatility, then it becomes Potion of Recklessness.\n\nThe best healing potion for Beast Mastery Hunters is Concentrated Silvermoon Health Potion, as this is healing potion with the highest amount of healing.\n\nBeast Mastery Hunters use Thalassian Phoenix Oil as their temporary weapon buff in all scenarios.\n\nWith Midnight Season 2, the newest and best Augment Rune is the Void-Touched Augment Rune.\n\nYour best food in all situations is Feast of Knowledge, or an equivalent. If you want personal food you can use Venom-Spiced Cutlets, or an equivalent",
+    consumableGuide = "The best flask for Beast Mastery Hunters is Flask of the Magisters, for all scenarios, as it is our best stat.\n\nThe best choice combat potion in raid in Midnight Season 2 is Light's Potential, until you are at a higher level of gear with low versatility, then it becomes Potion of Recklessness.\n\nLiquid Luster is your best potion in Mythic+.\n\nThe best healing potion for Beast Mastery Hunters is Concentrated Silvermoon Health Potion, as this is healing potion with the highest amount of healing.\n\nBeast Mastery Hunters use Thalassian Phoenix Oil as their temporary weapon buff in all scenarios.\n\nWith Midnight Season 2, the newest and best Augment Rune is the Void-Touched Augment Rune.\n\nYour best food in all situations is Harandar Celebration, or an equivalent. If you want personal food you can use Royal Roast, or an equivalent",
 }
 
 ns.ConsumablesDB["HUNTER_MARKSMANSHIP"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 243971 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 243951 },
         { slot = "Shoulders",   itemID = 244021 },
         { slot = "Chest",       itemID = 243977 },
@@ -450,7 +447,7 @@ ns.ConsumablesDB["HUNTER_MARKSMANSHIP"] = {
         { slot = "Boots",       itemID = 243983 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "Enchant Weapon - Jan'alai's Precision is going to be strongest.",
+    enchantGuide = "Enchant Weapon - Rite of the Hash'ey is the strongest weapon enchant for us. When it procs while you are above 80% health, it gives you your highest secondary stat. Below 80% you get a random secondary stat instead. Log analysis suggests that you spend 80-85% of the time above 80% HP in Raids, and more in Mythic+, and a random roll can still give you the optimal stat.",
     gems = {
         { label = "Diamond", itemID = 240967 },
         { label = "Other Gems", itemID = 240890 },
@@ -469,13 +466,13 @@ ns.ConsumablesDB["HUNTER_MARKSMANSHIP"] = {
         { label = "Food", itemID = 255846, alt = { itemID = 255845 } },
         { label = "Food", itemID = 242747 },
     },
-    consumableGuide = "The best Flask for Marksmanship Hunters is Flask of the Shattered Sun.\n\nMarksmanship Hunters should use Potion of Recklessness, which gives you a large amount of your highest secondary stat for 30 seconds and wants to be synced with your cooldowns. It is sensitive to Critical Strike actually being your highest stat when you press it, so if your gear has not got there yet, use Light's Potential instead.\n\nThe best healing potion for Marksmanship Hunters is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Marksmanship Hunters will always use Thalassian Phoenix Oil.\n\nThe best Augment Rune in Midnight is Void-Touched Augment Rune.\n\nMarksmanship Hunters prefers eating Agility food (such as Feasts) over secondary stat foods when given the option.\n\nFeast: Harandar Celebration or Silvermoon Parade\nPersonal Food: Hearty Royal Roast",
+    consumableGuide = "The best Flask for Marksmanship Hunters is Flask of the Shattered Sun.\n\nMarksmanship Hunters should use Potion of Recklessness, which gives you a large amount of your highest secondary stat for 30 seconds and wants to be synced with your cooldowns. It is sensitive to Critical Strike actually being your highest stat when you press it, so if your gear has not got there yet, use Light's Potential instead. Stock up on Liquid Luster too and use it as your second Potion during execute. In the execute phase Bullseye gives you plenty of Critical Strike on its own, which leaves a repeat Potion of Recklessness worth much less there. Liquid Luster increases its Versatility over time, so press it about 10 seconds before Trueshot.\n\nThe best healing potion for Marksmanship Hunters is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Marksmanship Hunters will always use Thalassian Phoenix Oil.\n\nThe best Augment Rune in Midnight is Void-Touched Augment Rune.\n\nMarksmanship Hunters prefers eating Agility food (such as Feasts) over secondary stat foods when given the option.\n\nFeast: Harandar Celebration or Silvermoon Parade\nPersonal Food: Hearty Royal Roast",
 }
 
 ns.ConsumablesDB["HUNTER_SURVIVAL"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Chest",       itemID = 243977 },
@@ -483,7 +480,7 @@ ns.ConsumablesDB["HUNTER_SURVIVAL"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "For our weapon, we recommend Enchant Weapon - Arcane Mastery, as it provides our best stat, mastery.",
+    enchantGuide = "For our weapon, we recommend Enchant Weapon - Rite of the Hash'ey, as it typically provides our best stat, mastery.",
     gems = {
         { label = "Gems", itemID = 240983 },
         { label = "Gem", itemID = 240898 },
@@ -619,13 +616,13 @@ ns.ConsumablesDB["MONK_BREWMASTER"] = {
     consumables = {
         { label = "Weapons (2h & Dual-Wield)", itemID = 244029 },
         { label = "Flask", itemID = 241320 },
-        { label = "Combat Potion", itemID = 241308 },
+        { label = "Combat Potion", itemID = 271887 },
         { label = "Health Potion", itemID = 271884, alt = { itemID = 5512 } },
         { label = "Weapon Buff", itemID = 243734 },
         { label = "Food", itemID = 255845, alt = { itemID = 255846 } },
         { label = "Augment Rune", itemID = 259085 },
     },
-    consumableGuide = "Flask of Thalassian Resistance is your default flask choice in Midnight, offering the most generally useful stat of Versatility. However, both the Flask of the Shattered Sun and Flask of the Magisters can also be potent or even superior depending on your current gear.\n\nRemember, you can also acquire conjured versions of these flasks from a Cauldron of Sin'dorei Flasks, provided the Alchemist who placed it knows the recipes!\n\nLight's Potential acts as your most consistently useful combat potion, providing a large burst of Agility for a long period of time, though there are a number of competitive options in Midnight. There is also the Draught of Rampant Abandon, which offers more Agility at the cost of potentially spawning puddles of The Void's Toll under your feet to silence and pacify your character.\n\nRaid: Light's Potential\nMythic+: Light's Potential/Draught of Rampant Abandon\n\nAs with flasks, you may obtain temporary conjured versions of any of these potions from an Alchemist's Voidlight Potion Cauldron, assuming they know the recipes.\n\nConcentrated Silvermoon Health Potion is the default healing potion for Brewmaster Monks, offering improved healing over a regular Silvermoon Health Potion. As a staple craft of Alchemists seeking to level the profession, you should have access to plenty of this consumable at a reasonable price, though only one may be used every 5 minutes.\n\nIn addition, remember that a Warlock's Healthstone is considered a separate healing item and will not share a cooldown with the healing potion above. Use it as another resource once per encounter!\n\nBrewmaster Monks should use a Thalassian Phoenix Oil as their preferred weapon buff item, giving a substantial amount of both Critical Strike and Haste for 2 hours. Remember to apply it to both weapons if dual wielding!\n\nFeast: (Hearty) Silvermoon Parade/Harandar Celebration\nPersonal Food: There are two food items that provide the same effect of increasing your Agility: Royal Roast or Impossibly Royal Roast. Find whichever is cheapest to acquire, or consider an alternative such as Champion's Bento which increases your highest secondary stat instead.\n\nMidnight Season 2 additionally features \"hearty\" versions of food items, which can be created by combining multiples of a given item together (such as the Hearty Silvermoon Parade). These items, in addition to being warband-bound, keep their buffs through death. Seek them out for use in areas where you are likely to die and lose an otherwise normal food buff.\n\nThough less important for your success in group content, Void-Touched Augment Rune offers a small amount of additional Agility. However, the effect will be lost on death, making this a very expensive consumable effect to maintain. All the same, aim to keep a few of these handy for those moments when you need to eke out every bit of damage from your character.\n\nShould you need access to a Bloodlust effect and a class with the ability is not available, you may also wish to hold on to a small number of drums consumables. These allow you to trigger a slightly weaker version of the bonus Haste from these spells, but that is still better than not having it at all! For Level 90 characters, the only drums that are usable are the Void-Touched Drums.\n\nFinally, you have access to a battle-resurrection consumable: Emergency Soul Link. Although these have a cast time (during which you cannot dodge), they are indispensable if your group is otherwise missing this utility. Have a few on hand, just in case, and make sure to use the higher-ranked version to remove the otherwise small chance of the effect failing!",
+    consumableGuide = "Flask of Thalassian Resistance is your default flask choice in Midnight, offering the most generally useful stat of Versatility. However, both the Flask of the Shattered Sun and Flask of the Magisters can also be potent or even superior depending on your current gear.\n\nRemember, you can also acquire conjured versions of these flasks from a Cauldron of Sin'dorei Flasks, provided the Alchemist who placed it knows the recipes!\n\nLiquid Luster acts as your most consistently useful combat potion, providing a ramping Versatility bonus for a long period of time, though there are a number of competitive options in Midnight. There is also the Draught of Rampant Abandon, which grants a massive amount of Agility at the cost of potentially spawning puddles of The Void's Toll under your feet to silence and pacify your character.\n\nRaid: Liquid Luster\nMythic+: Liquid Luster/Draught of Rampant Abandon\n\nAs with flasks, you may obtain temporary conjured versions of any of these potions from an Alchemist's Voidlight Potion Cauldron, assuming they know the recipes.\n\nConcentrated Silvermoon Health Potion is the default healing potion for Brewmaster Monks, offering improved healing over a regular Silvermoon Health Potion. As a staple craft of Alchemists seeking to level the profession, you should have access to plenty of this consumable at a reasonable price, though only one may be used every 5 minutes.\n\nIn addition, remember that a Warlock's Healthstone is considered a separate healing item and will not share a cooldown with the healing potion above. Use it as another resource once per encounter!\n\nBrewmaster Monks should use a Thalassian Phoenix Oil as their preferred weapon buff item, giving a substantial amount of both Critical Strike and Haste for 2 hours. Remember to apply it to both weapons if dual wielding!\n\nFeast: (Hearty) Silvermoon Parade/Harandar Celebration\nPersonal Food: There are two food items that provide the same effect of increasing your Agility: Royal Roast or Impossibly Royal Roast. Find whichever is cheapest to acquire, or consider an alternative such as Champion's Bento which increases your highest secondary stat instead.\n\nMidnight Season 2 additionally features \"hearty\" versions of food items, which can be created by combining multiples of a given item together (such as the Hearty Silvermoon Parade). These items, in addition to being warband-bound, keep their buffs through death. Seek them out for use in areas where you are likely to die and lose an otherwise normal food buff.\n\nThough less important for your success in group content, Void-Touched Augment Rune offers a small amount of additional Agility. However, the effect will be lost on death, making this a very expensive consumable effect to maintain. All the same, aim to keep a few of these handy for those moments when you need to eke out every bit of damage from your character.\n\nShould you need access to a Bloodlust effect and a class with the ability is not available, you may also wish to hold on to a small number of drums consumables. These allow you to trigger a slightly weaker version of the bonus Haste from these spells, but that is still better than not having it at all! For Level 90 characters, the only drums that are usable are the Void-Touched Drums.\n\nFinally, you have access to a battle-resurrection consumable: Emergency Soul Link. Although these have a cast time (during which you cannot dodge), they are indispensable if your group is otherwise missing this utility. Have a few on hand, just in case, and make sure to use the higher-ranked version to remove the otherwise small chance of the effect failing!",
 }
 
 ns.ConsumablesDB["MONK_MISTWEAVER"] = {
@@ -660,7 +657,7 @@ ns.ConsumablesDB["MONK_MISTWEAVER"] = {
 ns.ConsumablesDB["MONK_WINDWALKER"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244029 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Chest",       itemID = 243977 },
@@ -668,7 +665,7 @@ ns.ConsumablesDB["MONK_WINDWALKER"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "Enchant Weapon - Acuity of the Ren'dorei will be the safest weapon enchant for all content. Like what gems to select, this decision is the easiest, and one of the more important, decisions to use Raidbots to sim the different options.",
+    enchantGuide = "Enchant Weapon - Rite of the Hash'ey will be the safest weapon enchant for all content. Like what gems to select, this decision is the easiest, and one of the more important, decisions to use Raidbots to sim the different options.",
     gems = {
         { label = "Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240890 },
@@ -690,14 +687,14 @@ ns.ConsumablesDB["MONK_WINDWALKER"] = {
 ns.ConsumablesDB["PALADIN_HOLY"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244029 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Shoulders",   itemID = 244021 },
         { slot = "Chest",       itemID = 244003 },
         { slot = "Legs",        itemID = 240155 },
         { slot = "Boots",       itemID = 243983 },
         { slot = "Ring",        itemID = 243959 },
     },
-    enchantGuide = "Enchant Weapon - Acuity of the Ren'dorei is the best weapon enchant in all content for Holy Paladin.",
+    enchantGuide = "Enchant Weapon - Rite of the Hash'ey is the best weapon enchant in all content for Holy Paladin.",
     gems = {
         { label = "Eversong Diamond", itemID = 240969 },
         { label = "Other Gems", itemID = 240900 },
@@ -715,9 +712,9 @@ ns.ConsumablesDB["PALADIN_HOLY"] = {
         { label = "Health Potion", itemID = 271884 },
         { label = "Weapon Buff", itemID = 243734 },
         { label = "Augment Rune", itemID = 259085 },
-        { label = "Food", itemID = 242747, alt = { itemID = 266985 } },
+        { label = "Food", itemID = 275264, alt = { itemID = 242299 } },
     },
-    consumableGuide = "The best Flask for Holy Paladins is Flask of the Magisters in all content.\n\nHoly Paladins will use Potion of Recklessness to help with throughput.\nIf you really need mana you can use Lightfused Mana Potion.\n\nThe best healing potion for Holy Paladins is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Holy Paladins will use Thalassian Phoenix Oil as Herald, and Rite of Sanctification as Lightsmith.\n\nThe best Augment Rune is Void-Touched Augment Rune, but it is a very minor bonus, so only buy them if you don't know what else to spend your gold on.\n\nIn Midnight Season 2, Holy Paladins prefer using Primary stat foods.\n\nFeast: Hearty Silvermoon Parade or Hearty Harandar Celebration\nPersonal Food: Hearty Royal Roast or Hearty Impossibly Royal Roast\nMana Drink: Sanguithorn Tea. Grants the most mana of any drink and stacks to 1000.",
+    consumableGuide = "The best Flask for Holy Paladins is Flask of the Magisters in all content.\n\nHoly Paladins will use Potion of Recklessness to help with throughput.\nIf you really need mana you can use Lightfused Mana Potion.\n\nThe best healing potion for Holy Paladins is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Holy Paladins will use Thalassian Phoenix Oil as Herald, and Rite of Sanctification as Lightsmith.\n\nThe best Augment Rune is Void-Touched Augment Rune, but it is a very minor bonus, so only buy them if you don't know what else to spend your gold on.\n\nIn Midnight Season 2, Holy Paladins prefer using the new Secondary stat feast.\n\nFeast: Amani Cornucopia or Loa's Gathering\nPersonal Food: Hearty Royal Roast\nMana Drink: Sanguithorn Tea. Grants the most mana of any drink and stacks to 1000.",
 }
 
 ns.ConsumablesDB["PALADIN_PROTECTION"] = {
@@ -751,7 +748,7 @@ ns.ConsumablesDB["PALADIN_PROTECTION"] = {
 ns.ConsumablesDB["PALADIN_RETRIBUTION"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
+        { slot = "Weapon",      itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243990 },
         { slot = "Chest",       itemID = 243977 },
@@ -759,7 +756,7 @@ ns.ConsumablesDB["PALADIN_RETRIBUTION"] = {
         { slot = "Boots",       itemID = 243952 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "For weapon enchant, Enchant Weapon - Arcane Mastery is recommended. Other secondary stat enchants can also be competitive as well.",
+    enchantGuide = "For weapon enchant, Enchant Weapon - Rite of the Hash'ey is recommended. Single secondary stat enchants can also be competitive as well.",
     gems = {
         { label = "Eversong Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240892 },
@@ -873,23 +870,22 @@ ns.ConsumablesDB["ROGUE_ASSASSINATION"] = {
         { slot = "Boots",       itemID = 243983 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "You'll want to use Enchant Weapon - Berserker's Rage generally, as Haste is one of our most important secondary stats. Other secondary stat enchants, such as crit, can be better in some situations, depending on your gear. Make sure to sim yourself using RaidBots to optimize this.",
+    enchantGuide = "You'll want to use Enchant Weapon - Rite of the Hash'ey, as it is simply the strongest enchant numerically, but this can sometimes vary with gear. Make sure to sim yourself using RaidBots to optimize this.",
     gems = {
         { label = "Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240892 },
-        { label = "Gem", itemID = 240906 },
     },
-    gemGuide = "You'll want to use Indecipherable Eversong Diamond as your Diamond, and then stack Flawless Quick Garnet gems. The additional damage from the crit diamond is generally not worth it.\n\nFor the remaining gem slots, always prioritize Critical Strike, Haste, and Mastery when possible. Depending on your Gear, you might have to make swaps to gems that are Haste focused or Mastery focused, instead of the recommended Flawless Quick Garnet gems. This is simply a part of the min-maxing during gearing and can occur when you have too much of a certain stat. Make sure to sim yourself using RaidBots to optimize this.",
+    gemGuide = "You'll want to use Indecipherable Eversong Diamond as your Diamond, and then stack Flawless Masterful Peridot gems. The additional damage from the crit diamond is generally not worth it.\n\nFor the remaining gem slots, always prioritize Critical Strike, Haste, and Mastery when possible. Depending on your Gear, you might have to make swaps to gems that are Crit-focused or Mastery-focused, instead of the recommended Flawless Masterful Peridot gems. This is simply a part of the min-maxing during gearing and can occur when you have too much of a certain stat. Make sure to sim yourself using RaidBots to optimize this.",
     consumables = {
-        { label = "Both Weapons", itemID = 243973 },
-        { label = "Flask", itemID = 241324 },
-        { label = "Combat Potion", itemID = 241308 },
+        { label = "Both Weapons", itemID = 273072 },
+        { label = "Flask", itemID = 241324, alt = { itemID = 241326 } },
+        { label = "Combat Potion", itemID = 271887, alt = { itemID = 241308 } },
         { label = "Health Potion", itemID = 271884 },
         { label = "Weapon Buff", itemID = 243734 },
         { label = "Augment Rune", itemID = 259085 },
         { label = "Food", itemID = 255845 },
     },
-    consumableGuide = "The best Flask for Assassination Rogue is Flask of the Blood Knights, as it gives Haste, which is one of our best stats.\n\nThe best combat potion for Assassination Rogue is Light's Potential.\n\nThe best healing potion for Assassination Rogue is Concentrated Silvermoon Health Potion.\n\nThalassian Phoenix Oil will be the best weapon buff for Assassination Rogue, as it gives us our main secondary stats. Make sure to apply it to both daggers.\n\nWith Midnight, the new Augment Rune is Void-Touched Augment Rune.\n\nAssassination Rogue wants to eat feast buffs such as Silvermoon Parade for the Agility. Secondary stat food is competitive, but you will want to ensure you're getting Critical Strike and Haste.",
+    consumableGuide = "The best Flask for Assassination Rogue is Flask of the Blood Knights, Flask of the Shattered Sun, or Flask of the Magisters. Any of the 3 are acceptable and will be better depending on gear/talents/situation.\n\nThe best combat potion for Assassination Rogue is Liquid Luster, Light's Potential, or Potion of Recklessness. Any of the 3 are acceptable and will be better depending on gear/talents/situation.\n\nThe best healing potion for Assassination Rogue is Concentrated Silvermoon Health Potion.\n\nThalassian Phoenix Oil will be the best weapon buff for Assassination Rogue, as it gives us our main secondary stats. Apply it to both daggers.\n\nWith Midnight, the new Augment Rune is Void-Touched Augment Rune.\n\nAssassination Rogue wants to eat feast buffs such as Silvermoon Parade for Agility. Secondary stat food is competitive, but you will want to ensure you're getting Critical Strike and Haste.",
 }
 
 ns.ConsumablesDB["ROGUE_OUTLAW"] = {
@@ -935,7 +931,7 @@ ns.ConsumablesDB["ROGUE_SUBTLETY"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "Higher gear levels in season two make secondary stat enchants become competitive options, you can still use Enchant Weapon - Acuity of the Ren'dorei.\nSingle Stat enchants (Enchant Weapon - Arcane Mastery, Enchant Weapon - Berserker's Rage, Enchant Weapon - Worldsoul Tenacity or Enchant Weapon - Jan'alai's Precision), will be used instead on both weapons. Mastery is typically the best of the secondary stat enchants early on, while others compete when we get closer to best in slot gear levels.\n\nMain Hand: Enchant Weapon - Arcane Mastery\nOff Hand: Enchant Weapon - Arcane Mastery",
+    enchantGuide = "Subtlety can utilize all stats well, which makes the random stat proc enchant,Enchant Weapon - Rite of the Hash'ey, the best choice.\nThe agility and secondary stat enchants are strong alternatives even tho slightly worse. options.\nThis means you can still use Enchant Weapon - Acuity of the Ren'dorei or single stat enchants (Enchant Weapon - Arcane Mastery, Enchant Weapon - Berserker's Rage, Enchant Weapon - Worldsoul Tenacity or Enchant Weapon - Jan'alai's Precision) if they are cheaper.\nAnd opt for Enchant Weapon - Rite of the Hash'ey for your crafted dagger, or once you get a strong mainhand weapon.\n\nMain Hand: Enchant Weapon - Rite of the Hash'ey\nOff Hand: Enchant Weapon - Rite of the Hash'ey",
     gems = {
         { label = "Eversong Diamond", itemID = 240983 },
         { label = "Other Gems", itemID = 240900 },
@@ -945,8 +941,8 @@ ns.ConsumablesDB["ROGUE_SUBTLETY"] = {
     },
     gemGuide = "For maximum damage, you will want to use Indecipherable Eversong Diamond as your Eversong Diamond. The remaining slots are filled with either of the ones listed below:\n\nAmethyst: Flawless Quick Amethyst / Flawless Deadly Amethyst\nPeridot: Flawless Masterful Peridot\nGarnet: Flawless Masterful Garnet\n\nWhich ones you use does not matter. The gem selection can differ depending on your stats, so always use a simulation if you want the optimal result.",
     consumables = {
-        { label = "Weapon - Main Hand", itemID = 244031 },
-        { label = "Weapon - Off Hand", itemID = 244031 },
+        { label = "Weapon - Main Hand", itemID = 273072 },
+        { label = "Weapon - Off Hand", itemID = 273072 },
         { label = "Flask", itemID = 241322, alt = { itemID = 241326 } },
         { label = "Combat Potion", itemID = 241308, alt = { itemID = 241288 } },
         { label = "Health Potion", itemID = 271884 },
@@ -955,7 +951,7 @@ ns.ConsumablesDB["ROGUE_SUBTLETY"] = {
         { label = "Augment Rune", itemID = 259085 },
         { label = "Food", itemID = 255845, alt = { itemID = 242275 } },
     },
-    consumableGuide = "The best Flask for Subtlety Rogues is between Flask of the Shattered Sun and Flask of the Magisters. Which one is better will usually depend on your gear, and its best to use a simulation to compare. Flask of the Magisters is likely the better option.\n\nIf you are below the haste breakpoints (1100 in Single Target / 800 for Mythic+), its advised to use Fleeting Flask of the Blood Knights instead.\n\nWhile there are many options for potions, Subtlety Rogues will use Light's Potential.\nPotion of Recklessness becomes the best option if you get Mastery.\n\nThe technically best potion is Draught of Rampant Abandon, but its tricky to use. The void pools spawned by this poison silence you, which means you need to actively run out of them to use abilities. There is a short grace period before the silence effect applies. Using the potion, it seemed to proc roughly 3, often 4 times during the duration. Attacking a dummy was possible for the entire time, but it did need some practice and good positioning. The use of the potion is only recommended for encounters with big hitboxes, some amount of boss movement, or with a low amount of mechanical overhead to allow you to focus on avoiding the zones.\n\nThe best healing potion for Subtlety Rogues is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Subtlety Rogues, the best option is listed below:\n\nMain Hand: Thalassian Phoenix Oil\nOff Hand: Thalassian Phoenix Oil\n\nNote: Adamantite Sharpening Stone technically perform slightly better as buff for your main hand weapon. It is likely unintentional for this item to still function on current gear, so could stop working with any hotfix. This option is only relevant at the start of the season before your first craft due to the Item Level restriction.\n\nWith Midnight, the new Augment Rune is Void-Touched Augment Rune.\n\nIn Midnight, Subtlety Rogues are most likely to use personal stat food instead of feast buffs because the large item level jump has reduced the value of Agility relative to Secondary stats. As always, sim your character to check which food is the best for your configuration of Secondary stats.\n\nFeast: Silvermoon Parade\nPersonal Food: Royal Roast",
+    consumableGuide = "The best Flask for Subtlety Rogues is between Flask of the Shattered Sun and Flask of the Magisters. Which one is better will usually depend on your gear, and its best to use a simulation to compare. Flask of the Magisters is likely the better option.\n\nIf you are below the haste breakpoints of 700, it's advised to use Fleeting Flask of the Blood Knights instead.\n\nWhile there are many options for potions, Subtlety Rogues will use Light's Potential.\nPotion of Recklessness becomes the best option if you get Mastery.\n\nThe technically best potion is Draught of Rampant Abandon, but it's tricky to use. The void pools spawned by this poison silence you, which means you need to actively run out of them to use abilities. There is a short grace period before the silence effect applies. Using the potion, it seemed to proc roughly 3, often 4 times during the duration. Attacking a dummy was possible for the entire time, but it did need some practice and good positioning. The use of the potion is only recommended for encounters with big hitboxes, some amount of boss movement, or with a low amount of mechanical overhead to allow you to focus on avoiding the zones.\n\nThe best healing potion for Subtlety Rogues is Concentrated Silvermoon Health Potion.\n\nFor their weapons, Subtlety Rogues, the best option is listed below:\n\nMain Hand: Thalassian Phoenix Oil\nOff Hand: Thalassian Phoenix Oil\n\nWith Midnight, the new Augment Rune is Void-Touched Augment Rune.\n\nIn Midnight, Subtlety Rogues are most likely to use personal stat food instead of feast buffs because the large item level jump has reduced the value of Agility relative to Secondary stats. As always, sim your character to check which food is the best for your configuration of Secondary stats.\n\nFeast: Silvermoon Parade\nPersonal Food: Royal Roast",
 }
 
 ns.ConsumablesDB["SHAMAN_ELEMENTAL"] = {
@@ -992,8 +988,8 @@ ns.ConsumablesDB["SHAMAN_ELEMENTAL"] = {
 ns.ConsumablesDB["SHAMAN_ENHANCEMENT"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 244031 },
-        { slot = "Off Hand",    itemID = 243973 },
+        { slot = "Weapon",      itemID = 273072 },
+        { slot = "Off Hand",    itemID = 273072 },
         { slot = "Head",        itemID = 244007 },
         { slot = "Shoulders",   itemID = 243991 },
         { slot = "Bracers",     itemID = 275707 },
@@ -1002,7 +998,7 @@ ns.ConsumablesDB["SHAMAN_ENHANCEMENT"] = {
         { slot = "Boots",       itemID = 243953 },
         { slot = "Ring",        itemID = 243957 },
     },
-    enchantGuide = "In Midnight Season 2, with the rising value of secondary stats we've made the shift over, using Enchant Weapon - Arcane Mastery paired with Enchant Weapon - Berserker's Rage.",
+    enchantGuide = "In Midnight Season 2, due to the large number of gear changes elsewhere, the new enchant - Enchant Weapon - Rite of the Hash'ey - has become the ideal pick on both weapons, regardless of whether you remain above 80% health or not.",
     gems = {
         { label = "Eversong Diamo", itemID = 240967 },
         { label = "Other Gem", itemID = 240900 },
@@ -1014,13 +1010,13 @@ ns.ConsumablesDB["SHAMAN_ENHANCEMENT"] = {
     gemGuide = "It's generally best to sim your character to find the absolute best gems to put in gear. Everyone has access to a minimum of 3, as each piece of jewellery always comes with one socket each. In Midnight, Agility is valued so highly that you should always be using an Eversong Diamond in your first socket. After that, you should mix gems based on gear needs:\n\nWith 5+ Sockets\nEversong Diamond &ndash; Powerful Eversong Diamond.\nOther Gems &ndash; one each of Flawless Quick Amethyst, Flawless Masterful Peridot, Flawless Masterful Garnet & Flawless Masterful Lapis\nWithout 5+ Sockets\nEversong Diamond &ndash; Indecipherable Eversong Diamond.\nOther Gems &ndash; a mix of Flawless Quick Amethyst & Flawless Masterful Peridot",
     consumables = {
         { label = "Belt", itemID = 275707 },
-        { label = "Flask", itemID = 241324 },
-        { label = "Combat Potion", itemID = 241288 },
+        { label = "Flask", itemID = 241322 },
+        { label = "Combat Potion", itemID = 271887 },
         { label = "Health Potion", itemID = 271884 },
         { label = "Augment Rune", itemID = 259085 },
         { label = "Food", itemID = 255845, alt = { itemID = 242275 } },
     },
-    consumableGuide = "In Midnight Season 2, due to the limited amount of Haste available, the best general flask to use is Flask of the Blood Knights to help keep your stats in order. Depending on your current gear setup, Flask of the Magisters is also an option when lacking Mastery. You can also obtain these from a Cauldron of Sin'dorei Flasks if your group is using one.\n\nGoing into Season 2 of Midnight, due to a number of gear system changes we've switched over to Potion of Recklessness. We want this to trigger Mastery, so it may require some gear shifting to consistently do so. If you can't consistently trigger this stat, then Light's Potential\nis almost the same in value. These can also be obtained from an Voidlight Potion Cauldron if your group is using one.\n\nThe best healing potion for Enhancement Shaman is the new Concentrated Silvermoon Health Potion added in Patch 12.1.\n\nUnfortunately, due to the Weapon Imbues (Flametongue Weapon and Windfury Weapon) that Enhancement uses, it CANNOT use weapon enhancements such as oils or whetstones at the same time. Due to the way that Elemental Weapons works, opting out of these is not an option, so we do not use runes.\n\nThe Augment Rune available in Midnight is Void-Touched Augment Rune. These can be acquired from the weekly housing quest, but bear in mind they're lost on death and are very expensive!\n\nIn Midnight Season 2 Agility continues to be the most valuable stat, and while secondary stat foods give slightly more, it doesn't do enough to push it off the menu.\n\nFeast: Silvermoon Parade\nPersonal Food: Royal Roast",
+    consumableGuide = "In Midnight Season 2, Flasks are now very volatile, and which you use depends on your other stats. As annoying as it is to not have a catch all answer, there's a few rules to decide which to use, so simming your character may be best here:\n\nFlask of the Magisters &ndash; If your Critical Strike is higher than your Mastery.\nFlask of the Shattered Sun &ndash; If your Mastery is higher than your Critical Strike.\nFlask of the Blood Knights &ndash; If your gear has next to no Haste, this can raise the floor in an emergency.\n\nFlasks are best used this season to balance out the needs of the three stats, since they're all extremely close to each other, and can be influenced by cantrips and gear you're wearing. You can also obtain these from a Cauldron of Sin'dorei Flasks if your group is using one.\n\nEven worse than Flasks, Potions are more complicated in Season 2 as well. There's use cases for three separate potions, as annoying as that is:\n\nPotion of Recklessness &ndash; in AoE or you can guarantee it triggers Mastery or Critical Strike, this is strongest.\nLiquid Luster &ndash; Stormbringer pre-potting 12s before the pull for Ascendance is roughly equal.\nLight's Potential &ndash; at low gear or if you don't want the hassle, it's a fine backup.\n\nAt different gear breakpoints Potion of Recklessness can fluctuate a lot for Stormbringer, but always stays the best for Totemic. Liquid Luster also needs to be pre-potted to ramp the effect for it to stay competitive buffing your Ascendance, so needs extra care when using it. These can also be obtained from an Voidlight Potion Cauldron if your group is using one.\n\nThe best healing potion for Enhancement Shaman is the new Concentrated Silvermoon Health Potion added in Patch 12.1.\n\nUnfortunately, due to the Weapon Imbues (Flametongue Weapon and Windfury Weapon) that Enhancement uses, it CANNOT use weapon enhancements such as oils or whetstones at the same time. Due to the way that Elemental Weapons works, opting out of these is not an option, so we do not use runes.\n\nThe Augment Rune available in Midnight is Void-Touched Augment Rune. These can be acquired from the weekly housing quest, but bear in mind they're lost on death and are very expensive!\n\nIn Midnight Season 2 Agility continues to be the most valuable stat, and while secondary stat foods give slightly more, it doesn't do enough to push it off the menu.\n\nFeast: Silvermoon Parade\nPersonal Food: Royal Roast",
 }
 
 ns.ConsumablesDB["SHAMAN_RESTORATION"] = {
@@ -1149,7 +1145,7 @@ ns.ConsumablesDB["WARLOCK_DESTRUCTION"] = {
 ns.ConsumablesDB["WARRIOR_ARMS"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 243973, alt = 244029 },
+        { slot = "Weapon",      itemID = 273072, alt = 243973 },
         { slot = "Head",        itemID = 243951, alt = 244007 },
         { slot = "Shoulders",   itemID = 243991, alt = 244019 },
         { slot = "Chest",       itemID = 243977, alt = 243947 },
@@ -1163,7 +1159,7 @@ ns.ConsumablesDB["WARRIOR_ARMS"] = {
         { label = "Other Gems", itemID = 240906, alt = 240890 },
         { label = "Gem", itemID = 240983 },
     },
-    gemGuide = "The Powerful Eversong Diamond is just barely starting to become stronger than Indecipherable Eversong Diamond, though versatility gems are not worth using to maximize the bonus.",
+    gemGuide = "The Powerful Eversong Diamond is just barely starting to become stronger than Indecipherable Eversong Diamond, though it requires more carefully juggling gems to maximize.",
     consumables = {
         { label = "Flask", itemID = 241324, alt = { itemID = 241326 } },
         { label = "Combat Potion", itemID = 241288, alt = { itemID = 241308 } },
@@ -1178,7 +1174,7 @@ ns.ConsumablesDB["WARRIOR_ARMS"] = {
 ns.ConsumablesDB["WARRIOR_FURY"] = {
     season = "Midnight Season 2",
     enchants = {
-        { slot = "Weapon",      itemID = 243973, alt = 244031 },
+        { slot = "Weapon",      itemID = 273072, alt = 243973 },
         { slot = "Head",        itemID = 243951, alt = 244007 },
         { slot = "Shoulders",   itemID = 243991, alt = 244019 },
         { slot = "Chest",       itemID = 243977, alt = 243947 },
@@ -1192,7 +1188,7 @@ ns.ConsumablesDB["WARRIOR_FURY"] = {
         { label = "Other Gems", itemID = 240900, alt = 240892 },
         { label = "Gem", itemID = 240983 },
     },
-    gemGuide = "The Powerful Eversong Diamond is just barely starting to become stronger than Indecipherable Eversong Diamond, though versatility gems are not worth using to maximize the bonus.",
+    gemGuide = "The Powerful Eversong Diamond is just barely starting to become stronger than Indecipherable Eversong Diamond, though it requires more carefully juggling gems to maximize.",
     consumables = {
         { label = "Flask", itemID = 241324, alt = { itemID = 241322 } },
         { label = "Combat Potion", itemID = 241288, alt = { itemID = 241308 } },

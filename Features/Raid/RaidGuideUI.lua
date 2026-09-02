@@ -113,17 +113,30 @@ local function Flagged(text, isUnsure)
     return text .. W:Tint("faint", "\194\160" .. UNSURE)
 end
 
--- A spell with no icon. Preferred over leaving the texture blank,
--- because a missing icon and a mechanic we have no spell id for are the
--- same thing to a reader and both mean "the client could not tell us".
-local ICON_UNKNOWN = "Interface\\Icons\\INV_Misc_QuestionMark"
+------------------------------------------------------------
+-- What a row shows when there is no spell behind it.
+--
+-- It was a question mark, on the reasoning that a missing icon and a
+-- missing spell id look the same to a reader and both mean "the client
+-- could not tell us". That reasoning was wrong about half the rows.
+--
+-- A good number of these are not abilities at all. "The split", "The
+-- quadrants", "The egg fall", "Platform eggs" -- they are STEPS, things
+-- the raid does in order, and there was never going to be a spell id
+-- for them. A question mark against a step says the addon failed to
+-- look something up, when nothing was missing.
+--
+-- So a step gets a numbered box: its position in its phase. That reads
+-- as sequence, which is what a step is. An ability we genuinely have no
+-- id for gets one too, which is honest in a different way -- "here is
+-- where this comes" is true, where "something went wrong" was not.
+------------------------------------------------------------
 
---- The client's icon for a spell, or the question mark.
+--- The client's icon for a spell, or nil when there is nothing to show.
 local function SpellIcon(spellID)
-    if not spellID then return ICON_UNKNOWN end
-    local tex = C_Spell and C_Spell.GetSpellTexture
-        and C_Spell.GetSpellTexture(spellID)
-    return tex or ICON_UNKNOWN
+    if not spellID then return nil end
+    return C_Spell and C_Spell.GetSpellTexture
+        and C_Spell.GetSpellTexture(spellID) or nil
 end
 
 ------------------------------------------------------------
@@ -332,6 +345,19 @@ local function AcquireIcon(parent)
         b.hl = b:CreateTexture(nil, "HIGHLIGHT")
         b.hl:SetAllPoints()
         b.hl:SetColorTexture(1, 1, 1, 0.16)
+
+        -- The step box: a filled square carrying the step number, shown
+        -- in place of the texture when there is no spell behind the row.
+        b.box = b:CreateTexture(nil, "ARTWORK")
+        b.box:SetAllPoints()
+        b.box:Hide()
+        b.boxEdge = b:CreateTexture(nil, "BORDER")
+        b.boxEdge:SetPoint("TOPLEFT", -1, 1)
+        b.boxEdge:SetPoint("BOTTOMRIGHT", 1, -1)
+        b.boxEdge:Hide()
+        b.num = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        b.num:SetPoint("CENTER")
+        b.num:Hide()
 
         b:SetScript("OnEnter", function(self)
             if not self.spellID then return end
@@ -840,7 +866,11 @@ function UI:Refresh()
     --- is the sum of wrapped strings and the icon has to be placed
     --- against the row's TOP once that top is known -- which it is,
     --- immediately, so the icon goes down first and the text after it.
-    local function Mechanic(x, cursor, w, mech)
+    --- `stepNo` is the mechanic's place in its phase, used only when
+    --- there is no spell to draw. Passed in rather than counted here:
+    --- the number has to match what the reader sees, and what they see
+    --- is the list AFTER the difficulty filter has run.
+    local function Mechanic(x, cursor, w, mech, stepNo)
         local top = cursor
         local textX = x + MECH_TEXTX
         local textW = w - MECH_TEXTX
@@ -854,9 +884,26 @@ function UI:Refresh()
 
         local icon = AcquireIcon(content)
         icon:SetPoint("TOPLEFT", content, "TOPLEFT", x, top + 1)
-        icon.tex:SetTexture(SpellIcon(spellID))
         icon.spellID = spellID
         icon.spellName = mechName
+
+        local tex = SpellIcon(spellID)
+        if tex then
+            icon.tex:SetTexture(tex)
+            icon.tex:Show()
+            icon.box:Hide()
+            icon.boxEdge:Hide()
+            icon.num:Hide()
+        else
+            icon.tex:Hide()
+            icon.box:SetColorTexture(W:Color("faint"))
+            icon.box:Show()
+            icon.boxEdge:SetColorTexture(0, 0, 0, 0.55)
+            icon.boxEdge:Show()
+            icon.num:SetText(tostring(stepNo))
+            icon.num:SetTextColor(W:Color("muted"))
+            icon.num:Show()
+        end
         -- No spell id means the client has nothing to show, so the
         -- button should not pretend to be interactive.
         icon:EnableMouse(spellID and true or false)
@@ -955,8 +1002,8 @@ function UI:Refresh()
                             line, block.colour, block.gap)
                     end
                 end
-                for _, mech in ipairs(block.mechanics or {}) do
-                    cursor = Mechanic(PAD + 10, cursor, inner - 20, mech)
+                for i, mech in ipairs(block.mechanics or {}) do
+                    cursor = Mechanic(PAD + 10, cursor, inner - 20, mech, i)
                 end
             end
         end
@@ -989,36 +1036,39 @@ function UI:Refresh()
         { lines = { boss.oneLiner }, plain = true, colour = "muted", gap = 8 },
         { lines = boss.rules, colour = "text" },
     }
-    if boss.changesUnknown and diff ~= "normal" then
-        -- Said out loud, because the alternative is silence and silence
-        -- reads as "nothing changes" -- a claim no source has made about
-        -- this fight. Printed once rather than per difficulty: it is a
-        -- fact about the source, not about Heroic.
-        pinned[#pinned + 1] = {
-            head = "What " .. (diff == "mythic" and "Mythic" or "Heroic")
-                .. " changes",
-            accent = DiffTone(diff),
-            lines = {
-                "Not recorded. The only guide that covers this fight never "
-                    .. "separated the difficulties, so read this as unknown "
-                    .. "rather than as nothing.",
-            },
-            plain = true,
-            colour = "faint",
-        }
-    else
-        for _, key in ipairs({ "heroic", "mythic" }) do
-            if G:Rank(diff) >= G:Rank(key) then
-                local lines = G:ChangesFor(boss, key)
-                if lines then
-                    pinned[#pinned + 1] = {
-                        head = "What " .. (key == "mythic" and "Mythic" or "Heroic")
-                            .. " changes",
-                        accent = DiffTone(key),
-                        lines = lines,
-                        colour = "text",
-                    }
-                end
+    ------------------------------------------------------------
+    -- Per difficulty, not per boss.
+    --
+    -- `changesUnknown` used to short-circuit the whole section: one flag
+    -- covering both difficulties, so a boss whose Heroic notes existed
+    -- and whose Mythic ones did not printed "Not recorded" over the top
+    -- of the Heroic notes it had. That is worse than silence -- it is a
+    -- claim of ignorance the guide can disprove two lines further down.
+    --
+    -- So each difficulty answers for itself: what is written, or an
+    -- admission for that one alone. Silence stays reserved for "nothing
+    -- changes", which is a real answer and a different one.
+    ------------------------------------------------------------
+    for _, key in ipairs({ "heroic", "mythic" }) do
+        if G:Rank(diff) >= G:Rank(key) then
+            local head = "What " .. (key == "mythic" and "Mythic" or "Heroic")
+                .. " changes"
+            local lines = G:ChangesFor(boss, key)
+            if lines then
+                pinned[#pinned + 1] = {
+                    head = head, accent = DiffTone(key),
+                    lines = lines, colour = "text",
+                }
+            elseif boss.changesUnknown then
+                pinned[#pinned + 1] = {
+                    head = head, accent = DiffTone(key),
+                    lines = {
+                        "Not recorded -- read it as unknown rather than as "
+                            .. "nothing. No source this guide is built on "
+                            .. "separates out this difficulty.",
+                    },
+                    plain = true, colour = "faint",
+                }
             end
         end
     end

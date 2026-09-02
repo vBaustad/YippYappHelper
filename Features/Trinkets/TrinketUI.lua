@@ -28,6 +28,7 @@ local PAD = (ns.Shell and ns.Shell.PAD) or 12
 local ROW_H = 22
 local TABS = {
     { id = "spec",    label = "My Spec" },
+    { id = "guide",   label = "Guide" },
     { id = "council", label = "Loot Council" },
 }
 
@@ -169,6 +170,11 @@ end
 
 --- Whatever the active tab is listing, for search and suggestions.
 local function currentEntries()
+    if state.tab == "guide" then
+        local specKey = T:GetPlayerSpecKey()
+        if not specKey then return {} end
+        return T:GuideRows(specKey) or {}
+    end
     if state.tab == "spec" then
         local specKey = T:GetPlayerSpecKey()
         if not specKey then return {} end
@@ -763,6 +769,14 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
     local warning
     if T:IsStaleTier(tier) and not T:IsStale() then
         warning = T:StaleSpecText(tier, provider)
+        -- Point at the tab that is not out of date. A caveat that only
+        -- says "these numbers are old" leaves the reader with nothing to
+        -- do about it, and there is now something: the class guide
+        -- grades the same trinkets and has been revised for this season.
+        if T:HasTierList(specKey) and not T:IsTierListStale(specKey) then
+            warning = warning ..
+                " The Guide tab has this season's tier list for you meanwhile."
+        end
     end
 
     -- Without a curve there are no bars and no stepper, and dropping a
@@ -985,6 +999,160 @@ function UI:RenderMySpec(content, width, viewH, rowScale)
             info.unit == "score" and "Modelled" or "Simmed", stamp, how,
             info.site))
         y = y - ROW_H - 6
+    end
+
+    return y
+end
+
+------------------------------------------------------------
+-- Guide view
+--
+-- The same trinkets, graded by the people who write the class guide
+-- rather than by a simulator. It answers a different question and so it
+-- is drawn differently: no bars, no percentages, no item level stepper,
+-- because none of those are what a letter grade is made of.
+--
+-- Bands rather than a numbered list. Within a tier the guide states no
+-- order -- the three trinkets in S are three trinkets in S -- and
+-- numbering them 1, 2, 3 would invent a ranking the author declined to
+-- give. The bands are ordered; their contents are not.
+--
+-- Every band is drawn, never a top-N. The lower bands are where the
+-- "do not bother with this one" information lives, and that is most of
+-- the value of a tier list over a shortlist.
+------------------------------------------------------------
+function UI:RenderGuide(content, width, viewH, rowScale)
+    local y = -6
+    rowScale = rowScale or 1
+    local specKey = T:GetPlayerSpecKey()
+
+    local function say(text)
+        local fs = AcquireRow(self, content)
+        fs:SetPoint("TOPLEFT", PAD, y)
+        fs:SetWidth(width - PAD * 2)
+        fs.icon:SetTexture(nil)
+        alignToIcons(fs, rowScale)
+        fs.text:SetText(text)
+        return y - ROW_H
+    end
+
+    if not specKey then
+        return say(ns.Widgets:Tint("muted", "Could not determine your specialization."))
+    end
+
+    local rows = T:GuideRows(specKey)
+    if not rows or #rows == 0 then
+        return say(("|cff%sNo guide tier list for %s.|r"):format(
+            ns.Widgets:Hex("muted"), T:SpecName(specKey)))
+    end
+
+    -- The pairing advice, above the ladder. This is the part that says
+    -- "one on-use and one passive" and which stats the slot is being
+    -- asked for, and it frames every grade below it -- so it goes first,
+    -- for the same reason the sim view puts its caveat first.
+    local intro = T:TierIntro(specKey)
+    if intro and intro ~= "" then
+        local note = AcquireNote(self, content, width - PAD * 2, intro)
+        note:SetPoint("TOPLEFT", PAD, y - 2)
+        y = y - (note:GetStringHeight() or 30) - 10
+    end
+
+    if T:IsTierListStale(specKey) then
+        local block = (ns.TrinketTiers or {})[specKey] or {}
+        local note = AcquireNote(self, content, width - PAD * 2,
+            ("|cffffcc00This guide was written for %s.|r Wowhead has not revised it for %s yet, so the grades below are the previous season's.")
+            :format(block.season or "an earlier season",
+                    ns.TRINKET_TIER_TARGET_SEASON or "the current season"))
+        note:SetPoint("TOPLEFT", PAD, y - 2)
+        y = y - (note:GetStringHeight() or 20) - 10
+    end
+
+    local hdr = AcquireRow(self, content)
+    hdr:SetPoint("TOPLEFT", PAD, y)
+    hdr:SetWidth(width - PAD * 2)
+    hdr.icon:SetTexture(nil)
+    alignToIcons(hdr, rowScale)
+    hdr.text:SetText(("%s  |cff666666graded by %s|r"):format(
+        T:ColorSpec(specKey), ns.TRINKET_TIER_SOURCE or "the class guide"))
+    placeValue(hdr, VALUE_W * rowScale)
+    hdr.value:SetText(ns.Widgets:Tint("faint", "drops from"))
+    y = y - ROW_H - 4
+
+    local rowW = (width - PAD * 2) / rowScale
+    -- No bars here, so the name gets the room the sim view spends on
+    -- them. The value column still holds "Mythic Plus", which is wider
+    -- than "344  -3.5%" is, so it keeps its width rather than shrinking.
+    local nameW = rowW - TEXT_X - VALUE_W - 8
+
+    local needle = state.search
+    local shown, hidden = 0, 0
+    for _, row in ipairs(rows) do
+        if matches(row, needle) then
+            -- The band heading is suppressed while searching: a filtered
+            -- list is not a ladder any more, and a lone "S" above one
+            -- result reads as a claim about the search rather than about
+            -- where that trinket sits.
+            if row.first and needle == "" then
+                local band = AcquireRow(self, content)
+                band:SetPoint("TOPLEFT", PAD, y)
+                band:SetWidth(width - PAD * 2)
+                band.icon:SetTexture(nil)
+                alignToIcons(band, rowScale)
+                band.text:SetText(("%s  |cff666666%d trinket%s|r"):format(
+                    T:ColorTier(row), row.count, row.count == 1 and "" or "s"))
+                band.value:SetText("")
+                y = y - ROW_H
+            end
+
+            local r = AcquireRow(self, content)
+            r:SetScale(rowScale)
+            r:SetPoint("TOPLEFT", PAD / rowScale, y / rowScale)
+            r:SetWidth(rowW)
+            placeValue(r, VALUE_W)
+            -- The grade sits in the rank column, which is where the
+            -- reader's eye already goes for "where does this place".
+            -- Repeated on every row rather than left to the band
+            -- heading above, because a search hides those headings and
+            -- because a row scrolled away from its own band still has
+            -- to say what it is.
+            r.rank:SetText(T:ColorTier(row))
+            bindClicks(r, nil)
+            applyItem(r, row.id, row.name)
+            r.text:SetWidth(nameW)
+            fitHover(r)
+            r.value:SetText(row.from
+                and ns.Widgets:Tint("faint", row.from) or "")
+            y = y - ROW_H
+
+            -- The author's note, under the row it is about. Wrapped and
+            -- full-length: this is the reason to be on this tab at all,
+            -- and a note cut to one line would lose the half that says
+            -- what to pair the thing with.
+            if row.note then
+                local note = AcquireNote(self, content,
+                    width - PAD * 2 - TEXT_X, row.note)
+                note:SetPoint("TOPLEFT", PAD + TEXT_X, y - 2)
+                y = y - (note:GetStringHeight() or ROW_H) - 6
+            end
+
+            shown = shown + 1
+        else
+            hidden = hidden + 1
+        end
+    end
+
+    if shown == 0 then
+        y = say(("|cff%sNothing in the %s guide matches \"%s\".|r"):format(
+            ns.Widgets:Hex("muted"), T:SpecName(specKey), needle))
+    elseif hidden > 0 then
+        local fs = AcquireRow(self, content)
+        fs:SetPoint("TOPLEFT", PAD, y)
+        fs:SetWidth(width - PAD * 2)
+        fs.icon:SetTexture(nil)
+        alignToIcons(fs, rowScale)
+        fs.text:SetText(ns.Widgets:Tint("faint",
+            ("%d more graded, hidden by the search."):format(hidden)))
+        y = y - ROW_H
     end
 
     return y
@@ -1273,6 +1441,8 @@ function UI:Draw(rowScale)
     local endY
     if state.tab == "spec" then
         endY = self:RenderMySpec(content, width, viewH, rowScale)
+    elseif state.tab == "guide" then
+        endY = self:RenderGuide(content, width, viewH, rowScale)
     else
         -- Loot Council is a lookup, not a chart. It carries no bars, and
         -- twenty-odd trinkets with their specs expanded underneath need
@@ -1375,11 +1545,18 @@ function UI:BuildFilters(bar, ctx)
 
     function self:LayoutStyles()
         local specKey = T:GetPlayerSpecKey()
+        -- The guide grades a spec's trinkets once, not once per target
+        -- count -- where a fight style matters the author says so in the
+        -- note. Leaving the buttons up on that tab would offer a control
+        -- that changes nothing, which reads as the page being broken
+        -- rather than as the distinction not existing.
+        local wanted = state.tab ~= "guide"
         local sx = 0
         for i = #STYLES, 1, -1 do
             local def = STYLES[i]
             local btn = styleButtons[def.id]
             if btn then
+                btn:SetShown(wanted)
                 btn.label:SetText(T:StyleLabel(specKey, def.id))
                 -- Room for the word plus the padding a tab reads with;
                 -- a floor so "AoE" and "Raid" still present as tabs
@@ -1729,9 +1906,30 @@ if ns.Shell then
         -- the curve unreadable -- which is the only reason to draw them.
         minWidth = 700,
 
+        -- Guide leads when the sim does not.
+        --
+        -- bloodmallet re-sims a season a few specs at a time, so for the
+        -- first weeks some specs' rankings are still last tier's -- they
+        -- have no opinion at all on anything that has dropped since, and
+        -- the page opened on them by default. The guide for those same
+        -- specs is current. The shell takes the first tab as the landing
+        -- one, so putting Guide there for a stale spec lands on the
+        -- advice that is actually about this season.
+        --
+        -- A reorder rather than a redirect: My Spec is still one click
+        -- away and still says what it is, and a remembered choice still
+        -- beats both. Hiding the sim would be a bigger claim than "this
+        -- one is out of date", which is all that is known.
         subTabs = function()
             local out = {}
-            for _, def in ipairs(TABS) do
+            local order = TABS
+            local specKey = T:GetPlayerSpecKey()
+            if specKey and T:HasTierList(specKey)
+                and not T:IsTierListStale(specKey)
+                and T:IsSpecSimStale(specKey) then
+                order = { TABS[2], TABS[1], TABS[3] }
+            end
+            for _, def in ipairs(order) do
                 out[#out + 1] = { id = def.id, label = def.label, width = 110 }
             end
             return out

@@ -46,7 +46,12 @@ ns.SmoothFrame(frame)
 frame:Hide()
 ns.TeleportFrame = frame
 
+-- ESC to close, skipped when this is the shell's page content rather
+-- than a window of its own. See the note in MythicPlusUI.lua: the
+-- entry lands after the shell's, so Escape closed the page and left
+-- the window around it.
 frame:SetScript("OnShow", function()
+    if frame.inAppMode then return end
     tinsert(UISpecialFrames, "YippYappTeleports")
 end)
 frame:SetScript("OnHide", function()

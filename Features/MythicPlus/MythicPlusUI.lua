@@ -41,8 +41,17 @@ SlashCmdList.YYHKEYS = function()
     if ns.OpenTo then ns:OpenTo("mythicplus") end
 end
 
--- ESC to close (standalone)
+-- ESC to close, and only while this is a window of its own.
+--
+-- Mounted into the shell the frame is the page CONTENT, and a
+-- registration made from here lands in UISpecialFrames after the
+-- shell's own -- so Escape hid the page and left the window standing
+-- empty around it, which took two presses to close and looked broken
+-- on the first. It also defeated the shell's combat guard: the shell
+-- takes itself out of the list in combat precisely because this page
+-- protects it, and this entry put the protected frame straight back.
 frame:SetScript("OnShow", function()
+    if frame.inAppMode then return end
     tinsert(UISpecialFrames, "YippYappMythicPlus")
 end)
 frame:SetScript("OnHide", function()

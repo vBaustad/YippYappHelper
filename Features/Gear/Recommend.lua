@@ -65,8 +65,20 @@ function ns:GetDiscountAchievementName(track)
     return track .. " " .. ns.DISCOUNT_ACHIEVEMENT_SUFFIX
 end
 
--- Cache achievement status (checked once per session)
+-- Cache achievement status.
+--
+-- Once per session was once too few. The discount is account-wide and
+-- earned by crossing an item level in every slot, which is a thing that
+-- happens WHILE the player is looking at this panel -- and the answer
+-- was cached false from login, so the prices stayed doubled until a
+-- reload. That is the one moment the numbers matter most: somebody has
+-- just crossed a threshold and is deciding what to spend next.
 local discountCache = {}
+
+--- Forget the cached achievement answers. For ACHIEVEMENT_EARNED.
+function ns:InvalidateDiscountCache()
+    wipe(discountCache)
+end
 
 function ns:HasDiscountAchievement(crestTrack)
     if discountCache[crestTrack] ~= nil then
@@ -1707,6 +1719,47 @@ function ns:GetTrackCompletion(crestTrack)
     return out
 end
 
+------------------------------------------------------------
+-- The slots a tier's bill is waiting on.
+--
+-- ns:GetSeasonDemand prices every slot that could ever want this crest.
+-- These are the ones with nothing of the tier in them yet: no per-slot
+-- rule can see them, because there is no piece to hang a rule on, and no
+-- plan can order them, because there is nothing to spend on. They are
+-- most of the bill on any character below the top track.
+--
+-- Weapons come back separately, because they are the only slots whose
+-- priority makes them worth naming on their own -- ns.SLOT_PRIORITY puts
+-- both at 5, a step clear of chest and legs, and the plan cannot act on
+-- that for a slot it cannot spend in. A Champion 6/6 main hand under
+-- Hero is the commonest shape there is and the ordering never sees it.
+--
+-- An EMPTY off hand is left out. The advisor cannot tell a dual wielder
+-- waiting on a drop from a staff user whose off hand is bare all
+-- expansion, and only one of those two should be told to bank crests for
+-- it. Main hand is always kept; every spec has one.
+--
+-- Whether the two share a watermark line is settled now: two one-handers
+-- do, as a ranked pair, and anything else in the off hand does not. It
+-- is still not in ns.SLOT_PAIRS, because that table is a constant and
+-- this one depends on what is held -- see PairFor in Core/Core.lua.
+------------------------------------------------------------
+function ns:GetAwaitedSlots(season)
+    local out = { count = 0, cost = 0, arms = {}, armCost = 0 }
+    for _, pc in ipairs(season and season.pieces or {}) do
+        if pc.awaited then
+            out.count = out.count + 1
+            out.cost  = out.cost + (pc.cost or 0)
+            if (ns.SLOT_PRIORITY or {})[pc.slotID] == 5
+                and (pc.slotID == 16 or ns:GetSlotInfo(pc.slotID)) then
+                out.arms[#out.arms + 1] = pc.slotName
+                out.armCost = out.armCost + (pc.cost or 0)
+            end
+        end
+    end
+    return out
+end
+
 --- One line a player can act on, for a whole track, plus a second line
 --- when something has already claimed part of the wallet.
 ---
@@ -1717,11 +1770,30 @@ end
 --- read a paragraph about wallets before reaching the slots it was
 --- about. Per-slot advice belongs on the per-slot rows; a fact about a
 --- whole wallet belongs on the wallet.
-function ns:GetTrackPolicyLine(crestTrack)
+local function TrackPolicySentence(self, crestTrack)
+    local ns = self
     local p = ns:GetTrackPolicy(crestTrack)
     if not p then return nil end
 
     local pieces = p.count .. (p.count == 1 and " piece" or " pieces")
+
+    ------------------------------------------------------------
+    -- The count the bill is FOR.
+    --
+    -- Two numbers sat next to each other meaning different sets:
+    -- `p.count` is every piece on the track, `p.demand` prices only the
+    -- ones still climbing. Four pieces with two already capped read as
+    -- "4 pieces, 160 to finish them all", and the 160 was never for
+    -- four. Below, both come off `wanting`.
+    --
+    -- And "finish them all" over a single piece read as finishing every
+    -- item on the character -- the player's own report. One piece takes
+    -- "max it"; the plural keeps "max them".
+    ------------------------------------------------------------
+    local one   = p.wanting == 1
+    local todo  = p.wanting .. (one and " piece" or " pieces") ..
+        " short of the cap"
+    local bill  = p.demand .. (one and " to max it" or " to max them")
 
     -- What a craft has already taken off the top. Said here rather than
     -- folded into the sentences below because it is true of every one of
@@ -1790,24 +1862,21 @@ function ns:GetTrackPolicyLine(crestTrack)
             " held, " .. sd.earnable .. " still under the cap).", claim
     end
     if p.verdict == "max_now" then
-        return pieces .. ", " .. p.demand ..
-            " to finish them all and you hold " .. p.held ..
-            ". Max everything on this track.", claim
+        return todo .. ", " .. bill .. " and you hold " .. p.held .. ". " ..
+            (one and "Do it." or "Max everything on this track."), claim
     end
     if p.verdict == "max_farm" then
         -- The earnable half is stated as what the cap ALLOWS, not as
         -- crests "coming". Nothing arrives on its own: that number is
         -- content the player has not run yet, and it is only this
         -- week's allowance -- the cap rises again at reset.
-        return pieces .. ", " .. p.demand ..
-            " to finish them all. You hold " .. p.held ..
-            " and the cap allows " .. p.earnable ..
-            " more — earn it and every piece maxes.", claim
+        return todo .. ", " .. bill .. ". You hold " .. p.held ..
+            " and the cap allows " .. p.earnable .. " more — earn it and " ..
+            (one and "it maxes." or "every piece maxes."), claim
     end
     if p.verdict == "nothing_reachable" then
-        local line = pieces .. ", " .. p.demand ..
-            " to finish them all, you hold " .. p.held ..
-            ". Not enough to carry even one home"
+        local line = todo .. ", " .. bill .. ", you hold " .. p.held ..
+            ". Not enough" .. (one and "" or " to carry even one home")
         -- Whether that is a dead end or an evening's work is decided by
         -- the cap, not the wallet, and the two read identically without
         -- this. "Hold, or take a drop" on a track with 300 crests still
@@ -1826,9 +1895,9 @@ function ns:GetTrackPolicyLine(crestTrack)
         names[#names + 1] = piece.slotName
     end
     local rest = p.wanting - #p.canFinish
-    local line = pieces .. ", " .. p.demand ..
-        " to finish them all, you hold " .. p.held .. ". Enough for " ..
-        #p.canFinish .. " — " .. table.concat(names, ", ") .. "."
+    local line = todo .. ", " .. bill .. ", you hold " .. p.held ..
+        ". Enough for " .. #p.canFinish .. " — " ..
+        table.concat(names, ", ") .. "."
     if rest > 0 then
         if p.outgrown then
             line = line .. " The other " .. rest .. " want drops, not crests."
@@ -1845,6 +1914,124 @@ function ns:GetTrackPolicyLine(crestTrack)
                 ": the cap is reached, so drops do the rest."
         end
     end
+    return line, claim
+end
+
+------------------------------------------------------------
+-- ...and the half of the tier the sentence above cannot see.
+--
+-- Every verdict but two prices the pieces WORN on the track. That is the
+-- right set for "which of these can I afford tonight" and the wrong one
+-- for "am I nearly done with this crest", and the second question is the
+-- one a wallet gets hovered for. `awaiting` and `abundant` already speak
+-- in slots rather than pieces, so they are left alone -- appending here
+-- would have them say it twice.
+--
+-- This lives on the wallet and not on the slot rows on purpose. It is
+-- one fact about sixteen slots; said per row it was a paragraph of tier
+-- arithmetic under every piece of advice, and the panel stopped being
+-- readable. Per-slot explanation belongs on the per-slot row.
+------------------------------------------------------------
+------------------------------------------------------------
+-- What the outgrown achievement still wants, said once.
+--
+-- This used to be on the SLOTS: every piece under the threshold carried
+-- "7 slots to Champion of the Mist -- 50% off for alts (460 crests
+-- total)", the same sentence seven times, over a wallet holding 180.
+-- One fact about sixteen slots belongs where the balance is; the rows
+-- keep only what is true of the slot they are on.
+--
+-- It names the drop route as well as the crest one, because the
+-- threshold is an ITEM LEVEL and not a track. Anything landing in one
+-- of those slots at or above it counts and costs nothing, and on a bill
+-- the wallet cannot cover that is the cheaper half of the answer -- and
+-- the half the crest-priced version could not see at all.
+------------------------------------------------------------
+local function AchievementClause(self, crestTrack)
+    local ns = self
+    if not ns.GetChasedAchievement then return nil end
+    local chase = ns:GetChasedAchievement()
+    if not chase or chase.track ~= crestTrack or chase.remaining <= 0 then
+        return nil
+    end
+
+    -- No bill here on purpose. The sentence this appends to has just
+    -- priced the same pieces -- "8 pieces short of the cap, 640 to max
+    -- them" -- and on the track being chased those two sets are usually
+    -- the same set, so quoting the total again is the wallet saying one
+    -- number twice. What is NEW is that there is an achievement at this
+    -- item level, how many slots are off it, that a drop counts as well
+    -- as a crest, and what earning it is worth.
+    local slots = chase.remaining ..
+        (chase.remaining == 1 and " more slot" or " more slots")
+    local line = chase.name .. " wants " .. slots .. " at " .. chase.ilvl .. "+"
+
+    -- Crests only buy the slots crests CAN buy. A slot whose track caps
+    -- below the threshold, or which is empty, is named as wanting a drop
+    -- rather than left to look purchasable.
+    if chase.upgradeable == 0 then
+        line = line .. ", and crests reach none of them — they want drops."
+    elseif #chase.blockers > 0 then
+        line = line .. ", and " .. #chase.blockers ..
+            (#chase.blockers == 1 and " of them wants" or " of them want") ..
+            " a drop rather than crests."
+    else
+        line = line .. " — a drop at that level counts too, not just crests."
+    end
+
+    return line .. " Earning it halves this crest for your alts."
+end
+
+function ns:GetTrackPolicyLine(crestTrack)
+    local line, claim = TrackPolicySentence(self, crestTrack)
+    if not line then return nil end
+
+    -- Appended on every path, including the two that return early: an
+    -- abundant wallet is exactly the one that should be told the
+    -- achievement is a few hundred crests away.
+    local achieve = AchievementClause(self, crestTrack)
+
+    local season = ns.GetSeasonDemand and ns:GetSeasonDemand(crestTrack)
+    local p = ns:GetTrackPolicy(crestTrack)
+    if not season or not p or p.verdict == "awaiting" or p.verdict == "abundant" then
+        return achieve and (line .. " " .. achieve) or line, claim
+    end
+
+    local waiting = ns:GetAwaitedSlots(season)
+    if waiting.count == 0 then
+        return achieve and (line .. " " .. achieve) or line, claim
+    end
+
+    line = line .. " " .. waiting.count .. " more " ..
+        (waiting.count == 1 and "slot wants " or "slots want ") .. crestTrack ..
+        " once drops land — another " .. waiting.cost .. "."
+
+    ------------------------------------------------------------
+    -- And the weapon, only where naming it changes something.
+    --
+    -- "Keep some back for the weapon" is advice with a cost: followed on
+    -- a wallet that covers both, it retires item level for nothing. So
+    -- it fires on exactly the case where the two compete -- enough for
+    -- the weapon's own bill, not enough for that AND the pieces already
+    -- on the track. Below that the player cannot afford it either way
+    -- and being told to hold is just a smaller number to stare at; above
+    -- it, both happen, and the addon should say nothing at all.
+    --
+    -- The first draft said it whenever a weapon was waiting. On a
+    -- character holding 200 Hero, 60 of it going into gloves and 80 the
+    -- weapon's whole bill, that read as "do not upgrade" over a row
+    -- correctly headed "Upgrade now" -- the two halves of the panel
+    -- arguing about a wallet that comfortably covered both.
+    ------------------------------------------------------------
+    local armCost = waiting.armCost
+    if #waiting.arms > 0 and armCost > 0
+        and p.held >= armCost and p.held < (p.demand or 0) + armCost then
+        line = line .. " " .. (#waiting.arms == 1 and waiting.arms[1] or "Your weapons")
+            .. " is " .. armCost .. " of that, and worth most — keep it back."
+    end
+
+    if achieve then line = line .. " " .. achieve end
+
     return line, claim
 end
 
@@ -2069,7 +2256,11 @@ function ns:GetMarkLaunder(slotID)
         -- is not a trade between two crest tiers -- it is either
         -- already counted (bound, and the slot's free ranks have it) or
         -- it is ns:GetBagLift's, below.
-        if spare.track == prevTrack and spare.rank < spare.maxRank then
+        -- An off-stat spare is not a trade. Finishing one moves no
+        -- line, so the saving this entry is built on would never
+        -- arrive -- see ns:PieceIsOffStat in Core/Core.lua.
+        if spare.track == prevTrack and spare.rank < spare.maxRank
+            and not ns:PieceIsOffStat(spare.link) then
             -- What the spare costs to finish, priced against the mark
             -- rather than against its rank.
             local paidRanks, freeRanks = 0, 0
@@ -2131,6 +2322,7 @@ function ns:GetMarkLaunder(slotID)
     -- provisional and stops there.
     for _, spare in ipairs(ns:GetBagSpares(slotID)) do
         if spare.unbound and spare.ilvl > mark
+            and not ns:PieceIsOffStat(spare.link)
             and (not best.pending or spare.ilvl > best.pending.ilvl) then
             best.pending = spare
         end
@@ -2216,7 +2408,10 @@ function ns:GetBagLift(slotID)
     -- furthest. Two tradeable pieces are one decision.
     local best
     for _, spare in ipairs(ns:GetBagSpares(slotID)) do
+        -- Keeping an off-stat piece lifts nothing when it binds, so it
+        -- is not the decision this rule is about.
         if spare.unbound and not spare.shared and spare.ilvl > mark
+            and not ns:PieceIsOffStat(spare.link)
             and (not best or spare.ilvl > best.ilvl) then
             best = spare
         end
@@ -3011,17 +3206,32 @@ function ns:GetRecommendation(slotID)
 
     -- ============================================================
     -- RULE 5.5: Achievement completion priority
-    -- Check each missing achievement (lowest first). If this slot
-    -- is below the threshold and can be upgraded to reach it,
-    -- prioritize that. Cross-track items count: e.g. Champion 1/5
-    -- at ilvl 246 already satisfies Veteran (max 246).
+    --
+    -- Every slot under the threshold counts towards the same
+    -- achievement, which is exactly the trap. Crossing into a new track
+    -- drops seven or eight slots under the line on the same afternoon,
+    -- and the first cut answered every one of them with the same
+    -- wallet-wide sentence and the same green "Upgrade now" -- seven
+    -- rows telling a player holding 180 Champion to spend 460.
+    --
+    -- The achievement is a REASON to prefer a slot, not a budget. WHICH
+    -- of them happens tonight is the spend plan's question and rules 6-8
+    -- below already answer it, so this rule now speaks only for slots
+    -- the crests in hand actually reach. The rest fall through and get
+    -- the ordering ("Legs and Feet first"), the shortfall, or -- on a
+    -- track the content has moved past -- the honest answer that what
+    -- the slot is waiting for is a drop.
+    --
+    -- The whole-achievement arithmetic went to the crest tile, where one
+    -- fact about sixteen slots is said once. Same rule that took the
+    -- outlook strip off this list.
     -- ============================================================
     for _, achieveTrack in ipairs(ns.TRACK_ORDER) do
         if not ns:HasDiscountAchievement(achieveTrack) then
             local achieveIlvl = ns:GetMaxIlvlForTrack(achieveTrack)
             if ilvl < achieveIlvl then
                 -- This slot is below the achievement threshold
-                local slotsRemaining, totalAchieveCost, upgradeableCount, slots =
+                local slotsRemaining, _, upgradeableCount, slots =
                     ns:GetAchievementProgress(achieveTrack)
 
                 -- Only recommend if all remaining slots are upgradeable (no drops needed)
@@ -3037,15 +3247,31 @@ function ns:GetRecommendation(slotID)
                         end
                     end
 
+                    -- Does the wallet reach this slot tonight? The plan
+                    -- already answered that, measured against spendable
+                    -- rather than held so a reserve is not promised
+                    -- away. No entry at all -- unknown crest track, or
+                    -- the slot dropped out of the candidate scan -- is
+                    -- not evidence against, so it passes through.
+                    local aPlan = ns:GetCrestPlan(thisSlotCrestTrack)
+                    local aMine = aPlan and aPlan.slots and aPlan.slots[slotID]
+                    local reached = (not aMine) or (aMine.paidRanks or 0) > 0
+
                     local achieveName = ns:GetDiscountAchievementName(achieveTrack)
-                    if slotsRemaining == 1 then
+                    if reached and slotsRemaining == 1 then
                         return ns.RECOMMEND.UPGRADE_NOW,
                             "Last slot for " .. achieveName .. "! 50% off for alts (" ..
                             thisSlotCost .. " " .. thisSlotCrestTrack .. ")"
-                    else
+                    elseif reached then
+                        -- This slot's own price, and how much of the
+                        -- achievement stands behind it. Nothing about
+                        -- the other six that the player cannot act on
+                        -- from this row.
+                        local after = slotsRemaining - 1
                         return ns.RECOMMEND.UPGRADE_NOW,
-                            slotsRemaining .. " slots to " .. achieveName ..
-                            " — 50% off for alts (" .. totalAchieveCost .. " crests total)"
+                            thisSlotCost .. " " .. thisSlotCrestTrack ..
+                            " clears this one for " .. achieveName .. " — " ..
+                            after .. (after == 1 and " slot" or " slots") .. " after it"
                     end
                 end
             end
@@ -3374,9 +3600,9 @@ function ns:GetRecommendation(slotID)
     -- 1. What it does to this slot.
     if mine.promotes then
         detail[#detail + 1] = "Maxes " .. (mine.slotName or "this slot") ..
-            " — the last " .. mine.paidRanks ..
-            (mine.paidRanks == 1 and " rank " or " ranks ") .. crestTrack ..
-            " can give it, for " .. mine.paidCost .. " crests."
+            " — its last " .. mine.paidRanks .. " " .. crestTrack ..
+            (mine.paidRanks == 1 and " rank, " or " ranks, ") ..
+            mine.paidCost .. " crests."
     else
         local shortBy = mine.wantedRanks - mine.paidRanks
         detail[#detail + 1] = "Takes " .. (mine.slotName or "this slot") ..
@@ -3388,42 +3614,37 @@ function ns:GetRecommendation(slotID)
     -- 2. What it buys on the piece that replaces it.
     if (plan.bandLow or 0) > 0 and trackMax <= plan.bandLow then
         detail[#detail + 1] = track .. " caps at " .. trackMax ..
-            " and the lowest thing you get handed is " .. plan.bandLow ..
-            ", so every rank on it is a stopgap until the slot turns "
-            .. "over — even the last one, which marks the slot at a level "
-            .. "no drop will ever arrive below."
+            ", under the " .. plan.bandLow .. " you get handed — so every "
+            .. "rank here is a stopgap until the slot turns over."
     elseif mine.promotes and mine.pairSlot then
-        detail[#detail + 1] = "Rings and trinkets count as a pair and the "
-            .. "lower of the two is what matters — " .. mine.pairSlot ..
-            " is at " .. mine.pairIlvl .. ", so nothing changes for either "
-            .. "slot until it reaches " .. mine.paidIlvl .. " as well."
+        detail[#detail + 1] = "Counts as a pair, and the lower one is what "
+            .. "matters — " .. mine.pairSlot .. " is at " .. mine.pairIlvl ..
+            ", so nothing changes until it reaches " .. mine.paidIlvl .. " too."
     elseif mine.promotes and mine.promotesTo and (plan.markRanks or 0) > 0 then
         -- Said in ranks, because that is how the game shows gear and
         -- how players talk about it. "308 instead of 305" is the same
         -- fact in a unit nobody carries in their head.
         local saved = plan.markRanks * ns:GetCrestCost(mine.promotesTo)
         local ranks = #(ns.GEAR_TRACKS[mine.promotesTo] or {})
-        detail[#detail + 1] = "A " .. mine.promotesTo ..
-            " piece landing here at " .. plan.dropRank .. "/" .. ranks ..
-            " would start at " .. plan.markRank .. "/" .. ranks ..
-            " instead — " .. saved .. " " .. mine.promotesTo .. " saved."
+        detail[#detail + 1] = "A " .. mine.promotesTo .. " piece here would "
+            .. "start at " .. plan.markRank .. "/" .. ranks .. " instead of " ..
+            plan.dropRank .. "/" .. ranks .. " — " .. saved .. " " ..
+            mine.promotesTo .. " saved."
         -- The honest caveat, and the reason the line above says "would".
         -- Raid item level is per BOSS, not per difficulty: the same slot
         -- comes off an early boss low and a late one high, so the mark
         -- pays out on some kills and not others. The advisor cannot see
         -- which bosses you kill.
-        detail[#detail + 1] = "Raid pieces arrive at different levels "
-            .. "depending on the boss, so the mark only pays on the ones "
-            .. "that land below it."
+        detail[#detail + 1] = "Raid drops vary by boss, so that only pays "
+            .. "on the ones landing lower."
     elseif mine.stickyRanks > 0 then
         detail[#detail + 1] = "Nothing you run drops above " ..
             plan.bandHigh .. ", so this one is yours to keep."
     elseif (plan.bandLow or 0) > 0 and mine.bankedRanks == 0 then
         detail[#detail + 1] = "Stopping at " .. mine.paidIlvl ..
-            " leaves it under the " .. plan.bandLow ..
-            " you get handed, so the next piece here simply replaces it. "
-            .. "Carrying it to " .. trackMax .. " instead would mean that "
-            .. "piece starts a rank up."
+            " leaves it under the " .. plan.bandLow .. " you get handed, so "
+            .. "the next drop just replaces it. Going to " .. trackMax ..
+            " would start that piece a rank up."
     end
 
     -- 3. The track, in one sentence that ends in a conclusion.
@@ -3436,9 +3657,57 @@ function ns:GetRecommendation(slotID)
     -- is not something anyone can act on; "about 3 weeks, or a drop in
     -- any of them" is the same fact with the decision already made.
     if finish and finish.needCrest > 0 then
-        local after = math.max(finish.needCrest - (mine.promotes and 1 or 0), 0)
+        ------------------------------------------------------------
+        -- Every number below is AFTER this upgrade.
+        --
+        -- The slot leaves the count, its ranks leave the bill, and its
+        -- price leaves the wallet. On a row headed "Upgrade now" that is
+        -- the frame worth reporting -- it answers "where does clicking
+        -- this leave me" -- but nothing SAID so, and the reader was left
+        -- holding a Champion count that had quietly dropped the slot
+        -- they were hovering and a balance 60 under the tile beside it.
+        -- Two numbers that look wrong in a sentence that is right is
+        -- worse than the sentence not being there.
+        --
+        -- Which slot leaves is decided by whether this row actually
+        -- carries it to the cap, NOT by `mine.promotes`. Those are the
+        -- same thing right up until the track has nothing above it: a
+        -- Myth row maxes its slot and promotes nothing, so the count
+        -- kept a piece the bill had already paid off.
+        ------------------------------------------------------------
+        local finishesMine = (mine.wantedRanks or 0) > 0
+            and (mine.paidRanks or 0) >= mine.wantedRanks
+        local after = math.max(finish.needCrest - (finishesMine and 1 or 0), 0)
         local rest  = math.max(finish.cost - mine.paidCost, 0)
         local left  = math.max(finish.held - mine.paidCost, 0)
+        local spends = (mine.paidCost or 0) > 0
+        local sinceLead = spends and "After this: " or ""
+
+        ------------------------------------------------------------
+        -- The pieces on a track are not the bill for the track.
+        --
+        -- `finish` prices what is WORN on it. A character with four Hero
+        -- pieces and eight Champion ones is not two weeks from being
+        -- done with Hero: every one of those Champion slots reopens the
+        -- tier the moment a Hero drop lands in it, and the Champion cap
+        -- only pays for the first rank or two of that climb.
+        --
+        -- The arithmetic stays worn-only, because that is the spend
+        -- being decided tonight. What stops is drawing the tier's ending
+        -- from it -- "you never need one again" is the claim that cannot
+        -- survive the other slots existing, and a player who acts on it
+        -- spends the wallet flat a fortnight before the drops arrive.
+        --
+        -- ns:GetSeasonDemand has counted forward like this since it was
+        -- written. This is the slot tooltip catching up with it.
+        ------------------------------------------------------------
+        -- Only the BOOLEAN here. What the waiting slots cost is a fact
+        -- about the wallet and is said once on the crest tile, not
+        -- sixteen times down the panel -- the rule the outlook strip was
+        -- removed for. What the hover needs is narrower: whether it is
+        -- allowed to promise the tier ends.
+        local sd = ns.GetSeasonDemand and ns:GetSeasonDemand(crestTrack)
+        local forGood = ns:GetAwaitedSlots(sd).count == 0
 
         -- Two short sentences, not one with three clauses hung off it.
         -- The compressed version -- "4 pieces and 400 crests left against
@@ -3446,9 +3715,12 @@ function ns:GetRecommendation(slotID)
         -- those slots is the faster route" -- packs the state, the
         -- income model and the verdict into a single breath, and none of
         -- the three survives it.
-        local state = after .. " more " .. crestTrack ..
-            (after == 1 and " piece" or " pieces") .. " to max would cost " ..
-            rest .. ", and you have " .. left .. "."
+        local pieces = after .. " " .. crestTrack ..
+            (after == 1 and " piece" or " pieces")
+        local state = sinceLead .. pieces .. " short of the cap, " ..
+            rest .. " crests" ..
+            (spends and (" against your " .. left .. ".")
+                or (", and you hold " .. left .. "."))
 
         ------------------------------------------------------------
         -- The cap is the constraint, not where the crest comes from.
@@ -3478,27 +3750,28 @@ function ns:GetRecommendation(slotID)
         local allDeep = finish.nearest and finish.nearest >= 4
 
         if after == 0 then
-            detail[#detail + 1] = "That is the last " .. crestTrack ..
-                " piece — after this you never need one again."
+            detail[#detail + 1] = forGood
+                and ("Your last " .. crestTrack ..
+                    " piece — you never need one again.")
+                or ("The last " .. crestTrack .. " piece you are wearing.")
         elseif allDeep then
-            detail[#detail + 1] = after .. " " .. crestTrack ..
-                (after == 1 and " piece" or " pieces") .. " left, none closer "
-                .. "than " .. finish.nearest .. " ranks from the cap, " ..
-                rest .. " crests to finish. A drop in any of those slots does "
-                .. "the same job for nothing — keep " .. crestTrack ..
-                " for pieces already near the top."
+            detail[#detail + 1] = sinceLead .. pieces .. " left, none closer "
+                .. "than " .. finish.nearest .. " ranks. A drop does that job "
+                .. "for free — keep " .. crestTrack .. " for pieces near the top."
         elseif rest <= left then
-            detail[#detail + 1] = state .. " Enough for all of them, and "
-                .. "then you are done with " .. crestTrack .. " for good."
+            detail[#detail + 1] = state .. (forGood
+                and (" Enough for all of them, and then " .. crestTrack ..
+                    " is done.")
+                or " Enough for all of them.")
         elseif finish.withinAllowance then
-            detail[#detail + 1] = state .. " The other " ..
-                (rest - left) .. " is still inside this season's cap, so it "
-                .. "is content to run rather than a wait."
+            detail[#detail + 1] = state .. " The other " .. (rest - left) ..
+                " is inside this season's cap — content to run, not a wait."
         else
             detail[#detail + 1] = state .. " The cap allows " ..
-                finish.earnable .. " more this season, so about " ..
-                finish.weeks .. " weeks — or a drop finishes any of them sooner."
+                finish.earnable .. " more — about " .. finish.weeks ..
+                " weeks, or sooner if one drops."
         end
+
     end
 
     -- 3.5. What the wallet is already promised to.

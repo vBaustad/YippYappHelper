@@ -111,16 +111,38 @@ def fetch(url, retries=3):
     raise RuntimeError("fetch failed for %s: %s" % (url, last))
 
 
-def extract_markup(html):
-    """Pull Wowhead's guide BBCode out of the page's embedded JS string.
+def unescape_markup(html):
+    """Undo the JS string escaping around Wowhead's guide BBCode.
 
     The guide lives inside a JS string literal, so every closing tag
-    arrives as `[\\/h3]` rather than `[/h3]`. Undo the escapes *before*
-    looking for the section markers, or the end marker is never found.
-    """
-    text = html.replace("\\/", "/").replace('\\"', '"')
-    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    arrives with an escaped slash rather than a bare one. Undo the
+    escapes *before* looking for any markers, or they are never found.
 
+    Some pages arrive escaped twice, so the pass repeats while it is
+    still finding work to do. One fixed pass leaves the escapes sitting
+    in the middle of guide prose on those pages.
+    """
+    text = html
+    for _ in range(3):
+        before = text
+        text = text.replace("\\/", "/").replace('\\"', '"')
+        text = (text.replace("\\r\\n", "\n").replace("\\n", "\n")
+                    .replace("\\t", "\t").replace("\\r", "\n"))
+        if text == before:
+            break
+    return text
+
+
+def extract_markup(html):
+    """The guide BBCode, from the first [h2 to the last closing tag.
+
+    Deliberately stops at the last heading or table: that is the span
+    the consumables and class-guide parsers walk. Anything a guide
+    defines *after* its final section -- Wowhead puts [tooltip name=...]
+    bodies there -- falls outside this slice. Callers that need those
+    want unescape_markup() and the whole document.
+    """
+    text = unescape_markup(html)
     start = text.find("[h2 ")
     if start < 0:
         return None

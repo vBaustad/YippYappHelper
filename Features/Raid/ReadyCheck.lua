@@ -131,7 +131,34 @@ local DURABILITY_PREFIX = "YYHDUR"
 C_ChatInfo.RegisterAddonMessagePrefix(DURABILITY_PREFIX)
 
 local durabilityCache = {}  -- [shortName] = { pct = <0..100>, ts = GetTime() }
+
 local DURABILITY_TTL = 600  -- 10 min
+
+--- Drop entries nobody can see any more.
+---
+--- Remote input can only ever ADD keys here -- one per distinct sender
+--- name -- and nothing ever took any away. Small, and the same shape as
+--- the raid scan that reached 673 rows: a table fed from outside with no
+--- eviction. That the feed is other people's addons is the reason to
+--- bound it rather than the reason not to bother.
+---
+--- Only entries past their TTL go, and the read path already ignores
+--- those, so this changes nothing anyone can see. Swept on growth rather
+--- than on every write: durability arrives in bursts of thirty, and a
+--- full pass per message would be thirty passes for one render.
+local DURABILITY_MAX = 60
+local function PruneDurability()
+    local n = 0
+    for _ in pairs(durabilityCache) do n = n + 1 end
+    if n <= DURABILITY_MAX then return end
+    local now = GetTime()
+    for name, entry in pairs(durabilityCache) do
+        if type(entry) ~= "table" or not entry.ts
+            or (now - entry.ts) >= DURABILITY_TTL then
+            durabilityCache[name] = nil
+        end
+    end
+end
 
 local function ComputeOwnDurability()
     local current, max = 0, 0
@@ -1318,6 +1345,7 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
         local sender = arg4 and Ambiguate(arg4, "short") or nil
         if not sender then return end
         durabilityCache[sender] = { pct = pct, ts = GetTime() }
+        PruneDurability()
         -- 30 durability messages arrive in a burst during the staggered
         -- broadcast — coalesce into one render at the end of the window.
         if frame:IsShown() then QueueRefresh(0.6) end

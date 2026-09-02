@@ -115,12 +115,6 @@ end
 
 local function BuildAll(category, layout)
     AddHeader(layout, "Features")
-    AddCheckbox(category, "brEnabled", "Battle Res Timer",
-        "Tracks battle resurrection charges and the timer until the next "
-        .. "one, in raids and keystone dungeons.",
-        function() local BR = ns.BattleResTimer; return BR and BR:IsEnabled() end,
-        function(v) local BR = ns.BattleResTimer; if BR then BR:SetEnabled(v) end end)
-
     AddCheckbox(category, "readyCheck", "Ready Check overview",
         "Replaces the default ready-check prompt with a roster overview "
         .. "showing food, flasks and readiness at a glance.",
@@ -140,6 +134,13 @@ local function BuildAll(category, layout)
     AddModuleCheckbox(category, "utilityAdvisor", "Utility advisor",
         "Surfaces a per-spec utility checklist (defensives, dispels, CC) "
         .. "when you enter a Mythic+ dungeon.")
+
+    AddModuleCheckbox(category, "consumablesAtAH", "Consumables at the Auction House",
+        "Opens the small consumables list beside the Auction House when you "
+        .. "visit an auctioneer, so your spec's flasks, food, gems and "
+        .. "enchants are there to shift-click straight into a search. It "
+        .. "pins to the top right of the Auction House; untick the box on "
+        .. "the window itself to drag it somewhere else.")
 
     -- These two used to live in the advisor's Edit Mode dialog. That
     -- dialog is gone -- the window is dragged where you want it while it
@@ -212,19 +213,15 @@ local function BuildAll(category, layout)
             end
         end)
 
-    AddHeader(layout, "Battle Res Timer")
-    AddCheckbox(category, "brOOC", "Show between pulls",
-        "Keep the timer visible between pulls instead of only during combat. "
-        .. "Applies inside raids and keystone dungeons only -- there is no "
-        .. "battle res pool in the open world, so the timer never shows there.",
-        function() local BR = ns.BattleResTimer; return BR and BR:IsShowOutOfCombat() end,
-        function(v) local BR = ns.BattleResTimer; if BR then BR:SetShowOutOfCombat(v) end end)
-
-    AddHeader(layout, "Appearance and position")
-    AddButton(layout, "All YippYapp frames", "Open Edit Mode",
-        "Size, opacity, layout, compact mode and where each frame sits all "
-        .. "live in Edit Mode, where you can see the change as you make it.",
-        function() if ns.EditMode then ns.EditMode:Open() end end)
+    -- No "Appearance and position" section any more.
+    --
+    -- The Battle Res Timer was the last frame Edit Mode had anything to
+    -- place; every other window moves itself now. A button that opens an
+    -- empty Edit Mode is worse than no button, so the section goes with
+    -- the feature and ns.EditMode:Open says why if anything still calls
+    -- it. The Edit Mode integration itself is left in place -- it is the
+    -- machinery, not a feature, and nothing else has to change for one
+    -- movable frame to come back.
 
     -- A signpost, not a second binding UI.
     --

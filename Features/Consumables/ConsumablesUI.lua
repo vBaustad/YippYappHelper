@@ -757,6 +757,11 @@ local itemIconCache = {}
 local itemNameCache = {}
 local pendingRefresh = false
 
+-- Forward-declared: the popout is built hundreds of lines below, with
+-- the rest of the window it belongs to, but the cache up here has to
+-- know whether it is on screen. Assigned there, called from here.
+local PopoutShown
+
 local function CacheItem(itemID)
     if itemLinkCache[itemID] then return end
     local item = Item:CreateFromItemID(itemID)
@@ -765,12 +770,26 @@ local function CacheItem(itemID)
         if link then itemLinkCache[itemID] = link end
         if icon then itemIconCache[itemID] = icon end
         if name then itemNameCache[itemID] = name end
-        if frame:IsShown() and not pendingRefresh then
+        -- The popout counts as on screen, not just the page.
+        --
+        -- This was gated on the page alone, and the popout is the window
+        -- that opens BESIDE the Auction House -- usually with the page
+        -- itself closed. So the first visit of a session drew the rows
+        -- against an empty cache, the names landed a moment later with
+        -- nothing listening, and the list sat there reading "item:273072"
+        -- until it was closed and opened again.
+        local pageUp, popUp = frame:IsShown(), PopoutShown and PopoutShown()
+        if (pageUp or popUp) and not pendingRefresh then
             pendingRefresh = true
             C_Timer.After(0.1, function()
                 pendingRefresh = false
+                -- The page's refresh redraws the popout at the end of
+                -- itself, so only the popout-alone case needs its own
+                -- call.
                 if frame:IsShown() then
                     ns:RefreshConsumables()
+                elseif PopoutShown and PopoutShown() then
+                    ns:RefreshConsumablesPopout()
                 end
             end)
         end
@@ -1313,13 +1332,118 @@ end
 -- every refresh of the main panel, so a popout drawing from them would
 -- be blanked by a spec click behind it.
 ------------------------------------------------------------
-local POP_W, POP_ROW_H = 250, 22
+-- Wider and taller than it started, and both for the same reason: the
+-- names here are the longest in the addon. A weapon enchant at 250 wide
+-- wrapped onto a second line inside a 22px row, so every long name was
+-- drawn through the one under it and the window read as a wall. Now the
+-- row is one line tall, the name is truncated rather than wrapped, and
+-- the full text is a click away.
+local POP_W, POP_ROW_H = 292, 24
+
+-- The window's own margin, and the gap between an icon and its name.
+local POP_PAD = 12
+local POP_ICON, POP_ICON_GAP = 18, 7
+
+-- The band under the rows carrying the one line that says what a click
+-- and a shift-click do.
+local POP_HINT_H = 18
+
+-- The gap between the Auction House's right edge and this window, while
+-- it is pinned there. Enough that the two do not read as one frame, small
+-- enough that they still read as a pair.
+local POP_AH_GAP = 4
+
+-- The pin checkbox's band along the bottom, added to the height only
+-- while that checkbox is showing.
+local POP_FOOT_H = 22
+
 local popout, popRows = nil, {}
+
+-- Fills the forward declaration the item cache made for this.
+function PopoutShown()
+    return (popout and popout:IsShown()) and true or false
+end
+
+-- Whether the window on screen is one this file put there, rather than
+-- one the player opened. Only an auto-opened window is auto-closed:
+-- someone who popped it out by hand before walking to an auctioneer did
+-- not ask for the Auction House to take it away again.
+local popoutAuto = false
 
 local function PopoutDB()
     YippYappHelperDB = YippYappHelperDB or {}
     YippYappHelperDB.consumablesPopout = YippYappHelperDB.consumablesPopout or {}
     return YippYappHelperDB.consumablesPopout
+end
+
+--- Is the Auction House on screen?
+---
+--- Read off the frame rather than tracked from the events, because the
+--- two answers can disagree: Blizzard_AuctionHouseUI is load-on-demand,
+--- so at AUCTION_HOUSE_SHOW the frame may not exist yet, and a flag set
+--- there would claim an open window that is not drawn.
+local function AuctionHouseOpen()
+    local ah = _G.AuctionHouseFrame
+    return (ah and ah:IsShown()) and true or false
+end
+
+--- What this window is pinned to, or nil if it is loose.
+---
+--- Absent from the DB means pinned. The pin is the point of the feature
+--- -- a shopping list you have to drag into place every visit is not
+--- much of a convenience -- so the box starts ticked and unticking it is
+--- the deliberate act.
+local function PopoutPinHost()
+    if not AuctionHouseOpen() then return nil end
+    if PopoutDB().pinAH == false then return nil end
+    return _G.AuctionHouseFrame
+end
+
+--- Write down where the window is right now, in UIParent's terms.
+---
+--- Screen coordinates rather than the anchor it currently has, because
+--- the anchor it currently has may be the Auction House -- a frame that
+--- is not there at login and cannot be restored against.
+---
+--- Guarded on both reads: a frame that has never been laid out has no
+--- rectangle to report, and saving nil for a coordinate would take the
+--- window somewhere nobody put it.
+local function PopoutFreeze()
+    if not popout then return end
+    local left, top = popout:GetLeft(), popout.GetTop and popout:GetTop()
+    if not (left and top) then return end
+    local scale = (popout:GetEffectiveScale() or 1) / (UIParent:GetEffectiveScale() or 1)
+    local db = PopoutDB()
+    db.point, db.rel = "TOPLEFT", "BOTTOMLEFT"
+    db.x, db.y = left * scale, top * scale
+end
+
+--- Put the window where it belongs.
+---
+--- Anchored TOPLEFT to the Auction House's TOPRIGHT, so it hangs off the
+--- side rather than covering anything. That corner also fixes the top
+--- edge, which matters more than it sounds: the window's height changes
+--- with the view -- Gems is a third of Consumables -- and anchored from
+--- the bottom it would jump every time you paged the arrows.
+local function PopoutPlace()
+    if not popout then return end
+    popout:ClearAllPoints()
+    local host = PopoutPinHost()
+    if host then
+        popout:SetPoint("TOPLEFT", host, "TOPRIGHT", POP_AH_GAP, 0)
+        return
+    end
+    local db = PopoutDB()
+    if db.point then
+        popout:SetPoint(db.point, UIParent, db.rel or db.point, db.x or 0, db.y or 0)
+    else
+        -- Parked at the right edge of the screen, not offset from the
+        -- centre: the app frame is centred and has grown, so "centre
+        -- plus 300" was landing on top of it. The screen edge is clear
+        -- of both the app and a centred Auction House, and it is where
+        -- someone would drag this anyway.
+        popout:SetPoint("RIGHT", UIParent, "RIGHT", -40, 0)
+    end
 end
 
 --- What the open tab is showing, flattened.
@@ -1405,9 +1529,84 @@ local function PopArrow(parent, glyph, step)
     return b
 end
 
+--- The item whose tooltip is currently pinned open, or nil.
+---
+--- An id rather than a row, because the rows are re-wired on every
+--- redraw and item data lands in a stream -- a tooltip held open while
+--- the names are still arriving has to survive being redrawn under.
+local popTipID
+
+local function PopTipHide()
+    if not popTipID then return end
+    popTipID = nil
+    GameTooltip:Hide()
+end
+
+--- Put the tooltip beside the WINDOW, not beside the row.
+---
+--- Anchored to the row it would open half way down the list and cover
+--- the rows under it. Anchored to the window it clears the whole list,
+--- and the side is chosen by which one has the room: pinned to the
+--- Auction House this window is already well right of centre, and a
+--- tooltip hard-anchored to its right would run off the screen.
+local function PopTipShow(row, itemID, link)
+    if not (popout and link) then return end
+    popTipID = itemID
+    GameTooltip:SetOwner(row, "ANCHOR_NONE")
+    GameTooltip:ClearAllPoints()
+    local right = popout:GetRight() or 0
+    local room = (UIParent:GetRight() or 0) - right
+    if room > 340 then
+        GameTooltip:SetPoint("TOPLEFT", popout, "TOPRIGHT", 6, 0)
+    else
+        GameTooltip:SetPoint("TOPRIGHT", popout, "TOPLEFT", -6, 0)
+    end
+    GameTooltip:SetHyperlink(link)
+    GameTooltip:Show()
+end
+
+--- Shift-click, which in front of an auctioneer means "find me this".
+---
+--- The search bar is driven directly rather than through
+--- HandleModifiedItemClick: the game's router sends a shift-click to the
+--- chat box whenever one is open, and standing at the Auction House with
+--- a shopping list in front of you, the chat box is not what was meant.
+--- Away from an auctioneer the router is exactly right, so that is the
+--- fallback -- and it is also the fallback while the name is still on
+--- its way, since there is nothing to search for without one.
+---
+--- Both calls are guarded and pcall'd. SearchBar and StartSearch are
+--- Blizzard's, not ours, and a shopping list that throws at the Auction
+--- House is worse than one that quietly links to chat.
+local function PopoutSearchAH(itemID, link)
+    local name = GetItemName(itemID)
+    local ah = _G.AuctionHouseFrame
+    if name and ah and ah:IsShown() then
+        local bar = ah.SearchBar
+        local filled = false
+        if bar and bar.SearchBox and bar.SearchBox.SetText then
+            filled = pcall(bar.SearchBox.SetText, bar.SearchBox, name)
+        elseif ah.SetSearchText then
+            filled = pcall(ah.SetSearchText, ah, name)
+        end
+        if filled then
+            if bar and bar.StartSearch then pcall(bar.StartSearch, bar) end
+            return
+        end
+    end
+    if link and HandleModifiedItemClick then HandleModifiedItemClick(link) end
+end
+
 --- One row, which is itself the hit area -- sized to the icon and the
 --- name, as on the page, so the highlight hugs the item rather than
 --- sweeping the full width of an empty window.
+---
+--- No tooltip on hover, unlike the page. This window is parked on top of
+--- the Auction House and the cursor crosses it on the way to something
+--- else; a tooltip that opens itself on the way past covers the auction
+--- list underneath, repeatedly, for no one. So it is asked for -- click
+--- -- and it then stays up until it is dismissed, which also means it
+--- can be read without holding the mouse still.
 local function PopRow(i)
     local r = popRows[i]
     if not r then
@@ -1415,18 +1614,25 @@ local function PopRow(i)
         r:SetHeight(POP_ROW_H)
         r:RegisterForClicks("LeftButtonUp")
         r.icon = r:CreateTexture(nil, "ARTWORK")
-        r.icon:SetSize(16, 16)
+        r.icon:SetSize(POP_ICON, POP_ICON)
         r.icon:SetPoint("LEFT", 0, 0)
         r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         r.name = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        r.name:SetPoint("LEFT", r.icon, "RIGHT", 5, 0)
+        r.name:SetPoint("LEFT", r.icon, "RIGHT", POP_ICON_GAP, 0)
         r.name:SetJustifyH("LEFT")
+        -- Truncated, never wrapped. A name that wraps is a name drawn
+        -- through the row below it.
+        r.name:SetWordWrap(false)
         local hl = r:CreateTexture(nil, "HIGHLIGHT")
         hl:SetAllPoints()
         hl:SetColorTexture(1, 1, 1, 0.06)
         hl:SetBlendMode("ADD")
         popRows[i] = r
     end
+    -- Exposed for Tools/loadcheck.py, like the page's section pool: the
+    -- harness has no way down a frame's children, and what a row does
+    -- when it is clicked is the whole of this window.
+    ns.__consPopRows = popRows
     r:Show()
     return r
 end
@@ -1450,9 +1656,21 @@ local function BuildPopout()
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
+    -- Refused while pinned, rather than allowed and snapped back on the
+    -- next redraw. A window that follows the cursor and then jumps home
+    -- reads as broken; one that simply does not move reads as locked,
+    -- which is what the checkbox underneath it says it is.
+    f:SetScript("OnDragStart", function(s)
+        if PopoutPinHost() then return end
+        s:StartMoving()
+    end)
     f:SetScript("OnDragStop", function(s)
         s:StopMovingOrSizing()
+        -- Saved against UIParent, never against the Auction House. This
+        -- only runs when the window was loose, but GetPoint would still
+        -- hand back whatever it is anchored to, and a position stored
+        -- relative to a load-on-demand frame is one that cannot be
+        -- restored at login.
         local db = PopoutDB()
         local point, _, rel, x, y = s:GetPoint()
         db.point, db.rel, db.x, db.y = point, rel, x, y
@@ -1476,17 +1694,73 @@ local function BuildPopout()
     f.prevBtn:SetPoint("RIGHT", f.nextBtn, "LEFT", 0, 0)
 
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.title:SetPoint("TOPLEFT", 10, -8)
+    f.title:SetPoint("TOPLEFT", POP_PAD, -9)
     -- Stopped clear of the pager. Without a cap a long spec name runs
     -- under the arrows and out the side of the window.
-    f.title:SetWidth(POP_W - 10 - 62)
+    f.title:SetWidth(POP_W - POP_PAD - 64)
     f.title:SetJustifyH("LEFT")
     f.title:SetWordWrap(false)
     ns.ApplyTextShadow(f.title)
 
     f.body = CreateFrame("Frame", nil, f)
-    f.body:SetPoint("TOPLEFT", 10, -26)
-    f.body:SetPoint("BOTTOMRIGHT", -10, 8)
+    f.body:SetPoint("TOPLEFT", POP_PAD, -30)
+    f.body:SetPoint("BOTTOMRIGHT", -POP_PAD, 8)
+
+    -- What a click does, said once at the bottom rather than left to be
+    -- discovered.
+    --
+    -- The page above teaches neither gesture -- there, hovering is the
+    -- tooltip and shift-click goes to chat -- so without a line saying
+    -- so, the two useful things you can do in this window are invisible.
+    -- Its wording follows the Auction House: shift-click means "search"
+    -- in front of an auctioneer and "link" away from one, and claiming
+    -- the wrong one is worse than claiming nothing.
+    f.hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    f.hint:SetPoint("BOTTOMLEFT", POP_PAD, 8)
+    f.hint:SetWidth(POP_W - POP_PAD * 2)
+    f.hint:SetJustifyH("LEFT")
+    f.hint:SetWordWrap(false)
+
+    -- The unlock, on the window rather than in the options.
+    --
+    -- Same reasoning as the utility advisor's "Don't show this": the
+    -- moment anyone wants this switch is the moment they have tried to
+    -- drag the window and it would not move, and nobody goes looking
+    -- through an options page for that. It is worded as the pin rather
+    -- than as a lock so the ticked state -- which is the default -- says
+    -- what it does instead of only saying what it forbids.
+    --
+    -- Shown only while the Auction House is open, because that is the
+    -- only time it means anything: everywhere else the window is loose
+    -- already, and a permanently greyed switch is worse than no switch.
+    f.pin = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+    f.pin:SetSize(20, 20)
+    f.pin:SetPoint("BOTTOMLEFT", 8, 4)
+    f.pin:SetHitRectInsets(0, -112, 0, 0)   -- the label is part of the target
+    f.pinLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.pinLabel:SetPoint("LEFT", f.pin, "RIGHT", 1, 0)
+    f.pinLabel:SetText("Pin to Auction House")
+    f.pinLabel:SetTextColor(0.55, 0.55, 0.58)
+    f.pin:SetScript("OnEnter", function(s)
+        GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Pin to Auction House")
+        GameTooltip:AddLine("Keeps this list against the top right of the "
+            .. "Auction House. Untick it to drag the window wherever you "
+            .. "want it -- it will stay there.", 0.8, 0.8, 0.8, true)
+        GameTooltip:Show()
+    end)
+    f.pin:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    f.pin:SetScript("OnClick", function(s)
+        local pinned = s:GetChecked() and true or false
+        -- Unticking freezes the window where it already is, rather than
+        -- releasing it to wherever it last sat loose. Otherwise the one
+        -- gesture that means "let me move this" begins by throwing it
+        -- across the screen -- and on a fresh install "loose" is the far
+        -- right edge, nowhere near the corner it was just pinned to.
+        if not pinned then PopoutFreeze() end
+        PopoutDB().pinAH = pinned
+        PopoutPlace()
+    end)
 
     -- Escape closes it, like the class dropdown above and every other
     -- loose frame this addon puts on the screen.
@@ -1494,6 +1768,13 @@ local function BuildPopout()
         tinsert(UISpecialFrames, "YippYappConsumablesPopout")
     end)
     f:SetScript("OnHide", function()
+        -- A tooltip opened by a click has no cursor to leave and so
+        -- nothing else to close it: without this it outlives the window
+        -- it belongs to and sits there on its own.
+        PopTipHide()
+        -- Closed by hand, by Escape, or by us. Whichever it was, this
+        -- window is no longer one the Auction House is responsible for.
+        popoutAuto = false
         for i = #UISpecialFrames, 1, -1 do
             if UISpecialFrames[i] == "YippYappConsumablesPopout" then
                 table.remove(UISpecialFrames, i)
@@ -1502,21 +1783,13 @@ local function BuildPopout()
         end
     end)
 
-    local db = PopoutDB()
-    f:ClearAllPoints()
-    if db.point then
-        f:SetPoint(db.point, UIParent, db.rel or db.point, db.x or 0, db.y or 0)
-    else
-        -- Parked at the right edge of the screen, not offset from the
-        -- centre: the app frame is centred and has grown, so "centre
-        -- plus 300" was landing on top of it. The screen edge is clear
-        -- of both the app and a centred Auction House, and it is where
-        -- someone would drag this anyway.
-        f:SetPoint("RIGHT", UIParent, "RIGHT", -40, 0)
-    end
     f:Hide()
 
+    -- Assigned before placing it: PopoutPlace reads the upvalue, not the
+    -- local, so anchoring the window before this line leaves it at the
+    -- default position however the pin is set.
     popout = f
+    PopoutPlace()
     return f
 end
 
@@ -1551,28 +1824,50 @@ function ns:RefreshConsumablesPopout()
         r.name:SetText(link
             or ("|cffffffff" .. (GetItemName(e.itemID)
                 or ("item:" .. e.itemID)) .. "|r"))
-        local textW = math.min(r.name:GetStringWidth() or 0,
-                               POP_W - 46 - indent)
+        local room = POP_W - POP_PAD * 2 - POP_ICON - POP_ICON_GAP - indent
+        local textW = math.min(r.name:GetStringWidth() or 0, room)
         r.name:SetWidth(textW)
-        r:SetWidth(21 + math.max(textW, 20))
+        r:SetWidth(POP_ICON + POP_ICON_GAP + math.max(textW, 20))
 
         local hover = link or ("item:" .. e.itemID)
-        r:SetScript("OnEnter", function(s)
-            GameTooltip:SetOwner(s, "ANCHOR_CURSOR")
-            GameTooltip:SetHyperlink(hover)
-            GameTooltip:Show()
+        local itemID = e.itemID
+        r:SetScript("OnClick", function(s)
+            if IsModifiedClick("CHATLINK") or IsShiftKeyDown() then
+                PopoutSearchAH(itemID, hover)
+            elseif popTipID == itemID then
+                PopTipHide()
+            else
+                PopTipShow(s, itemID, hover)
+            end
         end)
-        r:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        r:SetScript("OnClick", function() LinkClick(hover) end)
+        -- Re-anchored rather than dropped when the list redraws under an
+        -- open tooltip -- which it does on its own, as the names arrive.
+        if popTipID == itemID then PopTipShow(r, itemID, hover) end
 
         y = y - POP_ROW_H
     end
     for i = #list + 1, #popRows do popRows[i]:Hide() end
 
-    -- Sized to its contents: the title band, the rows, and the bottom
-    -- padding. A fixed height would be empty for Gems and short for
-    -- Consumables.
-    popout:SetHeight(math.max(-y + 26 + 10, 64))
+    -- The pin follows the Auction House, and its state follows the DB
+    -- rather than whatever was last clicked -- the box is the readout as
+    -- well as the switch, and the two have to agree after a /reload.
+    local atAH = AuctionHouseOpen()
+    popout.pin:SetChecked(PopoutDB().pinAH ~= false)
+    popout.pin:SetShown(atAH)
+    popout.pinLabel:SetShown(atAH)
+
+    popout.hint:SetText(atAH
+        and "Click for details   Shift-click to search"
+        or "Click for details   Shift-click to link")
+    popout.hint:ClearAllPoints()
+    popout.hint:SetPoint("BOTTOMLEFT", POP_PAD,
+        8 + (atAH and POP_FOOT_H or 0))
+
+    -- Sized to its contents: the title band, the rows, the hint, the
+    -- bottom padding, and the pin's band when that is showing. A fixed
+    -- height would be empty for Gems and short for Consumables.
+    popout:SetHeight(math.max(
+        -y + 30 + POP_HINT_H + 8 + (atAH and POP_FOOT_H or 0), 64))
 end
 
 function ns:ToggleConsumablesPopout()
@@ -1581,6 +1876,24 @@ function ns:ToggleConsumablesPopout()
         f:Hide()
         return
     end
+    -- Opened by hand until something says otherwise. The Auction House
+    -- path below sets this back to true immediately after its own call,
+    -- which is the only way it becomes true.
+    popoutAuto = false
+
+    -- Whose consumables, if nobody has said yet.
+    --
+    -- The page seeds this from its own OnShow, and until this window
+    -- could open itself that was enough: the only route here was the
+    -- Popout button, which is ON the page, so the page had been shown.
+    -- The Auction House route has no such guarantee -- walk to an
+    -- auctioneer in a session where the Consumables page was never
+    -- opened and selectedSpecID is still nil, GetConsumableKey returns
+    -- nil with it, and the window comes up correctly sized around
+    -- nothing at all.
+    if not selectedSpecID then
+        selectedClassFile, selectedSpecID = GetPlayerClassAndSpec()
+    end
     -- Names may not be cached yet if the page has never been drawn for
     -- this spec; CacheItem re-fires RefreshConsumables when they land,
     -- which reaches the popout through the hook at the end of it.
@@ -1588,10 +1901,151 @@ function ns:ToggleConsumablesPopout()
     for _, e in ipairs(PopoutList()) do
         local _ = data and CacheItem(e.itemID)
     end
+    -- Placed before it is shown, not only when it is built. Opening this
+    -- by hand while standing at an auctioneer has to pin it too, and
+    -- BuildPopout's own call runs once in a session.
+    PopoutPlace()
     f:Show()
     -- Above anything else already at DIALOG, including a dropdown left
     -- open behind it.
     f:Raise()
     ns:RefreshConsumablesPopout()
 end
+
+------------------------------------------------------------
+-- The Auction House
+--
+-- The window that exists for the Auction House did not know when the
+-- Auction House was open, so every visit started by opening the app,
+-- finding the Consumables page and pressing Popout. This closes that
+-- loop: walk up to an auctioneer and the list is already beside it.
+--
+-- Default on, like the utility advisor and unlike Open on Login. The
+-- difference is that this is answering something you just did -- you
+-- walked to a vendor that sells exactly what this lists -- rather than
+-- putting a window on screen because the game happened to load.
+------------------------------------------------------------
+
+--- The Auction House opened (or closed). Returns whether this opened the
+--- window itself.
+---
+--- A named function rather than the body of the handler below, so the
+--- load harness can put both edges through it without an auctioneer --
+--- the same reason ns.OpenOnLoginIfWanted is one.
+function ns.ConsumablesPopoutAtAuctionHouse(open)
+    if not open then
+        local wasAuto = popoutAuto
+        if popout and wasAuto then popout:Hide() end
+        -- Re-placed even when it stays up. An anchor does not follow its
+        -- target into hiding, so a pinned window left alone would sit
+        -- wherever the Auction House used to be, still anchored to a
+        -- frame nobody can see -- and the next thing to move it would be
+        -- a drag that the pin refuses.
+        PopoutPlace()
+        ns:RefreshConsumablesPopout()
+        return false
+    end
+
+    -- Off in the options: no window of our own, but a window the player
+    -- opened by hand still gets pinned. The setting is about opening
+    -- uninvited, not about where an invited window sits.
+    if ns.ModuleEnabled and not ns.ModuleEnabled("consumablesAtAH") then
+        PopoutPlace()
+        ns:RefreshConsumablesPopout()
+        return false
+    end
+
+    local f = BuildPopout()
+    if f:IsShown() then
+        -- Already up, so nothing to open -- but it was placed loose and
+        -- has to move onto the Auction House now, and grow the pin band
+        -- it did not have a moment ago.
+        PopoutPlace()
+        ns:RefreshConsumablesPopout()
+        return false
+    end
+
+    ns:ToggleConsumablesPopout()
+    -- After the call, not before: ToggleConsumablesPopout clears this on
+    -- the way through, on the assumption that a hand opened it.
+    popoutAuto = true
+    ns:RefreshConsumablesPopout()
+    return true
+end
+
+end
+
+------------------------------------------------------------
+-- The Auction House watcher
+--
+-- OUTSIDE ns:CreateConsumablesFrame, and being outside it is the whole
+-- reason this sits down here rather than beside the popout it drives.
+--
+-- Everything above -- the popout, its rows, ns.ToggleConsumablesPopout,
+-- ns.ConsumablesPopoutAtAuctionHouse -- is declared INSIDE that
+-- function, which does not run until the Consumables page is first
+-- built. A CreateFrame():RegisterEvent up there registers nothing until
+-- you have already opened the page by hand, which is precisely the trip
+-- this feature exists to save. It shipped that way once, and the symptom
+-- was "it only appears after I open it myself".
+--
+-- The events rather than a hook on AuctionHouseFrame, for the mirror of
+-- the same reason: Blizzard_AuctionHouseUI is load-on-demand, so at
+-- login there is no frame to hook and a hook installed then would never
+-- be installed at all.
+------------------------------------------------------------
+do
+    local watch = CreateFrame("Frame")
+    watch:RegisterEvent("AUCTION_HOUSE_SHOW")
+    watch:RegisterEvent("AUCTION_HOUSE_CLOSED")
+
+    --- Build the page if nobody has yet, so the popout it owns exists.
+    ---
+    --- Safe to call cold and safe to call twice: CreateConsumablesFrame
+    --- returns immediately once ns.ConsumablesFrame is set, and the shell
+    --- skips its own create for the same reason. So the first Auction
+    --- House visit pays what opening the page would have cost, and every
+    --- visit after it pays nothing.
+    local function Ready()
+        if ns.ConsumablesPopoutAtAuctionHouse then return true end
+        if not ns.CreateConsumablesFrame then return false end
+        -- Loud on failure, and pcall for exactly that reason. This runs
+        -- inside a C_Timer callback, and an error thrown in one of those
+        -- is swallowed whole for anyone who has not turned script errors
+        -- on -- which is everyone, by default. A feature that silently
+        -- does nothing is the hardest kind of bug to report, so it says
+        -- so instead of leaving the player to guess.
+        local ok, err = pcall(ns.CreateConsumablesFrame, ns)
+        if not ok then
+            print("|cffff5555YippYapp:|r could not build the consumables page: "
+                  .. tostring(err))
+            return false
+        end
+        return ns.ConsumablesPopoutAtAuctionHouse ~= nil
+    end
+
+    -- Both exposed for /yh ah, which walks this path and says what it
+    -- found. Every step of it is invisible from the outside -- an event
+    -- that may never have been registered, a page that may not be built,
+    -- a timer callback nobody can see fail -- and "nothing happened" is
+    -- not a report anyone can act on.
+    ns.ConsumablesAHWatcher = watch
+    ns.ConsumablesAHReady = Ready
+
+    watch:SetScript("OnEvent", function(_, event)
+        if event == "AUCTION_HOUSE_SHOW" then
+            -- Deferred a frame. AUCTION_HOUSE_SHOW is what causes that
+            -- addon to load and its frame to be shown, and the order of
+            -- those against this handler is not ours to decide -- read
+            -- too early, AuctionHouseFrame is either absent or not yet
+            -- shown, and the pin falls back to the loose position.
+            C_Timer.After(0, function()
+                if Ready() then ns.ConsumablesPopoutAtAuctionHouse(true) end
+            end)
+        elseif ns.ConsumablesPopoutAtAuctionHouse then
+            -- Nothing to build on the way out: a page that was never made
+            -- has no popout to put away.
+            ns.ConsumablesPopoutAtAuctionHouse(false)
+        end
+    end)
 end
