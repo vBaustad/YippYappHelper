@@ -1,5 +1,52 @@
 # YippYapp Helper - Changelog
 
+## v3.3.1 - The ring that paid for the other one (2026-09-02)
+
+### Fixed
+- **A second copy of a ring is not a second ring.** A ring or trinket
+  slot remembers a line it takes two pieces to build, and they have to be
+  two DIFFERENT pieces. Away from the upgrade vendor the client answers
+  nothing, so the addon falls back to what it can see -- worn gear plus
+  anything bound in the bags -- and it counted a spare copy of the ring
+  already worn as the second half of its own pair. One Hero ring at 311
+  with its twin in the bags, and the Champion ring on the other finger
+  was told "Free upgrade! All remaining ranks are free". The vendor
+  charges for those ranks.
+
+  Counted once per item now. The client itself was right all along: with
+  a 311 ring and a 295 ring worn, it reports 295 for the finger line --
+  the good ring alone buys the other finger nothing.
+
+- **"1 free via Champion" was never free.** The grey note beside a piece
+  sitting in its track's overlap band claimed the first ranks cost
+  nothing. Those ranks are free only as a PROMOTION -- take a Champion
+  piece to 6/6 and it arrives at Hero 2/6 without a Hero crest. A piece
+  that dropped at Hero 1/6 has no promotion left to collect and pays Hero
+  crests for the next rank like any other; the vendor prices by the
+  item's own track, not by the item level the rank lands on.
+
+  It now reads "(1 rank Champion also reaches)", which is the true part
+  and the part the row's own "Wasteful crest spend" status is built on.
+
+- **An enchant no longer makes a piece "crafted".** Crafted was detected
+  by looking for the profession quality atlas anywhere in the tooltip
+  text, and an enchant carries one -- "Enchanted: Enchant Helm -
+  Empowered Rune of Avoidance" brings the enchant's own quality rank with
+  it, so an ordinary helm read as crafted. On the character this was
+  found on, ten of sixteen slots came back crafted; two of them were, and
+  the other eight were the enchanted ones.
+
+  It cost more than a label: a crafted piece counts as the craft already
+  done, so every slot with a good enchant quietly dropped off the list of
+  things to make. Crafted is now read off the item itself, through
+  `C_TradeSkillUI.GetItemCraftedQualityByItemInfo`, and the tooltip scan
+  is only a fallback for a client that cannot answer.
+
+- **`/yh marks` prints every bucket the client keeps.** It looped over
+  the sixteen this addon was written against, so a bucket the client
+  gained since could not appear on the one screen that exists to show
+  what is actually there.
+
 ## v3.3.0 - Trinket tier lists, the upgrade-mark fixes, and the Battle Res Timer out (2026-09-02)
 
 ### Removed

@@ -957,12 +957,37 @@ function ns:RefreshAllSlots()
                     end
                 end
 
-                -- Check for track overlap (first ranks covered by cheaper crests)
+                -- The track overlap, which is NOT a discount on this
+                -- piece.
+                --
+                -- It read "(1 free via Champion)" and nothing in that was
+                -- true of the row it was drawn on. The free ranks in
+                -- TRACK_FREE_RANKS belong to the PROMOTION: take a
+                -- Champion piece to 6/6 and it arrives at Hero 2/6
+                -- without a Hero crest ever being spent. A piece already
+                -- sitting at Hero 1/6 dropped there -- a promotion lands
+                -- on 2/6, never 1/6 -- so it has nothing left to collect
+                -- and pays Hero crests for the next rank like any other.
+                -- The vendor prices by the item's own track, not by the
+                -- item level the rank lands on. Settled by the user on
+                -- 2026-09-02, at a vendor offering neither a free nor a
+                -- discounted rank anywhere on the character, while this
+                -- label was on screen twice.
+                --
+                -- What IS true is that the rank is duplicated: a Champion
+                -- piece reaches the same item level for a crest worth
+                -- less. That is a claim about where to send crests rather
+                -- than about this item's price, and the row's own status
+                -- already draws the conclusion from it -- "Wasteful crest
+                -- spend", out of ns:GetCrestWaste. So this states the
+                -- fact and stops there.
                 local overlap = ns.TRACK_FREE_RANKS[track]
                 if overlap and upgradeInfo.currUpgrade < overlap.count then
-                    local ranksFromPrev = overlap.count - upgradeInfo.currUpgrade
-                    if ranksFromPrev > 0 then
-                        ilvlStr = ilvlStr .. " |cffaaaaaa(" .. ranksFromPrev .. " free via " .. overlap.prevTrack .. ")|r"
+                    local dupes = overlap.count - upgradeInfo.currUpgrade
+                    if dupes > 0 then
+                        ilvlStr = ilvlStr .. " |cffaaaaaa(" .. dupes
+                            .. (dupes == 1 and " rank " or " ranks ")
+                            .. overlap.prevTrack .. " also reaches)|r"
                     end
                 end
 

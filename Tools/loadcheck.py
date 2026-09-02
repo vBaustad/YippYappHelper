@@ -1355,7 +1355,16 @@ C_LFGList = {}
 --
 -- The pair at 14 and 15 is the shape the whole one-hand rule turns on:
 -- the highest one-hander a character has reached, and the second
--- highest. Rings and trinkets get one bucket each; one-handers get two.
+-- highest. Rings and trinkets get ONE bucket each -- confirmed on a
+-- live client on 2026-09-02 by walking this enum rather than a fixed
+-- range, which named nothing above Offhand. The pair rule is still
+-- theirs, the client just keeps it inside the single bucket: a Hero
+-- ring at 311 and a Champion ring at 295 read Finger 295.
+--
+-- FingerSecond and TrinketSecond were added here for a draft of that
+-- fix and removed with it. There were no values to put on them, and an
+-- invented number in a table whose whole point is being exact buys a
+-- test of something no client does.
 local ENUM_EXACT = {
     WeeklyRewardChestThresholdType = { Activities = 1, World = 2, Raid = 3 },
     ItemRedundancySlot = {
@@ -5667,8 +5676,14 @@ def main():
     # The one command that answers questions this addon cannot: every
     # bucket the client keeps, and which one each worn piece answers to.
     # Run it, change a piece, run it again, and whatever moved is the
-    # rule. It has to print all seventeen and it has to name them, or it
-    # is a column of numbers nobody can act on.
+    # rule. It has to print every bucket the client keeps and it has to
+    # name them, or it is a column of numbers nobody can act on.
+    #
+    # Driven off Enum.ItemRedundancySlot rather than a literal range,
+    # because the range is exactly what goes stale: the command looped
+    # 0..16 -- the table as this file first transcribed it -- so a bucket
+    # the client gained since could not appear on the one screen that
+    # exists to show what is actually there.
     marks = L.eval("""
         function(ns)
             local yh = SlashCmdList.YIPPYAPPHELPER
@@ -5698,15 +5713,18 @@ def main():
             local ok, err = pcall(yh, "marks")
             if not ok then return done("/yh marks raised: " .. tostring(err)) end
 
-            for i = 0, 16 do
-                if not asked[i] then
-                    return done("bucket " .. i .. " was never asked about")
+            local count = 0
+            for name, value in pairs(Enum.ItemRedundancySlot) do
+                if not asked[value] then
+                    return done("bucket " .. value .. " " .. name
+                        .. " was never asked about")
                 end
+                count = count + 1
             end
 
             local body = table.concat(lines, " | ")
-            -- Named, not numbered. OnehandWeaponSecond is the one the
-            -- whole dual-wield rule turns on, so it is the one to check.
+            -- Named, not numbered. The Second buckets are the ones every
+            -- pair rule turns on, so they are the ones to check.
             for _, want in ipairs({ "OnehandWeaponSecond", "Twohand",
                                     "Offhand", "Finger", "Trinket" }) do
                 if not body:find(want, 1, true) then
@@ -5716,11 +5734,12 @@ def main():
             if not body:find("316", 1, true) then
                 return done("bucket 16's value never reached the output")
             end
-            return done("ok")
+            return done("ok " .. count)
         end
     """)(ns)
-    if str(marks) == "ok":
-        print("  ok   /yh marks: all 17 buckets asked, named and printed with "
+    if str(marks).startswith("ok "):
+        print("  ok   /yh marks: all %s buckets asked, named and printed with "
+              % str(marks).split()[1] +
               "what each worn piece answers to")
     else:
         print("  FAIL /yh marks: %s" % marks)
@@ -6015,6 +6034,164 @@ def main():
     else:
         print("  FAIL one-hand pair: %s" % onehand)
         failures.append(("one-hand pair", str(onehand)))
+
+    # A ring slot's line, and the duplicate that forged one.
+    #
+    # From a screenshot: a Hero ring at 311 on one finger, a Champion ring
+    # at 295 on the other, and the Champion row read "Free upgrade! All
+    # remaining ranks are free -- free to 308".
+    #
+    # The client was not the one saying it. Rings get ONE bucket and it
+    # already holds the pair-aware number: with those two rings worn,
+    # Finger read 295. The 308 came from the addon's own fallback -- worn
+    # gear plus anything bound in the bags, second highest -- and the bags
+    # held a SECOND COPY of the ring already worn, one rank lower at 308.
+    # Counted as a piece of its own it was the second half of its own
+    # pair, and it is the same ring. Unique-Equipped, even.
+    #
+    # That fallback is what runs away from the upgrade vendor, which is
+    # everywhere the advice is actually read.
+    rings = L.eval("""
+        function(ns)
+            if not ns.GetFreeUpgradeIlvl then return "no floor to test" end
+            local realSlot, realSpares = ns.GetSlotInfo, ns.GetBagSpares
+            local realInstant = GetItemInfoInstant
+            local realItem = C_ItemUpgrade.GetHighWatermarkForItem
+            local realFor  = C_ItemUpgrade.GetHighWatermarkForSlot
+            local worn, spares = {}, {}
+            local function done(msg)
+                ns.GetSlotInfo, ns.GetBagSpares = realSlot, realSpares
+                GetItemInfoInstant = realInstant
+                C_ItemUpgrade.GetHighWatermarkForItem = realItem
+                C_ItemUpgrade.GetHighWatermarkForSlot = realFor
+                for _, s in ipairs({ 11, 12 }) do
+                    ns.watermarkCache[s] = nil
+                    if YippYappHelperDB.watermarks then
+                        YippYappHelperDB.watermarks[s] = nil
+                    end
+                end
+                ns:InvalidateWatermarkQueries()
+                return msg
+            end
+            ns.GetSlotInfo = function(_, s) return worn[s] end
+            ns.GetBagSpares = function(_, s) return spares[s] or {} end
+            -- Identity comes off the link, the way the client resolves
+            -- it: a worn piece carries no item ID of its own, so two
+            -- copies of one ring can only be told apart through this.
+            GetItemInfoInstant = function(link)
+                local id = tonumber(tostring(link or ""):match("item:(%d+)"))
+                return id, "Armor", "Ring", "INVTYPE_FINGER"
+            end
+            local function line(slot)
+                ns.watermarkCache[slot] = nil
+                if YippYappHelperDB.watermarks then
+                    YippYappHelperDB.watermarks[slot] = nil
+                end
+                return ns:GetFreeUpgradeIlvl(slot)
+            end
+
+            -- The screenshot, and the client answering as it really does:
+            -- one bucket, already holding the lower of the two rings.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 295, 0 end
+            C_ItemUpgrade.GetHighWatermarkForSlot = function() return 295, 0 end
+            worn[11] = { link = "|Hitem:100|h[Ritual Binder]|h", ilvl = 311 }
+            worn[12] = { link = "|Hitem:200|h[Champ Ring]|h", ilvl = 295 }
+            spares[11] = { { itemID = 100, ilvl = 308, unbound = false } }
+            spares[12] = spares[11]
+            local dupe = line(12)
+            if dupe ~= 295 then
+                return done("a second copy of the worn ring built the pair "
+                    .. "on its own, lifting the other finger to " .. dupe)
+            end
+
+            -- A DIFFERENT ring at 308 does build it, which is the control:
+            -- without this the check above proves only that the floor is
+            -- broken.
+            spares[11] = { { itemID = 300, ilvl = 308, unbound = false } }
+            spares[12] = spares[11]
+            local built = line(12)
+            if built ~= 308 then
+                return done("a second, different 308 ring left the line at "
+                    .. built)
+            end
+
+            -- And the client still outranks the floor when it is higher,
+            -- which is the direction the fallback exists to cover.
+            C_ItemUpgrade.GetHighWatermarkForItem = function() return 311, 0 end
+            local said = line(12)
+            if said ~= 311 then
+                return done("the client said 311 and the slot read " .. said)
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(rings) == "ok":
+        print("  ok   ring pair: a duplicate ring is not a second ring, and a "
+              "different one still is")
+    else:
+        print("  FAIL ring pair: %s" % rings)
+        failures.append(("ring pair", str(rings)))
+
+    # Crafted is asked of the ITEM, because the tooltip cannot answer it.
+    #
+    # It matched the profession quality atlas anywhere in the text, and an
+    # enchant carries one -- so a Mythic+ ring with a rank-3 enchant read
+    # as crafted. Ten of sixteen slots on the character this was found on;
+    # two of them were really crafted. The cost is silent: GetCraftAdvice
+    # counts a crafted piece as the craft already done, so every
+    # well-enchanted slot dropped off the list of things to make.
+    #
+    # nil from the helper means "no answer" and must stay distinguishable
+    # from false, which is the whole reason it is not written as
+    # `made ~= nil and made or fallback` -- that idiom returns the
+    # fallback for a false, which is the exact value being corrected.
+    craftedapi = L.eval("""
+        function(ns)
+            if not ns.ItemIsCrafted then return "no crafted test to run" end
+            local real = C_TradeSkillUI
+            local function done(msg) C_TradeSkillUI = real return msg end
+
+            C_TradeSkillUI = nil
+            if ns:ItemIsCrafted(123) ~= nil then
+                return done("no API and it still answered, so the tooltip "
+                    .. "fallback would be overwritten by a guess")
+            end
+
+            C_TradeSkillUI = { GetItemCraftedQualityByItemInfo =
+                function() return 3 end }
+            if ns:ItemIsCrafted(123) ~= true then
+                return done("a crafted quality of 3 did not read as crafted")
+            end
+
+            -- A drop. The API knows it was not made, and that is an
+            -- answer -- the caller has to be able to act on it, or the
+            -- false positive this exists to kill survives.
+            C_TradeSkillUI = { GetItemCraftedQualityByItemInfo =
+                function() return nil end }
+            if ns:ItemIsCrafted(123) ~= false then
+                return done("an uncrafted item did not read as false")
+            end
+
+            -- The API this replaces throws on the wrong argument shape.
+            -- A throw is silence, not an answer.
+            C_TradeSkillUI = { GetItemCraftedQualityByItemInfo =
+                function() error("bad argument") end }
+            if ns:ItemIsCrafted(123) ~= nil then
+                return done("a throw came back as an answer")
+            end
+
+            if ns:ItemIsCrafted(nil) ~= nil then
+                return done("nothing to ask about still produced an answer")
+            end
+            return done("ok")
+        end
+    """)(ns)
+    if str(craftedapi) == "ok":
+        print("  ok   crafted: read off the item, with silence and a plain no "
+              "kept apart")
+    else:
+        print("  FAIL crafted api: %s" % craftedapi)
+        failures.append(("crafted api", str(craftedapi)))
 
     # The load gate, which is only worth having if it holds anything.
     #

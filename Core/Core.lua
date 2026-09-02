@@ -138,6 +138,49 @@ do
     if SET_BONUS_PREFIX == "" then SET_BONUS_PREFIX = "Set:" end
 end
 
+--- The line an enchant puts on a tooltip.
+---
+--- Here so the crafted test below can refuse it. Same treatment
+--- UNBOUND_LINES and SET_BONUS_PREFIX get, for the same reason.
+local ENCHANT_PREFIX
+do
+    local s = ENCHANTED_TOOLTIP_LINE or "Enchanted: %s"
+    ENCHANT_PREFIX = s:match("^(.-)%%") or s
+    if ENCHANT_PREFIX == "" then ENCHANT_PREFIX = "Enchanted:" end
+end
+
+--- Whether an item was MADE rather than won, asked of the item.
+---
+--- The tooltip cannot answer this and was asked anyway. It matched the
+--- profession quality atlas anywhere in the text, and an ENCHANT
+--- carries one. Caught in the act on 2026-09-02, head slot, line 16:
+---
+---   Enchanted: Enchant Helm - Empowered Rune of Avoidance
+---   |A:Professions-ChatIcon-Quality-Tier3:17:15|a
+---
+--- That is the enchant's own quality rank, on a helm nobody made. Ten
+--- of sixteen slots came back crafted on that character and two of them
+--- were -- the eight false ones were the eight enchanted ones.
+---
+--- What it cost: ns:GetCraftAdvice treats a crafted piece in a slot as
+--- the craft already done, so every slot with a good enchant quietly
+--- dropped off the list of things to make. A false positive there is
+--- silence, which is the failure nobody reports.
+---
+--- nil is "no answer" and not "not crafted" -- the caller keeps
+--- whatever it had. `itemInfo` is the link/name/id form, the same one
+--- GetItemInfoInstant takes.
+function ns:ItemIsCrafted(itemInfo)
+    if not itemInfo then return nil end
+    local ts = C_TradeSkillUI
+    local query = ts and ts.GetItemCraftedQualityByItemInfo
+    if not query then return nil end
+    local ok, quality = pcall(query, itemInfo)
+    if not ok then return nil end
+    if type(quality) ~= "number" then return false end
+    return quality >= 1 and quality <= 5
+end
+
 --- Read the upgrade line off whatever was last put in the scan tooltip.
 ---
 --- Split out of ScanUpgradeTrack because the same three numbers have to
@@ -180,9 +223,18 @@ local function ParseUpgradeTooltip()
                     found.maxRank = tonumber(maxRank)
                 end
             end
-            -- Detect crafted items: quality tier atlas icons (Professions-Icon-Quality-*)
-            -- or crafted-by line
-            if text:find("Professions%-Icon%-Quality") or text:find("Professions%-ChatIcon%-Quality") then
+            -- Crafted, by the profession quality atlas -- and only as a
+            -- fallback for a client with no C_TradeSkillUI answer, which
+            -- is the one this can be wrong about. See ns:ItemIsCrafted:
+            -- callers overwrite this with the API wherever it speaks.
+            --
+            -- The enchant line is refused outright because that is where
+            -- it was actually going wrong. Gems and reagents can carry
+            -- the same atlas and are not listed: guessing at the rest of
+            -- the set is what got this here, and the API does not guess.
+            if not text:find(ENCHANT_PREFIX, 1, true)
+                and (text:find("Professions%-Icon%-Quality")
+                    or text:find("Professions%-ChatIcon%-Quality")) then
                 found.crafted = true
             end
             -- Class set armour, however it got there: a direct drop and
@@ -208,6 +260,9 @@ local function ScanUpgradeTrack(slotID)
 
     local found = ParseUpgradeTooltip()
     if not found then return nil, nil, nil, false end
+
+    local made = ns:ItemIsCrafted(GetInventoryItemLink("player", slotID))
+    if made ~= nil then found.crafted = made end
 
     scanCache[slotID] = found
     return found.track, found.rank, found.maxRank, found.crafted, found.setPiece
@@ -319,6 +374,12 @@ local function ScanBagSpares()
                     -- item level is not what this track's rank should be,
                     -- it is not this season's gear and no crest moves it.
                     if ilvl and levels[rank] == ilvl then
+                        -- Not `made ~= nil and made or found.crafted`:
+                        -- a false from the API is an answer, and that
+                        -- idiom drops exactly the value being fixed.
+                        local isMade = found.crafted
+                        local made = ns:ItemIsCrafted(itemID)
+                        if made ~= nil then isMade = made end
                         local spare = {
                             itemID  = itemID,
                             link    = link,
@@ -326,7 +387,7 @@ local function ScanBagSpares()
                             rank    = rank,
                             maxRank = maxRank,
                             ilvl    = ilvl,
-                            crafted = found.crafted,
+                            crafted = isMade,
                             unbound = found.unbound or false,
                             -- Rings, trinkets and one-handers go in two
                             -- slots, and the pair keeps ONE memory
@@ -646,20 +707,32 @@ local function CharacterMark(charMark, accountMark)
     return tonumber(accountMark) or 0
 end
 
---- The second hand's line, when the client has answered about the
---- first one's.
+--- The lower line of a PAIRED slot, when the client has answered
+--- about the higher one.
 ---
 --- GetHighWatermarkForItem answers about the bucket the ITEM belongs
---- to, and for a one-hander that is OnehandWeapon (14) -- the higher
---- of the ranked pair. Handed to the other hand it is a promise about
---- a weapon the player is not upgrading: a crafted 331 in the main
---- hand answered 331 for an off hand sitting at 305, and every rank to
---- 308 was offered for nothing.
+--- to, and on a paired slot that is the higher of the ranked pair.
+--- Handed to the other half of the pair it is a promise about a piece
+--- the player is not upgrading: a crafted 331 in the main hand
+--- answered 331 for an off hand sitting at 305, and every rank to 308
+--- was offered for nothing.
 ---
---- OnehandWeaponSecond (15) is the line the second hand actually
---- follows, and it can be asked for directly. The lower of the two is
---- the only one safe to quote, because nothing here knows which hand
---- holds the better weapon.
+--- Rings and trinkets are the same shape and do NOT need this, which
+--- is worth writing down because it looks like they should. Checked on
+--- a live client, 2026-09-02, by walking Enum.ItemRedundancySlot itself
+--- rather than a fixed range: it names nothing above Offhand, so there
+--- is no FingerSecond and no TrinketSecond. They have one bucket each,
+--- and the client keeps the pair rule INSIDE it -- with a Hero ring at
+--- 311 and a Champion ring at 295 worn, Finger read 295. The single
+--- number is already the second-highest, so a ring's answer can be
+--- quoted as it comes.
+---
+--- Where their pair rule did go wrong is the floor -- see BoundBagFloor.
+---
+--- The Second bucket is the line the lower half actually follows, and
+--- it can be asked for directly. The lower of the two is the only one
+--- safe to quote, because nothing here knows which half of the pair
+--- holds the better piece.
 ---
 --- A zero from that query is silence, not "this pair has been
 --- nowhere" -- the same silence every query in here can return, and
@@ -673,21 +746,56 @@ end
 --- the cache is held to one slot read per frame -- it is the six-second
 --- freeze in this file's history -- and two more reads inside it would
 --- put that straight back.
-local function OneHandSecondBucket()
+--- Which bucket holds a slot's lower line, BY NAME.
+---
+--- Never by number for one this file has not seen a live client
+--- answer to. The harness carries Enum.ItemRedundancySlot exactly for
+--- this reason -- its catch-all once answered 1 to
+--- OnehandWeaponSecond, so the query for the second one-hand mark
+--- asked about Neck -- and a guessed number is that same bug with a
+--- longer fuse, because a wrong bucket returns a plausible number
+--- rather than an error.
+---
+--- So `id` is filled in only where the value is established: 15, from
+--- the one-hand fix that shipped and held. A name the client does not
+--- have reads nil, which is no cap at all.
+---
+--- Two hands are the only pair in here. Ring and trinket entries were
+--- written and then taken back out on the evidence above: speculative
+--- lookups for buckets a live client does not name, exercised only by a
+--- harness enum that had to invent numbers to hold them. The comment is
+--- the part worth keeping.
+local SECOND_BUCKET = {
+    [16] = { name = "OnehandWeaponSecond", id = 15 },
+    [17] = { name = "OnehandWeaponSecond", id = 15 },
+}
+
+local function SecondBucketFor(slotID)
+    local entry = SECOND_BUCKET[slotID]
+    if not entry then return nil end
     local e = Enum and Enum.ItemRedundancySlot
-    return e and e.OnehandWeaponSecond or 15
+    local bucket = e and e[entry.name]
+    if type(bucket) == "number" then return bucket end
+    return entry.id
 end
 
-local function SecondHandCap(slotID, mark)
+local function PairSecondCap(slotID, mark)
     if mark <= 0 then return mark end
-    if slotID ~= 16 and slotID ~= 17 then return mark end
+    local bucket = SecondBucketFor(slotID)
+    if not bucket then return mark end
     if not (C_ItemUpgrade and C_ItemUpgrade.GetHighWatermarkForSlot) then
         return mark
     end
-    if not ns:DualWieldingOneHanders() then return mark end
+    -- Rings and trinkets are a pair by existing. The two hands are a
+    -- pair only while both hold a one-hander: with a two-hander, a
+    -- shield or a holdable in the picture the buckets never touch.
+    if (slotID == 16 or slotID == 17)
+        and not ns:DualWieldingOneHanders() then
+        return mark
+    end
 
     local ok, charMark, accountMark =
-        pcall(C_ItemUpgrade.GetHighWatermarkForSlot, OneHandSecondBucket())
+        pcall(C_ItemUpgrade.GetHighWatermarkForSlot, bucket)
     if not ok then return mark end
     local second = CharacterMark(charMark, accountMark)
     if second > 0 and second < mark then return second end
@@ -1258,9 +1366,45 @@ end
 --- the lower of the pair" means once both slots and the bags are one
 --- population. On a single slot the second highest of one piece would
 --- be nothing, so it takes the highest.
+---
+--- Counted once per ITEM, not once per copy. Two of the same ring are
+--- one ring as far as the line is concerned -- the pair is built by two
+--- different pieces reaching a level, and a duplicate reaching it again
+--- is the same piece reaching it again. Uncounted, a spare copy of the
+--- worn ring sat in the bags as the second half of its own pair and
+--- handed the other finger a floor nothing had earned.
+---
+--- The item ID where it can be read and the link where it cannot: two
+--- copies of one item share a link too, so the fallback keys the same
+--- way rather than guessing.
+---
+--- Nil for a piece that answers to neither, and that is not "drop it".
+--- Dropping a piece the addon can see is a fact thrown away; what an
+--- unidentifiable piece has NOT earned is the right to be called a
+--- duplicate of another one. So it counts, on its own key, which is
+--- what every piece did before this rule existed.
+local function ItemKey(link, itemID)
+    if itemID then return itemID end
+    if link and GetItemInfoInstant then
+        local ok, id = pcall(GetItemInfoInstant, link)
+        if ok and id then return id end
+    end
+    return link
+end
+
 local function BoundBagFloor(slotID)
     local pair = PairFor(slotID)
-    local seen = {}
+    local best, anon = {}, 0
+
+    --- Highest per item, so a copy cannot stand in for a second piece.
+    local function count(link, ilvl, itemID)
+        local key = ItemKey(link, itemID)
+        if not key then
+            anon = anon + 1
+            key = "anon" .. anon
+        end
+        if not best[key] or ilvl > best[key] then best[key] = ilvl end
+    end
 
     -- Worn counts. It is bound by definition, and on a paired slot the
     -- twin's piece is half of what sets the line.
@@ -1268,7 +1412,7 @@ local function BoundBagFloor(slotID)
         local info = ns.GetSlotInfo and ns:GetSlotInfo(s)
         if info and info.ilvl and info.ilvl > 0
             and not ns:PieceIsOffStat(info.link) then
-            seen[#seen + 1] = info.ilvl
+            count(info.link, info.ilvl, info.itemID)
         end
     end
 
@@ -1279,10 +1423,12 @@ local function BoundBagFloor(slotID)
         if not spare.unbound and (pair or not spare.shared)
             and spare.ilvl and spare.ilvl > 0
             and not ns:PieceIsOffStat(spare.link) then
-            seen[#seen + 1] = spare.ilvl
+            count(spare.link, spare.ilvl, spare.itemID)
         end
     end
 
+    local seen = {}
+    for _, ilvl in pairs(best) do seen[#seen + 1] = ilvl end
     table.sort(seen, function(a, b) return a > b end)
     return seen[pair and 2 or 1] or 0
 end
@@ -1303,9 +1449,9 @@ function ns:GetMarkRead(slotID)
     local mark = QueryWatermark(slotID)
     if mark > 0 then
         RememberWatermark(slotID, mark)
-        return SecondHandCap(slotID, mark)
+        return PairSecondCap(slotID, mark)
     end
-    return SecondHandCap(slotID, ns.watermarkCache[slotID] or 0)
+    return PairSecondCap(slotID, ns.watermarkCache[slotID] or 0)
 end
 
 --- How high this slot is KNOWN to have been. Never an over-statement.
@@ -2190,10 +2336,9 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
     -- free", because it can only ever show you one bucket and never the
     -- seventeen they sit among.
     --
-    -- There are seventeen and they are cheap, so print them all. The
-    -- technique is off the wiki's own Dawn achievement page, which
-    -- hands out a macro doing exactly this to find the slot holding a
-    -- character back.
+    -- They are cheap, so print every one of them. The technique is off
+    -- the wiki's own Dawn achievement page, which hands out a macro
+    -- doing exactly this to find the slot holding a character back.
     --
     -- What it is FOR, beyond curiosity: every open question about this
     -- system is one equip-and-compare away once the whole state is on
@@ -2218,10 +2363,21 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
             end
         end
 
+        -- Every bucket the CLIENT names, rather than the range this
+        -- file was written against. It looped 0..16, which is the table
+        -- as it was transcribed -- so a bucket added since could not
+        -- appear here, and this is the one screen that exists to show
+        -- what is actually there. The whole point of it is answering
+        -- questions the code has assumptions about.
+        local highest = 16
+        for value in pairs(names) do
+            if value > highest then highest = value end
+        end
+
         print("|cff00ff00=== High-water marks ===|r")
         print("character / account. A rank at or under the mark for its "
             .. "bucket costs no crests.")
-        for i = 0, 16 do
+        for i = 0, highest do
             local ok, charMark, accountMark =
                 pcall(C_ItemUpgrade.GetHighWatermarkForSlot, i)
             if ok then
