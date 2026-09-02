@@ -1846,7 +1846,12 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         print("  /yh marks — every high-water mark the client keeps, named")
         print("  /yh settings — open the options panel")
         print("  /yh skin [id] — list or choose a skin")
-        print("  /yh edit — move YippYapp frames via Edit Mode")
+        -- /yh edit is deliberately not listed. Edit Mode has nothing to
+        -- place any more -- every window moves itself, dragged while it
+        -- is open -- so the command survives only to say that to anyone
+        -- who still reaches for it. Advertising it here would send new
+        -- readers to a command whose whole job is to explain that it has
+        -- no job.
         print("  /yh test [panel] — show a panel with sample content (/yh test for the list)")
         return
     end
