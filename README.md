@@ -197,8 +197,8 @@ single target and AoE, and the footer names whichever site the list on
 screen came from.
 
 bloodmallet re-sims a new season a few specs at a time, so the file holds
-both while that runs. 27 of its 32 specs are fully on Season 2 numbers;
-the other 5 keep a Season 1 ranking for at least one fight style rather
+both while that runs. 29 of its 32 specs are fully on Season 2 numbers;
+the other 3 keep a Season 1 ranking for at least one fight style rather
 than being dropped, and say so in the list, on the loot council rows and
 in the tooltip. This is per fight style — a spec can be Season 2 on
 single target and Season 1 on 5-target.
