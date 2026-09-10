@@ -2,7 +2,7 @@
 ## Title: YippYapp Helper
 ## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
 ## Author: vbaustad
-## Version: 3.3.1
+## Version: 3.3.2
 ## SavedVariables: YippYappHelperDB
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper
@@ -29,6 +29,21 @@ Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 # v11). LibStub hands out whichever copy loads first, so keeping ours
 # current matters -- a stale embedded copy becomes everyone's copy.
 Libs\LibKeystone\LibKeystone.lua
+
+# Ready-check durability, and the same story a second time.
+#
+# The Dur column used to ride our own YYHDUR prefix, so it only filled
+# for other YippYapp users -- nobody -- and never at all in a
+# dungeon-finder group, because we only sent on RAID and PARTY.
+# LibDurability is on the LibDRBLT prefix, and its frame answers
+# READY_CHECK and "R" requests from file load, so a raid full of BigWigs
+# users answers. BigWigs and MRT both embed it.
+#
+# Vendored from BigWigs at v4 -- one version ahead of MRT's copy, and the
+# newer one matters: v4 guards the incoming message with issecretvalue.
+# LibStub hands out whichever copy loads first, so re-vendor from BigWigs
+# when updating rather than letting ours go stale.
+Libs\LibDurability\LibDurability.lua
 
 # LibEditMode registers our movable frames as real Edit Mode systems, so
 # they get Blizzard's own selection outlines and settings dialogs.

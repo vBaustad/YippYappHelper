@@ -650,6 +650,16 @@ function UnitName() return "Tester" end
 -- carries. LibKeystone reads it at file scope, so a missing stub is not
 -- a failing test, it is the library failing to load at all.
 function UnitNameUnmodified() return "Tester" end
+-- Name-Realm in; "short" always drops the realm, "none" keeps it. Same
+-- trap as UnitNameUnmodified above and for the same library family:
+-- LibDurability captures Ambiguate as a local at file load, so a stub a
+-- test adds later arrives too late to be seen. It was only ever stubbed
+-- inside one check, which is why the shared prefix could not be tested.
+function Ambiguate(name, mode)
+    if type(name) ~= "string" then return name end
+    if mode == "short" then return (name:match("^([^-]+)")) or name end
+    return name
+end
 function UnitLevel() return 80 end
 -- overall, equipped, pvp. Equipped is deliberately BELOW the fixture's
 -- vault rewards (282-302) so the "not an upgrade" branch is reachable
@@ -663,6 +673,13 @@ function GetSpecializationInfoByID() return 102, "Balance", "", 136096, "DAMAGER
 function GetItemInfo() return nil end
 function GetInventoryItemID() return nil end
 function GetInventoryItemLink() return nil end
+-- current, max for one equipped slot. LibDurability reads it the moment
+-- anything asks the group for durability, which is now any path that
+-- opens the ready-check window -- so a missing stub is the library
+-- erroring inside an unrelated test rather than a durability test
+-- failing. Full so the healthy branch is the default; the tests that
+-- want worn or broken gear stub their own on top.
+function GetInventoryItemDurability() return 100, 100 end
 function UnitFactionGroup() return "Alliance" end
 function GetDetailedItemLevelInfo() return 0 end
 function InCombatLockdown() return false end
@@ -11235,6 +11252,52 @@ def main():
         src = re.sub(re.escape("--[[") + ".*?" + re.escape("]]"), "", src, flags=re.S)
         return re.sub("--[^" + chr(10) + "]*", "", src)
 
+    # Every library is optional at the point of use, so prove it.
+    #
+    # LibDBIcon and LibDataBroker are declared OptionalDeps -- the .toc
+    # saying they may come from another addon or from nobody -- and
+    # LibKeystone, LibDurability and LibEditMode are all shared copies
+    # where LibStub hands out whichever loaded first. Any of them can be
+    # absent, and the minimap button used to take the whole file down
+    # with it: a bare LibStub("LibDBIcon-1.0") throws twice over, once
+    # indexing a nil global and once on LibStub's own "cannot find a
+    # library instance".
+    #
+    # The harshest version of that is what runs here: no LibStub at all,
+    # and none of the Libs files loaded. Everything of ours must still
+    # load clean.
+    L2 = LuaRuntime(unpack_returned_tuples=False)
+    L2.execute("_G = _G or _ENV")
+    L2.execute(PRELUDE)
+    L2.execute("LibStub = nil")
+    ns2 = L2.eval("{}")
+    run2 = L2.eval("""
+        function(src, name, ns)
+            local chunk, err = load(src, name)
+            if not chunk then return "compile: " .. tostring(err) end
+            local ok, e = pcall(chunk, "YippYappHelper", ns)
+            if ok then return nil end
+            return tostring(e)
+        end
+    """)
+    nolib, loaded = [], 0
+    for rel in toc_files():
+        if rel.startswith("Libs"):
+            continue
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        err = run2(open(path, encoding="utf-8-sig").read(), "@" + rel, ns2)
+        if err and not is_version_divergence(err):
+            nolib.append("%s: %s" % (rel, str(err)[:90]))
+        loaded += 1
+    if nolib:
+        print("  FAIL no libraries: %s" % "; ".join(nolib[:3]))
+        failures.append(("no libraries", "; ".join(nolib)))
+    else:
+        print("  ok   no libraries: %d addon file(s) load with LibStub absent "
+              "entirely" % loaded)
+
     modern = []
     for rel in toc_files():
         path = os.path.join(ROOT, rel)
@@ -11668,6 +11731,126 @@ def main():
     else:
         print("  FAIL ready check auras: %s" % auras)
         failures.append(("ready check auras", str(auras)))
+
+    # Durability comes off a shared prefix, or it comes off nothing.
+    #
+    # The column used to ride our own YYHDUR prefix, so it filled for
+    # other YippYapp users and nobody else -- the same failure the
+    # keystone tab had, and invisible from inside the addon, because our
+    # own row always worked. So the thing to prove is not that we send:
+    # it is that a reply from an addon that is NOT this one lands in the
+    # window. The message below is exactly what a BigWigs user's copy of
+    # LibDurability puts on the wire.
+    #
+    # And 94% with a dead weapon is the case the percentage hides: one
+    # 0/120 item among seventeen healthy pieces still totals in the
+    # nineties, so a check that only read the number would call the
+    # broken-item colour green and pass.
+    dur = L.eval("""
+        function(ns)
+            local LD = LibStub and LibStub("LibDurability", true)
+            if not LD then return "LibDurability did not load" end
+            if type(LD.RequestDurability) ~= "function" then
+                return "the library loaded without RequestDurability"
+            end
+
+            local frame = _G.YippYappReadyCheck
+            if not (frame and frame._fullRows) then return "the row pool is not published" end
+
+            -- A two-man raid, put back afterwards. ABSENT because a
+            -- name that did not exist has to go back to not existing
+            -- rather than keeping the stub.
+            local ABSENT = {}
+            local saved = {}
+            local function stub(name, fn)
+                local prev = _G[name]
+                saved[name] = (prev == nil) and ABSENT or prev
+                _G[name] = fn
+            end
+            stub("IsInGroup", function() return true end)
+            stub("IsInRaid", function() return true end)
+            stub("GetNumGroupMembers", function() return 2 end)
+            stub("UnitExists", function(u)
+                return u == "player" or u == "raid1" or u == "raid2"
+            end)
+            stub("UnitIsUnit", function(a, b)
+                if a == b then return true end
+                return (a == "player" and b == "raid1")
+                    or (a == "raid1" and b == "player")
+            end)
+            stub("UnitClass", function() return "Warrior", "WARRIOR" end)
+            stub("UnitName", function(u)
+                if u == "raid2" then return "Brokenaxe", "Realm" end
+                return "Tester"
+            end)
+            stub("GetReadyCheckStatus", function() return "ready" end)
+            stub("UnitIsConnected", function() return true end)
+            stub("UnitIsDeadOrGhost", function() return false end)
+            stub("IsInInstance", function() return false, "none" end)
+
+            local function finish(msg)
+                for name, prev in pairs(saved) do
+                    _G[name] = (prev ~= ABSENT) and prev or nil
+                end
+                if ns.ReadyCheck.Hide then ns.ReadyCheck.Hide() end
+                return msg
+            end
+
+            -- What a foreign copy of the library sends: 94%, one item
+            -- broken, on the prefix everybody shares.
+            local heard = FireEvent("CHAT_MSG_ADDON", "LibDRBLT", "94,1", "RAID", "Brokenaxe-Realm")
+            if heard == 0 then
+                return finish("nothing is listening on CHAT_MSG_ADDON -- the "
+                    .. "library's own frame never registered, so no reply "
+                    .. "from anybody else can arrive")
+            end
+
+            local ok, err = pcall(ns.ReadyCheck.Preview, false)
+            if not ok then return finish("the render errored: " .. tostring(err)) end
+
+            local mine, theirs
+            for _, row in ipairs(frame._fullRows) do
+                if row:IsShown() then
+                    local cell = row.icons and row.icons[#row.icons]
+                    local who = row.name and row.name:GetText() or ""
+                    if who:find("Brokenaxe", 1, true) then theirs = cell
+                    elseif who:find("Tester", 1, true) then mine = cell end
+                end
+            end
+            if not mine then return finish("our own row did not render") end
+            if not theirs then return finish("the other raider did not render") end
+
+            -- Ours is read straight off the client, so it needs no wire.
+            if mine.textFs:GetText() ~= "100%" then
+                return finish("our own durability read " .. tostring(mine.textFs:GetText())
+                    .. " off a fully repaired stub")
+            end
+
+            if theirs.textFs:GetText() ~= "94%" then
+                return finish("a reply on the shared prefix did not reach the "
+                    .. "window: the cell reads " .. tostring(theirs.textFs:GetText()))
+            end
+            local r, g, b = theirs.textFs:GetTextColor()
+            if not r then return finish("the cell was left uncoloured") end
+            if not (r > 0.9 and g < 0.5 and b < 0.5) then
+                return finish(string.format(
+                    "94%% with a broken item coloured %.1f,%.1f,%.1f -- a dead "
+                    .. "weapon has to be red whatever the total says", r, g, b))
+            end
+            local note = tostring(theirs._note2 or "")
+            if not note:find("broken", 1, true) then
+                return finish("the tooltip never mentions the broken item")
+            end
+
+            return finish("ok:94% and 1 broken item arrived from a stranger's addon, "
+                .. "red despite the total, and our own row read 100% with no wire at all")
+        end
+    """)(ns)
+    if dur and str(dur).startswith("ok:"):
+        print("  ok   durability: %s" % str(dur)[3:])
+    else:
+        print("  FAIL durability: %s" % dur)
+        failures.append(("durability", str(dur)))
 
     # Every self-opening window can be raised from chat, and owns itself.
     #

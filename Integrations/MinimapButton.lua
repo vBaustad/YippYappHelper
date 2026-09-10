@@ -3,8 +3,32 @@ local _, ns = ...
 ------------------------------------------------------------
 -- Minimap button via LibDBIcon (works with ElvUI, SexyMap, etc.)
 ------------------------------------------------------------
-local LDB = LibStub("LibDataBroker-1.1")
-local DBIcon = LibStub("LibDBIcon-1.0")
+-- Asked for silently, and guarded twice over.
+--
+-- Both are OptionalDeps, which is the .toc saying out loud that they may
+-- not be here: another addon can be supplying them, or nothing can. The
+-- bare LibStub("LibDBIcon-1.0") this used to be threw on both halves of
+-- that -- indexing a nil global when LibStub itself is absent, and
+-- LibStub's own "cannot find a library instance" error when it is not.
+-- Either one aborts this file mid-load, which in a .toc means every file
+-- after it is fine but this one silently half-ran.
+--
+-- The `true` is LibStub's silent flag: nil back rather than an error.
+local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
+local DBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+
+if not (LDB and DBIcon) then
+    -- No minimap button, and nothing else lost: /yh, the key binding and
+    -- every page still work, and the settings checkbox already guards
+    -- its own DBIcon lookup. `/yh icon` reaches this rather than a nil
+    -- call because Core checks for the function before calling it -- it
+    -- is defined here so the command answers instead of doing nothing.
+    function ns:TuneMinimapIcon()
+        print("|cffff5555YippYapp:|r no minimap button -- LibDBIcon and "
+            .. "LibDataBroker are not loaded.")
+    end
+    return
+end
 
 -- The art is full bleed, which is what lets it fill the tracking ring.
 local ICON_TEXTURE = "Interface\\AddOns\\YippYappHelper\\Media\\YippYappHelper"

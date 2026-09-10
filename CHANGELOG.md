@@ -1,5 +1,45 @@
 # YippYapp Helper - Changelog
 
+## v3.3.2 - Durability off the channel everyone is already on (2026-09-10)
+
+### Fixed
+- **The minimap button could take itself out on load.** LibDBIcon and
+  LibDataBroker are optional dependencies -- another addon may supply
+  them, or nothing may -- but they were being asked for in the form that
+  throws when they are missing, once for LibStub itself being absent and
+  once for LibStub not having the library. Both are now silent lookups,
+  and with them gone the addon simply has no minimap button; `/yh`, the
+  key binding and every page are unaffected.
+- **The Dur column filled for nobody.** Durability was shared over this
+  addon's own `YYHDUR` prefix, so a raider's percentage only ever
+  appeared if they also ran YippYapp -- and the column looked like it
+  worked, because your own row always did. It also never filled at all in
+  a dungeon-finder or LFR group: those need `INSTANCE_CHAT`, and the
+  broadcast only ever went to `RAID` or `PARTY`.
+
+  Moved to **LibDurability**, the shared library on the `LibDRBLT`
+  prefix that BigWigs and Method Raid Tools both embed. Its own frame
+  answers a ready check from file load, without the host addon having to
+  do anything, so a raid full of BigWigs users answers -- which is every
+  raid. This is the same fix the Guild keystone tab got in v3.2.0, for
+  the same reason.
+
+- **A broken weapon reads green no longer.** One dead item among
+  seventeen healthy pieces still totals in the nineties, so the number
+  alone said everything was fine. Broken items are counted separately now
+  and turn the cell red whatever the total says, with the count in the
+  tooltip.
+
+### Changed
+- The durability cell has a tooltip. It used to fall through to the
+  buff-column wording and hover as "out of range or not applicable" --
+  off a cell showing 84%. A blank cell now says the honest thing, which
+  is that the player is running no addon that shares durability, rather
+  than pointing at a range problem that is not there.
+- Opening the window by hand now asks the group for durability instead of
+  only announcing your own. It used to sit full of dashes until somebody
+  started a ready check.
+
 ## v3.3.1 - The ring that paid for the other one (2026-09-02)
 
 ### Fixed

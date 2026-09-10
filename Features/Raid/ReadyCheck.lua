@@ -124,13 +124,30 @@ end
 local EATING_AURA_NAMES = { Food = true, Drink = true, Refreshment = true }
 ------------------------------------------------------------
 -- Durability
--- GetInventoryItemDurability only reports the player's own gear, so we
--- share each raider's % via a lightweight addon comm on ready-check.
+--
+-- GetInventoryItemDurability only reports the player's own gear, so
+-- everyone else's number has to arrive over an addon comm. That used to
+-- be our own YYHDUR prefix, which meant the column only ever filled for
+-- other YippYapp users -- in practice nobody -- and never at all in a
+-- dungeon-finder group, because we only ever sent on RAID and PARTY.
+--
+-- LibDurability is the shared library BigWigs and MRT both embed, on the
+-- LibDRBLT prefix. Its own frame registers CHAT_MSG_ADDON and
+-- READY_CHECK at file load, before any addon calls Register(), so merely
+-- having the file loaded makes a player a responder: a raid full of
+-- BigWigs users answers, which is every raid. Same reasoning as
+-- LibKeystone, written out in the .toc.
+--
+-- What the library does so this file does not have to: answers the ready
+-- check itself, unprompted, from every client that holds it -- so there
+-- is nothing to broadcast here; picks INSTANCE_CHAT over RAID over
+-- PARTY; throttles both directions 4s per channel; and counts broken
+-- items alongside the percentage.
 ------------------------------------------------------------
-local DURABILITY_PREFIX = "YYHDUR"
-C_ChatInfo.RegisterAddonMessagePrefix(DURABILITY_PREFIX)
+local LD = LibStub and LibStub("LibDurability", true)
 
-local durabilityCache = {}  -- [shortName] = { pct = <0..100>, ts = GetTime() }
+-- [short name] = { pct = <0..100>, broken = <count>, ts = GetTime() }
+local durabilityCache = {}
 
 local DURABILITY_TTL = 600  -- 10 min
 
@@ -140,7 +157,9 @@ local DURABILITY_TTL = 600  -- 10 min
 --- name -- and nothing ever took any away. Small, and the same shape as
 --- the raid scan that reached 673 rows: a table fed from outside with no
 --- eviction. That the feed is other people's addons is the reason to
---- bound it rather than the reason not to bother.
+--- bound it rather than the reason not to bother, and on a shared prefix
+--- the feed is now every BigWigs user we group with rather than the
+--- handful who run this addon.
 ---
 --- Only entries past their TTL go, and the read path already ignores
 --- those, so this changes nothing anyone can see. Swept on growth rather
@@ -160,31 +179,55 @@ local function PruneDurability()
     end
 end
 
+--- Our own, read straight from the client rather than waiting on a
+--- round trip. The library computes the same sum, but only when
+--- something asks it to; this is also the whole answer while ungrouped.
+---
+--- Returns nil when there is no gear at all to measure, which the
+--- renderer draws as "-". The library returns 0 for that case, and 0%
+--- and "nothing equipped" are not the same thing to read.
 local function ComputeOwnDurability()
-    local current, max = 0, 0
+    local current, max, broken = 0, 0, 0
     for slot = 1, 18 do
         local cur, m = GetInventoryItemDurability(slot)
         if cur and m and m > 0 then
             current = current + cur
             max     = max + m
+            -- Counted separately because a broken item barely moves the
+            -- total: one dead weapon among seventeen healthy pieces
+            -- still totals about 94%, which reads as fine.
+            if cur == 0 then broken = broken + 1 end
         end
     end
     if max == 0 then return nil end
-    return math.floor(current / max * 100 + 0.5)
+    return math.floor(current / max * 100 + 0.5), broken
 end
 
-local function BroadcastOwnDurability()
-    local pct = ComputeOwnDurability()
+--- Fold one reply into the cache. Shared by the library callback and
+--- nothing else today, but kept apart from the callback so the clamping
+--- lives next to the table it protects.
+local function StoreDurability(pName, pct, broken)
+    if not pName then return end
+    pct = tonumber(pct)
     if not pct then return end
-    local shortName = Ambiguate(UnitName("player"), "short")
-    durabilityCache[shortName] = { pct = pct, ts = GetTime() }
-    if not IsInGroup() then return end
-    local channel = IsInRaid() and "RAID" or "PARTY"
-    -- Random 0-1.5s stagger so 30 raiders don't all flood CHAT_MSG_ADDON
-    -- in the same tick (Blizzard throttles/drops bursts).
-    C_Timer.After(math.random() * 1.5, function()
-        C_ChatInfo.SendAddonMessage(DURABILITY_PREFIX, tostring(pct), channel)
-    end)
+    -- Remote input: clamp rather than trust, because this is displayed.
+    if pct < 0 then pct = 0 elseif pct > 100 then pct = 100 end
+    broken = tonumber(broken) or 0
+    if broken < 0 then broken = 0 elseif broken > 18 then broken = 18 end
+    -- The library reports remote senders as "Name-Realm" and ourselves
+    -- as the bare name; the read path below asks in short form.
+    durabilityCache[Ambiguate(pName, "short")] = {
+        pct = pct, broken = broken, ts = GetTime(),
+    }
+    PruneDurability()
+end
+
+--- Ask the group. The library replies to the ready check on its own, so
+--- this is for the window opened without one -- and it hands us our own
+--- number through the callback either way, so an ungrouped preview
+--- fills its one row.
+local function RequestDurability()
+    if LD then LD:RequestDurability() end
 end
 
 local function GetDurabilityFor(unit)
@@ -193,11 +236,11 @@ local function GetDurabilityFor(unit)
     end
     local raw = UnitName(unit)
     if not raw then return nil end
-    -- Cache key matches the format used on receive (Ambiguate short).
+    -- Cache key matches the format used on store (Ambiguate short).
     local short = Ambiguate(raw, "short")
     local entry = durabilityCache[short] or durabilityCache[raw]
     if entry and (GetTime() - entry.ts) < DURABILITY_TTL then
-        return entry.pct
+        return entry.pct, entry.broken
     end
     return nil
 end
@@ -437,7 +480,10 @@ local function MakeFullRow()
             -- Tooltip must sit above our FULLSCREEN_DIALOG frame.
             GameTooltip:SetFrameStrata("TOOLTIP")
             GameTooltip:AddLine(CHECKS_META[i].label, 1, 1, 1)
-            if self._present == true then
+            if self._note then
+                GameTooltip:AddLine(self._note)
+                if self._note2 then GameTooltip:AddLine(self._note2) end
+            elseif self._present == true then
                 GameTooltip:AddLine("|cff00ff00present|r")
                 if self._aura and self._aura.name then
                     GameTooltip:AddLine(self._aura.name, 0.8, 0.8, 0.8)
@@ -501,10 +547,16 @@ local function HideAllFullRows()
     end
 end
 
--- opts: { present=bool|nil, iconID, aura, pulse=bool, text=string|nil, textColor={r,g,b} }
+-- opts: { present=bool|nil, iconID, aura, pulse=bool, text=string|nil,
+--         textColor={r,g,b}, note=string|nil, note2=string|nil }
 local function ApplyIconState(iconFrame, opts)
     local present = opts.present
     iconFrame._present = present
+    -- Columns that are a number rather than a yes/no. Without these the
+    -- durability cell hovers as "out of range or not applicable", which
+    -- is a strange thing to read off a cell showing 84%.
+    iconFrame._note  = opts.note
+    iconFrame._note2 = opts.note2
     -- Why it is unknown, when we know why. Without this every blocked
     -- column hovers as "out of range", which sends people looking for a
     -- range problem that is not there.
@@ -635,7 +687,7 @@ end
 ------------------------------------------------------------
 local TEST_ROSTER = {
     { name = "Bloodfang",   class = "WARRIOR",     ready = "ready",    food = "wellfed", flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 100 },
-    { name = "Shadowblade", class = "ROGUE",       ready = "ready",    food = "wellfed", flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 95 },
+    { name = "Shadowblade", class = "ROGUE",       ready = "ready",    food = "wellfed", flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 95, durBroken = 1 },
     { name = "Lightshield", class = "PALADIN",     ready = "ready",    food = "wellfed", flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 82 },
     { name = "Frostwhisper", class = "MAGE",       ready = "ready",    food = "eating",  flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 88 },
     { name = "Nightbloom",  class = "DRUID",       ready = "ready",    food = "wellfed", flask = true,  vantus = true,  int = true,  ap = true,  vers = true,  stam = true,  haste = true,  move = true,  dur = 76 },
@@ -790,6 +842,10 @@ local function GatherFromUnit(unit)
     end
 
     local a = ScanUnitAuras(unit)
+    -- Two returns, so it cannot stay inline in the table below: a
+    -- keyed field truncates a multi-return to its first value.
+    local durPct, durBroken = GetDurabilityFor(unit)
+
     local foodState
     if a.blocked then foodState = { state = "unknown" }
     elseif a.wellfed then foodState = { state = "wellfed", aura = a.wellfed }
@@ -812,7 +868,8 @@ local function GatherFromUnit(unit)
             haste  = a.haste,
             move   = a.move,
         },
-        dur = GetDurabilityFor(unit),
+        dur = durPct,
+        durBroken = durBroken,
         -- True when the client refused us the aura list for this unit.
         -- Every buff column reads as "unknown" rather than "missing".
         blocked = a.blocked,
@@ -868,6 +925,7 @@ local function GatherFromTest(entry, idx)
             move   = entry.move   and {} or nil,
         },
         dur  = entry.dur,
+        durBroken = entry.durBroken,
         test = true,
     }
 end
@@ -1007,12 +1065,36 @@ local function BuildFullView()
                 end
             elseif c.key == "dur" then
                 if p.dur then
+                    local broken = p.durBroken or 0
                     local r, g, b = 0.3, 1, 0.3
                     if p.dur < 70 then r, g, b = 1, 0.8, 0.2 end
                     if p.dur < 40 then r, g, b = 1, 0.3, 0.3 end
-                    ApplyIconState(btn, { text = p.dur .. "%", textColor = { r, g, b } })
+                    -- A dead weapon is red whatever the total says. One
+                    -- 0/120 item among seventeen healthy pieces still
+                    -- totals about 94%, and 94% green is the wrong
+                    -- answer to "can this person hit the boss".
+                    local note
+                    if broken > 0 then
+                        r, g, b = 1, 0.3, 0.3
+                        note = broken == 1 and "|cffff40401 item broken|r"
+                            or ("|cffff4040" .. broken .. " items broken|r")
+                    end
+                    ApplyIconState(btn, {
+                        text = p.dur .. "%",
+                        textColor = { r, g, b },
+                        note = string.format("|cffffffff%d%%|r equipped durability", p.dur),
+                        note2 = note,
+                    })
                 else
-                    ApplyIconState(btn, { present = nil, iconID = c.iconID })
+                    -- Not "out of range": their client never answered,
+                    -- which means no addon on their end holds the
+                    -- library. Say so, so nobody hunts a range problem.
+                    ApplyIconState(btn, {
+                        present = nil, iconID = c.iconID,
+                        note  = "|cff888888no answer|r",
+                        note2 = "Durability is shared between addons. This "
+                            .. "player is running none that share it.",
+                    })
                 end
             else
                 local a = p.aura[c.key]
@@ -1180,7 +1262,6 @@ local events = CreateFrame("Frame")
 events:RegisterEvent("READY_CHECK")
 events:RegisterEvent("READY_CHECK_CONFIRM")
 events:RegisterEvent("READY_CHECK_FINISHED")
-events:RegisterEvent("CHAT_MSG_ADDON")
 -- Roster change invalidates the aura cache: the unit at a given token
 -- slot may have been replaced.
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -1334,24 +1415,21 @@ local function UnitIsInGroup(unit)
     return false
 end
 
-events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
-    if event == "CHAT_MSG_ADDON" then
-        if arg1 ~= DURABILITY_PREFIX then return end
-        -- Remote input: another addon (or a crafted message) can send
-        -- anything. Clamp rather than trust -- this is displayed.
-        local pct = tonumber(arg2)
-        if not pct then return end
-        if pct < 0 then pct = 0 elseif pct > 100 then pct = 100 end
-        local sender = arg4 and Ambiguate(arg4, "short") or nil
-        if not sender then return end
-        durabilityCache[sender] = { pct = pct, ts = GetTime() }
-        PruneDurability()
-        -- 30 durability messages arrive in a burst during the staggered
-        -- broadcast — coalesce into one render at the end of the window.
+-- The library owns CHAT_MSG_ADDON, so there is no event branch for
+-- durability any more -- just this callback. Registered down here rather
+-- than up with the rest of the durability code because it touches
+-- `frame` and `QueueRefresh`, both declared further down the file: read
+-- from a function defined above them, those two names would resolve as
+-- globals and silently be nil.
+if LD then
+    LD:Register("YippYappHelper", function(pct, broken, pName)
+        StoreDurability(pName, pct, broken)
+        -- Thirty replies land in one burst -- coalesce into one render.
         if frame:IsShown() then QueueRefresh(0.6) end
-        return
-    end
+    end)
+end
 
+events:SetScript("OnEvent", function(_, event, arg1, arg2)
     if event == "GROUP_ROSTER_UPDATE" then
         -- Named for the tracer. Both of these are locals, and this fires
         -- on every roster change -- so on a twenty-man raid forming, it
@@ -1379,7 +1457,10 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
         -- name — they're implicitly "ready" since they started the check.
         wipe(readyStatus)
         if arg1 then readyStatus[Ambiguate(arg1, "short")] = "ready" end
-        BroadcastOwnDurability()
+        -- No broadcast here on purpose: every client holding
+        -- LibDurability answers READY_CHECK from inside the library,
+        -- ourselves included, so asking as well would be a second copy
+        -- of thirty messages for the same thirty numbers.
         ShowFrameAtSavedPos()
         Render()
         StartCountdown(arg2 or 30)
@@ -1449,7 +1530,8 @@ end)
 local function Preview(withTestRoster)
     DB().enabled = true
     usingTestRoster = withTestRoster and true or false
-    if not usingTestRoster then BroadcastOwnDurability() end
+    -- Opened by hand, so nothing has answered a ready check: ask.
+    if not usingTestRoster then RequestDurability() end
     ShowFrameAtSavedPos()
     Render()
     StartCountdown(30)
