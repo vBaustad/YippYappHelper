@@ -278,6 +278,186 @@ local function ApplyRowIcon(tex, data)
 
     return false
 end
+
+--- What the row's quest pays, on the tooltip.
+---
+--- The reason to do the thing, next to the thing. "Complete Midnight:
+--- Dungeons" is a chore; "Complete Midnight: Dungeons, pays a Spark of
+--- Tides" is an argument, and the argument is what somebody choosing
+--- between two evenings actually wants. Asked for on CurseForge in the
+--- same breath as the map arrow, which is not a coincidence -- both
+--- questions are "is this one worth my Tuesday".
+---
+--- Currencies first, items after: on a weekly the currency is usually
+--- the whole point and the item is a bonus. Money and experience are
+--- left out on purpose. Neither has decided anything at max level since
+--- the day the character got there, and listing them buries the line
+--- that matters under two that do not.
+--- An icon, inline, cropped out of its border.
+---
+--- The single biggest thing separating a list of reward names from
+--- something a player can read at a glance -- the game itself never
+--- lists a reward without its icon, and a tooltip that does looks like
+--- an error message.
+---
+--- 5:59 of 64 on both axes is the standard crop. Icon art ships with a
+--- border baked into the outer few pixels, and at 14px that border is a
+--- quarter of what you can see.
+---
+--- Takes a texture id or a path: |T accepts both, and the two reward
+--- getters hand back different ones.
+local REWARD_ICON = "|T%s:14:14:0:0:64:64:5:59:5:59|t "
+
+--- The game's own word for it where the client has one.
+local REWARDS_HEADER = (type(REWARDS) == "string" and REWARDS ~= "" and REWARDS)
+    or "Rewards"
+
+--- One reward, as the two halves of a tooltip line.
+---
+--- Exposed rather than local because it is the whole visual result of
+--- the reward reader and it is pure string building -- which means
+--- Tools/loadcheck.py can assert what it produces, where it can assert
+--- nothing at all about how a tooltip looks.
+---
+--- @return string left, string|nil right
+function ns.FormatRewardLine(info)
+    if type(info) ~= "table" then return "", nil end
+
+    local name = info.name
+    if name and name ~= "" then
+        -- The game's own rarity colours, so a Hero-track piece reads as
+        -- one at a glance. Currencies mostly have no quality and stay
+        -- white, which is correct: a crest is not rare, it is a count.
+        local c = info.quality and ITEM_QUALITY_COLORS
+            and ITEM_QUALITY_COLORS[info.quality]
+        if c and c.hex then name = c.hex .. name .. "|r" end
+    else
+        -- The name is still loading, and the tooltip redraws when it
+        -- lands. Saying so beats "Item", which read as the reward's name.
+        name = "|cff888888Loading...|r"
+    end
+
+    if info.texture then
+        name = REWARD_ICON:format(tostring(info.texture)) .. name
+    end
+
+    -- Only where there is more than one. "x1" on every line is a column
+    -- of noise that makes the one line with a real number harder to
+    -- find, not easier.
+    local n = tonumber(info.quantity)
+    local right
+    if n and n > 1 then
+        -- A thousand reputation reads as 1,000. BreakUpLargeNumbers is
+        -- the client's own separator and knows which one the locale
+        -- uses, so it beats anything written here.
+        if BreakUpLargeNumbers then
+            local ok, pretty = pcall(BreakUpLargeNumbers, n)
+            right = (ok and pretty) and tostring(pretty) or tostring(n)
+        else
+            right = tostring(n)
+        end
+    end
+
+    return name, right
+end
+
+--- Redraw the tooltip if one of the weekly rows is showing it.
+---
+--- Called when a reward's quest data or item name arrives. The tooltip
+--- is rebuilt by re-running the row's own OnEnter -- not by refreshing
+--- the page. A page refresh re-shows pooled frames, which fires OnLeave
+--- and OnEnter under the cursor; that is how BisUI's tooltips flickered.
+--- This touches nothing but the tooltip, and only when it is ours.
+---
+--- On `ns` rather than on ns.Weekly, and unconditionally. This file loads
+--- long before Features/Planner/WeeklyChecklist.lua, so ns.Weekly does not
+--- exist yet when this line runs -- a hook hung off it behind an
+--- `if ns.Weekly` would never be installed, and the tooltip would keep
+--- saying "Loading..." with every check still green.
+function ns.OnWeeklyRewardDataArrived()
+    if not (GameTooltip and GameTooltip:IsShown()) then return end
+    local owner = GameTooltip:GetOwner()
+    if not (owner and owner._weeklyRow) then return end
+    local onEnter = owner:GetScript("OnEnter")
+    if onEnter then onEnter(owner) end
+end
+
+local function AddRewardsToTooltip(tip, item)
+    if not (item and ns.Weekly and ns.Weekly.GetRowRewards) then return end
+    local ok, rewards, pending = pcall(ns.Weekly.GetRowRewards, ns.Weekly, item)
+    if not ok then return end
+
+    -- "Nothing yet" is not "nothing". The reader has asked the client
+    -- for the data and the page redraws when it lands, so the honest
+    -- line is that it is on its way rather than silence the player
+    -- reads as "this weekly pays nothing".
+    if not rewards or rewards.empty then
+        if pending or (rewards and rewards.pending) then
+            tip:AddLine(" ")
+            tip:AddLine("Rewards loading...", 0.5, 0.5, 0.55)
+        end
+        return
+    end
+
+    tip:AddLine(" ")
+    tip:AddLine(REWARDS_HEADER, 1, 0.82, 0)
+
+    -- The row's own answer, for a weekly you have not accepted. There is
+    -- no quest to ask the client about until you take one, so these are
+    -- words rather than icons -- and words arrive instantly, where the
+    -- client's version of this needed several variants loaded first and
+    -- left the tooltip blank meanwhile.
+    --
+    -- No qualifier line. There used to be a dim "Whichever one you are
+    -- offered" between the heading and the reward, and it read badly
+    -- while telling the player nothing the row label had not: "Pick up
+    -- Lady Liadrin's weekly" already says there is one weekly to pick up.
+    if rewards.declared then
+        for _, said in ipairs(rewards.declared) do
+            tip:AddLine(said, 1, 1, 1)
+        end
+        return
+    end
+
+    -- Two columns, not one string. The count is the part somebody is
+    -- actually comparing between two weeklies -- ninety crests against
+    -- one spark -- and gluing "x90" onto the end of a name buries it at
+    -- whatever column the name happens to end at. Right-aligned in gold,
+    -- it forms a column of its own that can be read straight down.
+    local function line(info)
+        local left, right = ns.FormatRewardLine(info)
+        tip:AddDoubleLine(left, right or " ", 1, 1, 1, 1, 0.82, 0)
+    end
+
+    for _, info in ipairs(rewards.currencies) do line(info) end
+    for _, info in ipairs(rewards.items) do line(info) end
+
+    -- The pick-one list, under a heading of its own rather than behind a
+    -- prefix on the first row. Halduron pays a thousand reputation with
+    -- a faction you choose, which is five lines that each mean "or" --
+    -- and "Choose one: " glued to the first of them left the other four
+    -- looking like separate rewards, which is the same lie an unmarked
+    -- list tells.
+    if #rewards.choices > 0 then
+        tip:AddLine("Choose one", 0.7, 0.7, 0.72)
+        for _, info in ipairs(rewards.choices) do line(info) end
+    end
+end
+
+-- The map-pin art Blizzard puts on a /way pin, so the button on a weekly
+-- row reads as the waypoint it places rather than as a generic arrow.
+-- Lit when the game is already pointing there.
+--
+-- These names were already in the addon -- Core/Data.lua carried them
+-- for a /way parser that was swept in 5096b60 and left its constants
+-- behind. They moved here, to the thing that actually drops a pin.
+--
+-- The fallback is a plain texture path, which is the reason it is the
+-- fallback: atlas names get renamed between patches and paths do not.
+local TRACK_ATLAS      = "Waypoint-MapPin-Untracked"
+local TRACK_ATLAS_LIT  = "Waypoint-MapPin-Tracked"
+local TRACK_TEXTURE    = "Interface\\MINIMAP\\TRACKING\\None"
+
 local WEEKLY_ROW_H = 24
 -- Two columns, because these are one-line rows and a full-width one
 -- wastes two thirds of itself on empty space. Eight of them stacked ran
@@ -697,9 +877,75 @@ local function Build(host)
         row.label:SetJustifyH("LEFT")
         row.label:SetWordWrap(false)
 
+        -- Where to go, as a button on the right rather than as the whole
+        -- row.
+        --
+        -- The row itself was briefly clickable for this, and that was the
+        -- wrong shape. Most rows have nothing to point at -- a crest cap
+        -- is not somewhere you walk to -- so most of the page answered a
+        -- click by doing nothing, which reads as broken rather than as
+        -- "not this one". A button that is only PRESENT on the rows that
+        -- can do it says which rows those are before anything is
+        -- clicked, and it leaves the row's own click where it was.
+        --
+        -- Its own frame, and its level raised on purpose. A child that
+        -- shares its parent's level is a coin toss over which one takes
+        -- the click, and this addon has lost that toss four times --
+        -- always as "the thing is invisible" or "the thing is dead",
+        -- never as an error. Draw layers do not settle it across frames.
+        row.track = CreateFrame("Button", nil, row)
+        row.track:SetSize(16, 16)
+        row.track:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+        row.track:SetFrameLevel(row:GetFrameLevel() + 2)
+        row.track.icon = row.track:CreateTexture(nil, "ARTWORK")
+        row.track.icon:SetAllPoints()
+        row.track:RegisterForClicks("LeftButtonUp")
+        row.track:Hide()
+
+        row.track:SetScript("OnClick", function(self)
+            if not (ns.Weekly and self._item) then return end
+            -- A click that changed nothing does not redraw. Track answers
+            -- nil when it could not place anything, and rebuilding on
+            -- that would make a dead click look like a live one.
+            if not ns.Weekly:Track(self._item) then return end
+            if Shell.RefreshPage then Shell:RefreshPage("home") end
+        end)
+
+        row.track:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            -- What it will do, in the words of the thing it will do it
+            -- to. "Put a map pin on Lady Liadrin" answers the question
+            -- somebody hovering an un-started weekly is actually asking.
+            if self._tracking then
+                GameTooltip:AddLine(self._kind == "giver"
+                    and "Clear the map pin" or "Stop tracking this", 1, 0.82, 0)
+                GameTooltip:AddLine("The arrow is pointing here now.",
+                    0.7, 0.7, 0.72, true)
+            elseif self._kind == "giver" then
+                GameTooltip:AddLine(("Put a map pin on %s"):format(
+                    self._name or "the quest giver"), 1, 0.82, 0)
+                GameTooltip:AddLine("Where this week's quest is handed out. "
+                    .. "Opens the map there and points the arrow at it.",
+                    0.7, 0.7, 0.72, true)
+            else
+                GameTooltip:AddLine("Track this quest", 1, 0.82, 0)
+                GameTooltip:AddLine("Opens the map, and the arrow follows its "
+                    .. "next objective.", 0.7, 0.7, 0.72, true)
+            end
+            GameTooltip:Show()
+        end)
+        row.track:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- The row still means one thing: the tick, on the rows that
+        -- have one. Pointing at a quest lives on its own button above,
+        -- because it applies to a different and much smaller set of rows
+        -- than ticking does.
+        -- So a late reward name can tell this tooltip apart from every
+        -- other one GameTooltip shows.
+        row._weeklyRow = true
         row:RegisterForClicks("LeftButtonUp")
         row:SetScript("OnClick", function(self)
-            if not (ns.Weekly and self._item) then return end
+            if not (ns.Weekly and self._item and self._manual) then return end
             ns.Weekly:Toggle(self._item)
             if Shell.RefreshPage then Shell:RefreshPage("home") end
         end)
@@ -730,11 +976,28 @@ local function Build(host)
                 GameTooltip:AddLine(self._questObjective, 1, 1, 1, true)
             end
 
+            AddRewardsToTooltip(GameTooltip, self._item)
+
             -- Only where there is something to click. "Tracked
             -- automatically" was on every other row and told nobody
             -- anything: a row that cannot be clicked demonstrates that by
             -- not responding to a click, and a line spent saying so is a
             -- line not spent saying where to go.
+            --
+            -- Gathered before any of it is drawn, because the wording of
+            -- the second line depends on whether there is a first one:
+            -- the tick is a left click on a row with nothing to point at
+            -- and a right click on a row with something, and a hint that
+            -- named the wrong button would be worse than no hint.
+            -- Why the right-hand edge is empty. Without this a row that
+            -- is waiting on something the player can do looks exactly
+            -- like a crest cap, which is not a place and never will be.
+            if self._needsGiver then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("No map pin yet. One appears once you have picked "
+                    .. "this up next to whoever hands it out.", 0.5, 0.5, 0.55, true)
+            end
+
             if self._manual then
                 GameTooltip:AddLine(" ")
                 GameTooltip:AddLine("Click to mark this done. Clears at the weekly reset.",
@@ -995,6 +1258,36 @@ local function Refresh(ctx)
                     data.item, data.label, data.detail, data.manual
                 row._questTitle, row._questObjective =
                     data.questTitle, data.questObjective
+                row._questID, row._needsGiver = data.questID, data.needsGiver
+
+                -- The pin button, present only where there is somewhere
+                -- to go. Its absence is the honest answer for a crest cap
+                -- and for a weekly whose giver nobody has recorded yet.
+                if data.canTrack and colW > 40 then
+                    row.track._item     = data.item
+                    row.track._kind     = data.trackKind
+                    row.track._name     = data.trackName
+                    row.track._tracking = data.tracking
+                    if not W:TrySetAtlas(row.track.icon,
+                        data.tracking and TRACK_ATLAS_LIT or TRACK_ATLAS) then
+                        row.track.icon:SetTexture(TRACK_TEXTURE)
+                    end
+                    -- Dim until it is the thing being pointed at, so a lit
+                    -- pin is findable down a column of eight.
+                    row.track.icon:SetAlpha(data.tracking and 1 or 0.5)
+                    row.track:SetAlpha(data.done and 0.45 or 1)
+                    row.track:Show()
+                else
+                    row.track:Hide()
+                end
+
+                -- The tag makes room for the button when there is one.
+                row.tag:ClearAllPoints()
+                if row.track:IsShown() then
+                    row.tag:SetPoint("RIGHT", row.track, "LEFT", -6, 0)
+                else
+                    row.tag:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+                end
 
                 -- A row backed by a quest names the quest, in the quest
                 -- log's own gold, behind the recurring-quest marker. That
@@ -1088,6 +1381,10 @@ local function Refresh(ctx)
                 -- this row and outranks both; quest progress is next; the
                 -- "manual" hint is the fallback and only while there is
                 -- still something to click.
+                --
+                -- Tracked state is NOT in here. It used to be, as a word,
+                -- and it was saying in text what the pin button beside it
+                -- says in art -- two claims on one edge of a 24px row.
                 if data.fractionText then
                     row.tag:SetText(W:Tint(data.done and "faint" or "muted",
                         data.fractionText))

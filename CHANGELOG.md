@@ -1,5 +1,196 @@
 # YippYapp Helper - Changelog
 
+## v3.4.0 - Pins to the quest givers, and what the weeklies pay (2026-09-13)
+
+### Added
+- **A pin button on the weeklies that lead somewhere.** Asked for on
+  CurseForge: something to click that puts an arrow on the screen, the
+  way Azeroth Pilot Reloaded does. It does not draw one -- the game
+  already has an arrow, a minimap marker and a map waypoint, and all
+  three follow whatever is super tracked -- so a click hands the game a
+  target and gets out of the way. Click it again to let go.
+
+  **It opens the world map too**, on the map the target is actually on.
+  A waypoint you cannot see is a direction without a distance -- the
+  arrow says which way, the map says how far and what is in between, and
+  "where do I pick this up" is asking the second one. Not in combat: the
+  pin is still placed, the map stays shut.
+
+  The button sits at the right-hand end of the row and **is only there
+  on rows that lead somewhere**. A crest cap is not a place you walk to,
+  so it has no button rather than a button that does nothing.
+
+- **Five quest givers ship with the addon**, so the pins are there on a
+  fresh install rather than after a week of play. Lady Liadrin, Halduron
+  Brightwing, Vereesa Windrunner, Archmage Aethas Sunreaver and
+  Warleader Abdumati, from Wowhead's datamined `g_mapperData` -- which
+  carries its own uiMapId, so the map is not being inferred from a zone
+  name. Each NPC was reached through a quest id the addon already ships
+  rather than by searching a name, and the Silvermoon map id was
+  confirmed a second time against a live client. Anything the client
+  learns overrides them.
+
+- **The addon learns where each quest giver stands.** The four Silvermoon
+  rows carry a family of quest ids -- sixteen for Lady Liadrin, eight for
+  Halduron -- one of which is this week's, and nothing in the client says
+  which. Rather than answer that question, the addon stops asking it:
+  **you have to be standing next to the NPC to accept or hand in a
+  quest**, so the player's own position at that moment is the giver's,
+  and it is recorded against the ROW rather than the quest. Take any one
+  of Lady Liadrin's sixteen and her row knows where she stands from then
+  on -- every week after, and on every character on the account, because
+  an NPC is in the same place for all of them.
+
+  Nothing is written down in the addon and nothing is read off a website.
+  Only while a quest window is open, too: `QUEST_ACCEPTED` also fires for
+  quests the game hands you for walking into a zone, and those would
+  record wherever you happened to be standing as a quest giver's spot --
+  a confident pin in the wrong place, which is worse than no pin.
+
+  **Three ways in**, so the page is useful before you have done the
+  week's chores rather than after. Best observation wins, and none of
+  them overwrites a better one:
+
+  - you say where it is -- `/yh where set liadrinweekly` on the NPC, or
+    `/yh where set liadrinweekly 47.9 51.6` from anywhere in the zone,
+    which takes a published coordinate and reads the map id off the
+    client. Percentages and fractions are both accepted and the result
+    is echoed back, because every database writes one and the game
+    wants the other;
+  - you accept or hand in one of the row's quests, as above;
+  - the world map already knew where the offer was, taken for free on
+    walking into the zone. A coordinate outside 0..1 is dropped rather
+    than converted -- map positions come as fractions and as
+    percentages, and guessing which is how a pin ends up wrong half the
+    time.
+
+  `/yh where forget` throws the lot away if a record is ever wrong; they
+  rebuild themselves the next time each quest is picked up.
+
+- A weekly that leads somewhere but has no pin yet **says so on hover**.
+  An empty right-hand edge is otherwise indistinguishable from a crest
+  cap, which is not a place and never will be.
+
+  The question behind the request was never "which quest is it", it was
+  **where do I pick this up**, so a row points at whichever of these it
+  can:
+
+  - the quest, when it is in your log -- super tracked by id, so the
+    arrow follows the objective rather than the giver;
+  - **the NPC who hands it over**, when it is not. Lady Liadrin stands
+    in the same spot whichever of her sixteen she is offering this week,
+    which is exactly why the giver is the answer that works;
+  - the client's own quest-offer pin -- the blue exclamation mark -- on
+    a row whose single outstanding quest can be identified.
+
+  **A family of quest ids is never guessed at.** Halduron offers one of
+  eight dungeons a week and nothing in the client says which, so the
+  offer-pin route refuses a row it cannot narrow to one rather than
+  picking whichever sorted first. The giver route is what carries those
+  rows, and it carries them without needing to know the answer.
+
+- **Weekly rows say what they pay**, with the game's own icons. The other
+  half of the same request.
+  Hovering a row that names a quest now lists its rewards under the
+  objective: the currency first, because on a weekly the currency is
+  usually the whole point, then items in the game's own rarity colours,
+  then the pick-one list under a heading of its own -- a weekly paying a
+  thousand reputation with a faction you choose is five lines that each
+  mean "or", and an unmarked list of five reads as a quest handing over
+  all five.
+
+  Each line carries the reward's icon, its name in the game's rarity
+  colour, and the count in a right-hand column of its own rather than
+  glued to the end of the name -- the count is the part you compare
+  between two weeklies, and ninety crests against one spark should line
+  up. Large numbers go through the client's own separator, so a thousand
+  reputation reads as 1,000.
+
+  Read off the client rather than written down here, so a quest retuned
+  this patch reads correctly the day it is retuned, and a reward that
+  scales reads as what this character would actually be paid.
+
+  **And before you accept anything**, which is when the question gets
+  asked. Most rows resolve no quest at all until it is in your log, so
+  the rewards used to appear only once it was too late to be deciding.
+  A row offering one of sixteen now simply says what it pays -- "Spark
+  of Tides" -- because that is a fact about the row whichever variant
+  comes up, and the row's own description has said so all along.
+
+  The moment a quest IS in your log the client's answer takes over,
+  with its real icons and amounts.
+
+  Archmage Aethas Sunreaver's row shows two lines, because his set pays
+  two different things: a Cache of Amani or Quel'Thalas Treasures for
+  the dungeon, delve and Timewalking weeklies, and Conquest with Honor
+  for the battleground and arena ones.
+
+- The world boss now sits with the other chores, above the Vaults of
+  Atal'Utek weekly, so the weeklies you pick up from a quest giver --
+  and their map pins -- form one block instead of being split in two.
+
+### Changed
+- The weekly row's own click is unchanged -- it still ticks the rows that
+  are ticked by hand, and nothing else. Pointing at a quest lives on its
+  own button because it applies to a much smaller set of rows than
+  ticking does, and putting both on one click made most of the page
+  answer a click by doing nothing.
+- The pin lights up while the game is pointing there, so the page agrees
+  with the arrow out in the world.
+
+### Fixed
+- **Veteran Mistcrests could read from a dead currency row.** Every
+  crest tier exists twice in the client under the same name, and only
+  one row is live. The addon picked whichever row held MORE -- a rule
+  from the week it had been pointed at the empty block -- but a dead row
+  is not always empty. One Priest held 80 on dead 3438 and 50 on live
+  3443; Blizzard showed 50, the addon showed 80, and the affordability
+  and upgrade suggestions were computed from the 80.
+
+  The resolver now takes the row the character sheet's Currency tab
+  lists, which is the game's own answer, and otherwise the verified
+  order. A balance is never treated as evidence. What the listing found
+  is remembered, so collapsing a header in the Currency tab -- which
+  hides its rows from the list -- cannot flip the addon back. All five
+  tiers go through the same path; Veteran is where it showed.
+
+  The unlisted twin is still reached when the game lists it instead of
+  the usual row, which is what a patch swapping the live block would
+  look like. It is never reached any other way: with nothing listed the
+  answer is the verified id, even if that id reads nothing. A live row
+  showing zero is visibly wrong; a twin showing 80 is not.
+
+- **Reward items read "Item" on the first hover.** A quest's reward list
+  and an item's name are separate loads, so the tooltip could know which
+  item a weekly pays before knowing what it is called -- and nothing
+  redrew it when the name arrived. The name is now filled from the item
+  cache where it is already known, asked for where it is not, shown as
+  "Loading..." meanwhile, and the open tooltip redraws itself the moment
+  the name lands.
+
+- **A pin that opened the wrong zone.** There was a third route that
+  super-tracked the client's own quest-offer pin for a weekly you had
+  not accepted. The only map it can name for an un-accepted quest is the
+  QUEST's -- where the objectives are, not where the giver stands -- so
+  the one row it reliably fired on was the one it sent to the wrong
+  place, on a line reading "Pick up Vereesa's weekly in Silvermoon".
+
+  It has been removed rather than patched. What it was for is exactly
+  what the giver does, with a position somebody has actually checked,
+  and it was the only route never seen working in game.
+
+  **A row's pin and its label now always agree**: while the quest is in
+  your log the row reads "Complete Midnight: Prey" and the pin follows
+  the objective; before that it reads "Pick up Lady Liadrin's weekly"
+  and the pin is Lady Liadrin. A row that says "pick up" and points at a
+  delve is lying, and that cannot happen now.
+
+### Removed
+- A dead "Map waypoints" block in `Core/Data.lua` -- its body went in
+  "Sweep the code nothing calls" and left behind a header comment and two
+  unused constants. The map-pin art it named is now used by the thing
+  that actually drops a pin.
+
 ## v3.3.2 - Durability off the channel everyone is already on (2026-09-10)
 
 ### Fixed

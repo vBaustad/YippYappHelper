@@ -2,7 +2,7 @@
 ## Title: YippYapp Helper
 ## Notes: Gear upgrade advisor, Mythic+ helper, ready-check window, loot browser and more
 ## Author: vbaustad
-## Version: 3.3.2
+## Version: 3.4.0
 ## SavedVariables: YippYappHelperDB
 ## OptionalDeps: LibDBIcon-1.0, LibDataBroker-1.1
 ## IconTexture: Interface\AddOns\YippYappHelper\Media\YippYappHelper

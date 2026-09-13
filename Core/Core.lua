@@ -2224,6 +2224,55 @@ SlashCmdList["YIPPYAPPHELPER"] = function(msg)
         return
     end
 
+    -- /yh where -- this spot, as the checklist would record it.
+    --
+    -- Absent from /yh help alongside the two above, and there for the
+    -- same job: getting a fact out of the client that only the client
+    -- can settle. Here it is where a quest giver stands, so the weekly
+    -- rows can put a map pin on them -- stand on the NPC, run this,
+    -- paste the line it prints onto the row.
+    --
+    -- It also dumps what the client says is on this map, which is the
+    -- open question about whether the giver tables are needed at all.
+    if cmd == "where" or cmd == "wheredump" then
+        if not ns.Weekly then return end
+        -- `/yh where forget` throws away everything the addon has learned
+        -- about where quest givers stand. Worth having because a learned
+        -- record CAN be wrong -- a quest accepted from a distance, or an
+        -- NPC that moved between patches -- and the cost of being wrong
+        -- is a pin in the wrong place, which is worse than no pin. They
+        -- rebuild themselves the next time each quest is picked up.
+        -- `/yh where set <row>` records this spot as that row's quest
+        -- giver. The fastest way to fill the pins in: stand on the NPC,
+        -- name the row, and it is right from then on for every character
+        -- on the account.
+        local set = arg and strmatch(strlower(strtrim(arg)), "^set%s+(.+)$")
+        if set then
+            -- `/yh where set <row>` uses where you stand.
+            -- `/yh where set <row> <x> <y>` uses the numbers, on the map
+            -- you are standing on -- so a published coordinate can be
+            -- pasted in from anywhere in the zone rather than walked to.
+            local row, x, y = strmatch(set, "^(%S+)%s+([%d%.]+)[%s,]+([%d%.]+)%s*$")
+            if not row then row = set end
+            if ns.Weekly.SetGiverHere then
+                local said = ns.Weekly:SetGiverHere(row, tonumber(x), tonumber(y))
+                if said then print("|cff00ff00YippYapp|r " .. said) end
+            end
+            return
+        end
+
+        if arg and strlower(strtrim(arg)) == "forget" then
+            if ns.Weekly.ForgetGivers then
+                local n = ns.Weekly:ForgetGivers()
+                print(("|cff00ff00YippYapp|r forgot %d learned quest giver%s"):format(
+                    n, n == 1 and "" or "s"))
+            end
+            return
+        end
+        if ns.Weekly.DumpHere then ns.Weekly:DumpHere() end
+        return
+    end
+
     -- /yh profile [name]
     if cmd == "profile" then
         if arg and strtrim(arg) ~= "" then

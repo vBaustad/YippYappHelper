@@ -32,9 +32,9 @@ local _, ns = ...
 -- and the recorded value cannot be sanity-checked by reading a name
 -- back. Verify against wowhead.com/currency=<id> when a season rolls.
 --
--- The dead twin stays as a fallback candidate: if a patch swaps which
--- block is live, ResolveCrestIDs follows whichever the player actually
--- holds rather than showing zero until someone edits this file.
+-- The dead twin stays as a candidate, but it no longer wins by holding
+-- more. See ResolveCrestIDs: a dead row can carry a real balance, and
+-- the only thing that says which row is live is the game listing it.
 ns.CRESTS = {
     { id = 3442, candidates = { 3442, 3437 }, name = "Adventurer Mistcrest", color = "ff1eff00", track = "Adventurer" },
     { id = 3443, candidates = { 3443, 3438 }, name = "Veteran Mistcrest",    color = "ff0070dd", track = "Veteran"    },
@@ -68,66 +68,115 @@ ns.CREST_WEEKLY_INCREMENT = 100
 ------------------------------------------------------------
 -- Pick the live currency ID for each tier.
 --
--- A candidate wins if the client returns currency info with a non-empty
--- name. When both candidates resolve (which is the normal case, since
--- both rows exist in the client DB), prefer whichever the character has
--- actually earned; failing that, keep the listed preference order.
+-- IN ORDER:
+--
+--   1. The candidate the character sheet's Currency tab LISTS. That tab
+--      is Blizzard's own answer to "which of these is the real one" --
+--      it is what the player sees, and it is what the game spends from.
+--   2. Otherwise the first candidate -- the verified live id, 3442-3446.
+--      Never the twin: the twin is reached only by the game listing it,
+--      which is what a patch swapping the live block would look like.
+--
+-- THIS USED TO PICK WHICHEVER CANDIDATE HELD MORE, and that was wrong
+-- in a way that took a real character to show. The rule came from the
+-- week this file was pointed at the dead block: "follow the crests" was
+-- the fix for reading an empty row. But a dead row is not an empty row.
+-- A Priest reported 50 Veteran Mistcrests in Blizzard's UI and 80 in
+-- ours -- 3438 held 80, 3443 held 50 -- and "most earned" picked the 80.
+-- The count, the affordability and every upgrade suggestion built on it
+-- were then computed from a wallet the game does not spend from.
+--
+-- A balance is not evidence of liveness. The listing is.
+--
+-- THE LIST WALK IS NOT FREE, and it does not run on every read. It
+-- runs at login and on the coalesced wallet update, and it REMEMBERS
+-- what it found in `crest.listed`. That matters for a second reason
+-- beyond cost: the Currency tab drops the children of a header the
+-- player has collapsed, so a walk can legitimately find nothing -- and
+-- a player collapsing "Season 2" must not flip the addon back onto the
+-- wrong row. Only a walk that SEES a candidate changes the answer.
 ------------------------------------------------------------
-function ns:ResolveCrestIDs()
+
+--- Every currency id the Currency tab is showing right now.
+local function listedCurrencyIDs()
+    local C = C_CurrencyInfo
+    if not (C and C.GetCurrencyListSize and C.GetCurrencyListInfo) then return nil end
+
+    local ok, size = pcall(C.GetCurrencyListSize)
+    if not (ok and size and size > 0) then return nil end
+
+    local out = {}
+    for i = 1, size do
+        local got, info = pcall(C.GetCurrencyListInfo, i)
+        if got and info and not info.isHeader and info.currencyID then
+            out[info.currencyID] = true
+        end
+    end
+    return out
+end
+
+--- @param scanList boolean walk the Currency tab for the live row. The
+--- read paths below pass nothing and get the remembered answer.
+function ns:ResolveCrestIDs(scanList)
     if not C_CurrencyInfo or not C_CurrencyInfo.GetCurrencyInfo then return end
 
+    local listed = scanList and listedCurrencyIDs() or nil
+
     for _, crest in ipairs(ns.CRESTS) do
-        local best, bestEarned = nil, -1
-        for _, id in ipairs(crest.candidates) do
-            local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, id)
-            if ok and info and info.name and info.name ~= "" then
-                local earned = (info.totalEarned or 0) + (info.quantity or 0)
-                if earned > bestEarned then
-                    best, bestEarned = id, earned
+        if listed then
+            for _, id in ipairs(crest.candidates) do
+                if listed[id] then
+                    crest.listed = id
+                    break
                 end
-                -- Trust the client's own name over our hardcoded string.
-                if best == id then crest.name = info.name end
             end
         end
-        if best then crest.id = best end
+
+        -- The twin is ONLY ever reached through the listing. Unlisted,
+        -- the answer is the verified id and nothing else.
+        --
+        -- This used to walk the candidates for the first one the client
+        -- recognised, which meant that if 3443 ever failed to answer, the
+        -- addon would quietly read 3438 instead -- the same wrong wallet
+        -- the Priest reported, arrived at by a different road. Reading a
+        -- live id that answers nothing shows zero, which is visibly
+        -- wrong; reading the twin shows a plausible number, which is not.
+        local pick = crest.listed or crest.candidates[1]
+
+        if pick then
+            crest.id = pick
+            -- Trust the client's own name over our hardcoded string.
+            local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, pick)
+            if ok and info and info.name and info.name ~= "" then
+                crest.name = info.name
+            end
+        end
     end
 end
 
 local resolver = CreateFrame("Frame")
 resolver:RegisterEvent("PLAYER_LOGIN")
--- Re-resolve whenever the wallet moves.
---
--- Resolving once at login is wrong for the case that matters most: on a
--- fresh season a character has ZERO of both candidate rows, so the tie
--- breaks on listed order and the pick is a coin toss. The moment crests
--- actually arrive -- unboxed, earned, whatever -- the evidence changes,
--- and the pick has to change with it. Before this, unboxing 80 Champion
--- Mistcrests onto the other row left the addon reading the empty one
--- until the next login.
+-- Re-scanned whenever the wallet moves, because the Currency tab only
+-- lists a currency once the character has discovered it -- so on a
+-- fresh season neither row may be listed at login, and the first crest
+-- to arrive is what makes the live one appear.
 resolver:RegisterEvent("CURRENCY_DISPLAY_UPDATE")
 
 -- Coalesced, because CURRENCY_DISPLAY_UPDATE is a gameplay event, not a
 -- rare one: every quest turn-in, every dungeon boss, every mob that
--- drops anything trackable fires it, often several times in a row.
--- ResolveCrestIDs is ten pcall'd GetCurrencyInfo calls and ten result
--- tables for the collector, and it is answering a question whose answer
--- changes about once a season.
---
--- A second of lag costs nothing here: anything that DRAWS a crest goes
--- through GetCrestInfo, which resolves on the spot for exactly this
--- reason. This path only exists so code reading crest.id directly is not
--- left on a stale row.
+-- drops anything trackable fires it, often several times in a row --
+-- and the list walk is the expensive half of resolving.
 local resolvePending = false
 resolver:SetScript("OnEvent", function(_, event)
     if event ~= "CURRENCY_DISPLAY_UPDATE" then
-        ns:ResolveCrestIDs()
+        ns:ResolveCrestIDs(true)
         return
     end
     if resolvePending then return end
     resolvePending = true
     C_Timer.After(1, function()
         resolvePending = false
-        ns:ResolveCrestIDs()
+        ns:ResolveCrestIDs(true)
     end)
 end)
 
@@ -136,8 +185,8 @@ function ns:GetCrestInfo()
     -- CURRENCY_DISPLAY_UPDATE by refreshing the crest panel, and the
     -- order two frames receive the same event is not defined -- so
     -- relying on the resolver alone would leave the display one event
-    -- behind whenever Core happened to run first. It is ten currency
-    -- lookups; correctness is worth more than that.
+    -- behind whenever Core happened to run first. No list walk here --
+    -- that runs on the events -- so this is a handful of lookups.
     ns:ResolveCrestIDs()
 
     local crests = {}

@@ -876,23 +876,3 @@ function ns.SetTabInactive(tab)
     tab.label:SetTextColor(unpack(ns.COLORS.TEXT_SECONDARY))
 end
 
-------------------------------------------------------------
--- Map waypoints
---
--- Parses the "/way #2393 47.9 51.6" form used by guide sites and drops a
--- real Blizzard map pin, super-tracked so the arrow appears immediately.
--- Coordinates in that format are percentages; UiMapPoint wants 0-1.
-------------------------------------------------------------
-
--- The same map-pin art Blizzard puts on a /way pin, so the chip reads as
--- a waypoint. Falls back to the old tracking icon if the atlas is ever
--- renamed out from under us.
-local function PinMarkup(atlas)
-    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas) then
-        return ("|A:%s:16:12|a"):format(atlas)
-    end
-    return "|TInterface\\MINIMAP\\TRACKING\\None:12:12|t"
-end
-
-local PIN_ICON     = PinMarkup("Waypoint-MapPin-Untracked")
-local PIN_ICON_LIT = PinMarkup("Waypoint-MapPin-Tracked")

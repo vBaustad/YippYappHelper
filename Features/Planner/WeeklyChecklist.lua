@@ -364,6 +364,34 @@ end
 local titles = {}
 local requested = {}
 
+--- What each quest pays, once it has been worked out. See
+--- Wk:GetQuestRewards further down for what is in an entry.
+---
+--- NOT ABOUT SPEED. Reading a quest's currency rewards means pointing
+--- the quest log at that entry first -- the log is the only thing the
+--- currency getters will answer about -- and the quest log is a frame
+--- the player may also have open. A tooltip that re-ran that every time
+--- the cursor crossed a row would be reaching into their UI several
+--- times a second. Once per quest is enough: rewards do not change
+--- between hand-ins, and the one thing that does change them is the
+--- data arriving, which already has an event.
+---
+--- On Wk rather than a file local so the load handler just below can
+--- drop an entry when fresh data lands.
+Wk._rewards = {}
+
+--- Item ids a reward line is waiting on a name for.
+---
+--- A quest's reward data and an ITEM's name are two separate loads. The
+--- quest can be fully loaded -- so the reader has an itemID -- while the
+--- item itself is not, and GetQuestLogRewardInfo hands back a nil name.
+--- That is why the first hover read "Item" and the second read the real
+--- thing: by the second, somebody had loaded the item.
+---
+--- Kept so GET_ITEM_INFO_RECEIVED, a global event, can be filtered to
+--- the handful of items this file is actually waiting for.
+Wk._wantItem = {}
+
 local function questTitle(id)
     if not id then return nil end
     if titles[id] then return titles[id] end
@@ -400,6 +428,13 @@ do
         -- traffic into a full home-page rebuild, once per quest.
         ------------------------------------------------------------
         if not requested[id] then return end
+        -- Whatever was worked out before the data landed was worked out
+        -- from an empty quest. Dropped rather than refreshed here: the
+        -- next hover asks again, and nothing is gained by computing an
+        -- answer for a page that may be shut.
+        Wk._rewards[id] = nil
+        -- An open tooltip was drawn from the empty version of this quest.
+        if ns.OnWeeklyRewardDataArrived then pcall(ns.OnWeeklyRewardDataArrived) end
         local Q = C_QuestLog
         local title = Q and Q.GetTitleForQuestID and Q.GetTitleForQuestID(id)
         if type(title) == "string" and title ~= "" then
@@ -495,6 +530,23 @@ end
 ------------------------------------------------------------
 -- The list
 ------------------------------------------------------------
+--- `pays` is what the row is known to hand over, in words.
+---
+--- Only for the rows whose quest cannot be named before you accept it.
+--- Where the client can be asked about an actual quest it is asked, and
+--- its answer -- real icons, real amounts, correct after a retune -- is
+--- better than anything written here.
+---
+--- Every entry is already stated in the row's own `detail` a few lines
+--- below it, in prose. This is the same fact in a form the tooltip can
+--- put under a heading. Nothing new is being claimed, and the sourcing
+--- for the Spark ones is recorded on LIADRIN_WEEKLY: four of the
+--- sixteen were checked directly and every one paid a Spark of Tides.
+---
+--- Aethas has two, because his set does: the PvE weeklies pay a cache
+--- and the PvP ones pay Conquest. That one is sourced from Wowhead rather
+--- than from the row's own description -- see the note on his row.
+---
 --- One test for membership: does skipping it this week cost you
 --- something you cannot get back?
 ---
@@ -515,7 +567,10 @@ end
 --- charges and currency balances are on the rail and the gear page,
 --- where a balance belongs. They are absent from the list of chores.
 ---
---- Items are ordered by how much they are worth doing, not by category.
+--- Items are in two runs: the chores you do anywhere -- crests, spark,
+--- bounty map, world boss -- and then the weeklies you pick up from a
+--- giver, kept together so the pins down the right-hand edge form one
+--- block rather than being split by a row with nothing to point at.
 ---
 --- `auto` returns true (done), false (outstanding) or nil ("cannot
 --- tell"), and nil falls back to the manual tick. Three answers rather
@@ -685,52 +740,6 @@ local ITEMS = {
         end,
     },
     {
-        id = "vaultweekly",
-        -- Only the fallback: with the quest resolved the row draws the
-        -- client's own title instead, which is the actual name of the
-        -- thing and searchable. This is what shows before the client has
-        -- loaded the quest, or on a character that has never seen it.
-        label = "Pick up the Vaults of Atal'Utek weekly",
-        detail = "In the Vaults of Atal'Utek. Temple patrols, strikes, "
-            .. "incursions and ancient foes all count towards it. Hands over "
-            .. "the Trovehunter's Bounty.",
-        category = "delves",
-        -- Listed above the map it grants, because doing this is how you
-        -- get one.
-        --
-        -- Confirmed from the quest's own reward list rather than from a
-        -- guide: 95520 is in the Vaults of Atal'Utek, its objectives are
-        -- the four activities named above, and it hands over the
-        -- Trovehunter's Bounty -- which is the row below this one, and the
-        -- reason this one sits above it.
-        --
-        -- A flag answers "filled it" and not "halfway", which is the only
-        -- state this row asks about. Partial progress is available now that
-        -- there is an id: C_QuestLog.GetQuestObjectives on 95520 returns the
-        -- counters. Left alone until somebody wants the row to show them.
-        --
-        -- Whether it is weekly is not stated anywhere I can check, and it
-        -- does not need to be. A flag that never clears reads as done
-        -- forever, which is the correct answer for a one-time quest and a
-        -- quiet row rather than a wrong one.
-        namesQuest = true,
-        quests = { BOUNTY_SOURCE_QUEST },   -- Purging the Vaults
-    },
-    -- The prey row is gone, and it was the last hand-ticked one.
-    --
-    -- It read "Run this week's prey hunts" on the assumption that prey
-    -- hunts were a weekly-capped activity of their own. They are not a
-    -- separate chore: 93910 Midnight: Prey is one of the sixteen variants
-    -- Lady Liadrin offers, you take ONE of the four or five she shows you,
-    -- and that is the week. So prey hunts are what one possible Liadrin
-    -- weekly asks for, and the row below hers already covers doing it.
-    --
-    -- Wired to 93910 it would have been worse than manual: unticked AND
-    -- unclickable on every week the variant was not offered. Bring it back
-    -- only if prey hunts turn out to carry a cap independent of the quest,
-    -- which is what its detail line used to claim and nothing confirmed.
-
-    {
         id = "worldboss",
         label = "Kill the weekly world boss",
         -- The map's own skull, most specific name first. These live in
@@ -775,6 +784,57 @@ local ITEMS = {
             return false
         end,
     },
+    {
+        id = "vaultweekly",
+        pays = { "Trovehunter's Bounty" },
+        giver = { map = 2509, x = 0.4720, y = 0.6080, name = "Warleader Abdumati" },  -- npc 262798
+        -- Only the fallback: with the quest resolved the row draws the
+        -- client's own title instead, which is the actual name of the
+        -- thing and searchable. This is what shows before the client has
+        -- loaded the quest, or on a character that has never seen it.
+        label = "Pick up the Vaults of Atal'Utek weekly",
+        detail = "In the Vaults of Atal'Utek. Temple patrols, strikes, "
+            .. "incursions and ancient foes all count towards it. Hands over "
+            .. "the Trovehunter's Bounty.",
+        category = "delves",
+        -- The first of the weeklies you pick up from somebody, so it sits
+        -- with them rather than with the chores above -- the world boss
+        -- used to be between this and Lady Liadrin, which split the
+        -- pick-ups in two. Still below the map it grants, whose own
+        -- description says it comes from "the Vaults weekly below".
+        --
+        -- Confirmed from the quest's own reward list rather than from a
+        -- guide: 95520 is in the Vaults of Atal'Utek, its objectives are
+        -- the four activities named above, and it hands over the
+        -- Trovehunter's Bounty -- which is the row below this one, and the
+        -- reason this one sits above it.
+        --
+        -- A flag answers "filled it" and not "halfway", which is the only
+        -- state this row asks about. Partial progress is available now that
+        -- there is an id: C_QuestLog.GetQuestObjectives on 95520 returns the
+        -- counters. Left alone until somebody wants the row to show them.
+        --
+        -- Whether it is weekly is not stated anywhere I can check, and it
+        -- does not need to be. A flag that never clears reads as done
+        -- forever, which is the correct answer for a one-time quest and a
+        -- quiet row rather than a wrong one.
+        namesQuest = true,
+        quests = { BOUNTY_SOURCE_QUEST },   -- Purging the Vaults
+    },
+    -- The prey row is gone, and it was the last hand-ticked one.
+    --
+    -- It read "Run this week's prey hunts" on the assumption that prey
+    -- hunts were a weekly-capped activity of their own. They are not a
+    -- separate chore: 93910 Midnight: Prey is one of the sixteen variants
+    -- Lady Liadrin offers, you take ONE of the four or five she shows you,
+    -- and that is the week. So prey hunts are what one possible Liadrin
+    -- weekly asks for, and the row below hers already covers doing it.
+    --
+    -- Wired to 93910 it would have been worse than manual: unticked AND
+    -- unclickable on every week the variant was not offered. Bring it back
+    -- only if prey hunts turn out to carry a cap independent of the quest,
+    -- which is what its detail line used to claim and nothing confirmed.
+
     ------------------------------------------------------------
     -- The two weekly quest givers
     --
@@ -795,6 +855,8 @@ local ITEMS = {
     ------------------------------------------------------------
     {
         id = "liadrinweekly",
+        pays = { "Spark of Tides" },
+        giver = { map = 2393, x = 0.4900, y = 0.6440, name = "Lady Liadrin" },  -- npc 256203
         label = "Pick up Lady Liadrin's weekly",
         detail = "Lady Liadrin, Silvermoon City. She shows you four or five "
             .. "and you accept one; whichever you take is your week, and it "
@@ -812,6 +874,8 @@ local ITEMS = {
     },
     {
         id = "halduronweekly",
+        pays = { "1,000 reputation with a faction you choose" },
+        giver = { map = 2393, x = 0.4900, y = 0.6440, name = "Halduron Brightwing" },  -- npc 256210
         -- The fallback only. With the quest resolved the row draws the
         -- client's title instead, which names the actual dungeon.
         label = "Pick up Halduron's dungeon weekly",
@@ -824,6 +888,8 @@ local ITEMS = {
     },
     {
         id = "vereesaweekly",
+        pays = { "Spark of Tides" },
+        giver = { map = 2393, x = 0.4900, y = 0.6440, name = "Vereesa Windrunner" },  -- npc 270645
         label = "Pick up Vereesa's weekly in Silvermoon",
         detail = "Vereesa Windrunner, Silvermoon City by the Great Vault. "
             .. "A hundred Fading Voidwhispers from dungeons, delves, treasures "
@@ -847,6 +913,22 @@ local ITEMS = {
     },
     {
         id = "aethasweekly",
+        -- Two lines, because his set pays two different things and a
+        -- single line would be false for half of it.
+        --
+        -- PvE: EITHER of two caches, so the line names both. Seen in game
+        -- 2026-09-13, Emissary of War's quest window offered a Cache of
+        -- Amani Treasures -- "Rewards a piece of Hero equipment for your
+        -- Loot Specialization". Wowhead lists a Cache of Quel'Thalas
+        -- Treasures for the same quest, and lists BOTH caches on A Call to
+        -- Delves. The user's read is that it can be either, which squares
+        -- all three; what decides which one is offered is not known here.
+        -- Do not read the in-game sighting as Wowhead being wrong.
+        --
+        -- PvP, from Wowhead only and NOT confirmed: A Call to Battle and
+        -- The Arena Calls list Conquest with Honor or Marks of Honor.
+        pays = { "Cache of Amani or Quel'Thalas Treasures (PvE)", "Conquest and Honor (PvP)" },
+        giver = { map = 2393, x = 0.4880, y = 0.6440, name = "Archmage Aethas Sunreaver" },  -- npc 256212
         label = "Pick up Aethas Sunreaver's weekly",
         detail = "Archmage Aethas Sunreaver, Silvermoon City. Timewalking, "
             .. "battleground and dungeon weeklies. A separate week's work to "
@@ -966,6 +1048,17 @@ function Wk:GetList()
         local done, manual = self:IsDone(item)
         local questID, questState, title, progress, objective = self:ResolveQuest(item)
 
+        -- Asked of the tracker rather than inferred from `questID`: the
+        -- two resolve differently on purpose. A row NAMES the quest it
+        -- can single out for the label, and POINTS at whatever the game
+        -- can navigate to -- which may be a quest, and may be the NPC
+        -- who hands it over. Lady Liadrin's row names the one in your
+        -- log while you are on it, and points at Lady Liadrin before you
+        -- have taken one, which is the state the question was asked in.
+        local trackTarget, trackHow = self:GetTrackTarget(item)
+        local canTrack = trackTarget ~= nil
+        local tracking = canTrack and self:IsTrackingTarget(trackTarget, trackHow) or false
+
         -- A row that measures itself rather than ticking. Guarded like
         -- every other reach into game data on this page: a progress
         -- function that throws leaves the row as an ordinary tick rather
@@ -995,6 +1088,26 @@ function Wk:GetList()
             -- 0..1 and its percentage, present only on a row that reports
             -- a degree. Everything else is a tick and has neither.
             fraction = fraction, fractionText = fractionText,
+            -- Whether the game can be pointed at this row, and whether
+            -- it already is. Resolved here rather than at click time
+            -- because the tooltip has to say what a click will do
+            -- before the click happens -- and because a row that cannot
+            -- be pointed at has to go on meaning what it meant before,
+            -- which is a manual tick.
+            canTrack = canTrack, tracking = tracking,
+            -- A row that IS a place but has no pin yet, as opposed to a
+            -- row that is not a place at all. The two look identical on
+            -- the page -- an empty right-hand edge -- and only one of
+            -- them is waiting on something the player can do.
+            needsGiver = (not canTrack)
+                and (item.quests ~= nil and #item.quests > 0) or false,
+            -- What a click will actually do, so the tooltip can say it
+            -- in words: "point the arrow at Lady Liadrin" is a different
+            -- sentence from "track this quest", and a row that promised
+            -- the wrong one would be worse than a row that promised
+            -- nothing.
+            trackKind = trackHow,
+            trackName = (trackHow == "giver") and trackTarget.name or nil,
             item = item,
         }
     end
@@ -1023,6 +1136,995 @@ function Wk:CountOutstanding()
     end
     return left, total
 end
+
+
+--- What a ROW pays, which is not the same question as what a quest pays.
+---
+--- Before you accept anything the row is the only thing that exists,
+--- and "is this one worth my evening" is asked before rather than
+--- after. So a row that cannot name a single quest still answers.
+---
+--- In order:
+---
+---   the quest the row NAMES, where there is one. The client's own
+---   answer about the actual quest, with its icons and amounts. Same
+---   quest the label is built from, so the tooltip can never describe
+---   one quest while listing another's rewards.
+---
+---   the row's only quest, where it has one. Nothing to disambiguate.
+---
+---   what the row SAYS it pays -- `pays` on the item, below. For a row
+---   offering one of sixteen there is no quest to ask about until you
+---   have taken one, and the answer is known anyway.
+---
+--- THIS REPLACED AN INTERSECTION, which is worth recording because it
+--- looked clever. It loaded every variant's rewards, kept what they had
+--- in common, dropped amounts they disagreed on, refused to speak on
+--- one variant's word alone, and rationed the loading so sixteen quests
+--- did not get requested at once. It worked. It was also a machine for
+--- deriving a fact already written three lines up in this file -- every
+--- one of Lady Liadrin's sixteen pays a Spark of Tides, and the row's
+--- own `detail` has said so all along. The derivation needed the client
+--- to have loaded at least two variants before it would say anything,
+--- so the common case was a tooltip that stayed blank until you hovered
+--- it a few times. Saying the known thing is instant and always right.
+---
+--- @return table|nil rewards, boolean pending
+function Wk:GetRowRewards(item)
+    if not item then return nil, false end
+
+    local pending = false
+    local function fromQuest(id)
+        local r = self:GetQuestRewards(id)
+        if r and not r.empty then return r end
+        if r and r.pending then pending = true end
+        return nil
+    end
+
+    local named = self:ResolveQuest(item)
+    if named then
+        local r = fromQuest(named)
+        if r then return r, false end
+    end
+
+    local ids = item.quests
+    if ids and #ids == 1 then
+        local r = fromQuest(ids[1])
+        if r then return r, false end
+    end
+
+    -- Declared, and preferred over saying "loading" -- the row knows the
+    -- answer whether or not the client has got round to it.
+    if item.pays and #item.pays > 0 then
+        return { declared = item.pays }, false
+    end
+
+    return nil, pending
+end
+
+------------------------------------------------------------
+-- Pointing at it
+--
+-- Asked for on CurseForge, alongside the rewards below: click the row
+-- and get a navigation arrow, the way Azeroth Pilot Reloaded does it.
+--
+-- NOTHING HERE DRAWS AN ARROW. The game already has one -- super
+-- tracking is what puts the distance marker on the minimap, the
+-- waypoint on the map and the arrow at the top of the screen -- so the
+-- job is to hand it a target and get out of the way. An arrow of our
+-- own would be a second one pointing the same way, and it would be the
+-- one that goes wrong the week Blizzard moves a quest giver.
+--
+-- TWO TARGETS, and which one applies is decided by the same thing that
+-- decides what the row SAYS.
+--
+--   "log"    the quest is in your log. The row reads "Complete Midnight:
+--            Prey", so the pin points at the objective -- super tracked
+--            by id, and the client knows where that is. No narrowing
+--            needed: being in the log is itself the proof that this is
+--            the one of the sixteen you were offered. When the quest is
+--            ready to hand in the game's own arrow turns back towards
+--            the giver, which is the right answer for free.
+--
+--   "giver"  you have not picked it up. The row reads "Pick up Lady
+--            Liadrin's weekly", so the pin points at Lady Liadrin.
+--
+-- Label and pin therefore never disagree, which is the property worth
+-- keeping: a row that says "pick up" and points at a delve is lying.
+--
+-- A THIRD TARGET WAS TRIED AND REMOVED. It super-tracked the client's
+-- own quest-offer pin -- the blue exclamation mark -- for an un-accepted
+-- quest, by id. It went because it could not clear that bar: the only
+-- map it can name for an un-accepted quest is the QUEST's map, from
+-- GetQuestUiMapID, and that is where the objectives are rather than
+-- where the giver stands. Vereesa is in Silvermoon; Trailing Xal'atath
+-- sends you to dungeons, delves and rares all over the place. So the
+-- one row it reliably fired on was the one it sent to the wrong zone,
+-- on a line reading "Pick up Vereesa's weekly in Silvermoon".
+--
+-- It was also the only branch never seen working in game. Between those
+-- two facts there was nothing left to keep: what it was for is what the
+-- giver does, exactly, and with a position somebody has actually
+-- checked.
+--
+-- GIVER OUTRANKS OFFER, which is not the order it looks like it should
+-- be. The offer pin is the game's own and points at the real thing;
+-- the giver is a coordinate we wrote down. But the offer pin has two
+-- ways to quietly do nothing -- the quest has to be on offer right now,
+-- and the pin has to exist for the client to track -- and a click that
+-- silently does nothing is the worst outcome on the page. A coordinate
+-- read off a live client and pasted in is exact, and it goes to the
+-- same NPC. Revisit once the offer branch has actually been watched
+-- working; see ROADMAP.md.
+--
+-- AND NOTHING HERE EVER ASKS WHICH OF THE FAMILY IS LIVE. Most rows
+-- carry several ids: eight dungeons for Halduron, sixteen for Lady
+-- Liadrin. One of them is the one you were offered and nothing in the
+-- client says which -- which used to be the central problem and is now
+-- simply not a question that comes up. Before pickup the pin is the
+-- NPC, and she stands in the same spot for all sixteen. After pickup
+-- the log says which one it is. That is why the giver is keyed by ROW.
+------------------------------------------------------------
+
+------------------------------------------------------------
+-- Learning where the giver stands
+--
+-- The giver tables cannot be filled in from outside the game and there
+-- are four of them, which made this feature depend on somebody walking
+-- a lap of Silvermoon and pasting coordinates. That is a bad dependency
+-- for a thing every user needs and only the author can do.
+--
+-- So the addon learns it instead, from the one moment it is free: YOU
+-- HAVE TO BE STANDING NEXT TO THE NPC TO ACCEPT OR HAND IN A QUEST.
+-- At that instant the player's own position is the giver's position to
+-- within interaction range -- a few yards, which on a city map is a
+-- fraction of a percent and far inside what a map pin needs.
+--
+-- KEYED BY ROW, NOT BY QUEST, and that is what makes it beat every
+-- other approach tried here. The row is "Lady Liadrin's weekly"; she
+-- stands in the same spot whichever of her sixteen she is offering. So
+-- accepting ANY ONE of them teaches the row for good, and the
+-- narrowing problem that blocks the offer pin never comes up.
+--
+-- ACCOUNT-WIDE, because an NPC is in the same place for every character
+-- and making an alt re-learn it would be storing a fact about the world
+-- as though it were a fact about the character.
+--
+-- Only while a quest frame is open. QUEST_ACCEPTED also fires for
+-- quests the game hands you for walking into a zone, and those would
+-- record wherever you happened to be standing as the giver's spot --
+-- a wrong pin, confidently placed, which is worse than no pin. Seeing
+-- the quest detail window first is the proof that there was somebody to
+-- talk to.
+--
+-- THREE WAYS IN, because waiting on the one above means a checklist
+-- that does nothing until the player has already done the thing it is
+-- reminding them about. In precedence order, best observation first:
+--
+--   "set"    the player stood on the NPC and said so. Exact, immediate,
+--            and depends on no API anyone has to trust.
+--   "quest"  accepted or handed in next to them, as above.
+--   "map"    the world map already knew where the offer was, picked up
+--            for free on walking into the zone. Fills empty slots only.
+--
+-- All three write the same record and any of them is enough.
+------------------------------------------------------------
+
+--- Everything learned, account-wide. id -> { map, x, y, name, at }.
+local function givers()
+    YippYappHelperDB = YippYappHelperDB or {}
+    YippYappHelperDB.givers = YippYappHelperDB.givers or {}
+    return YippYappHelperDB.givers
+end
+
+--- Who we are talking to, while we are talking to them.
+---
+--- `UnitName("npc")` only answers while one of the quest frames is up,
+--- so the name is caught then and spent when the quest is accepted.
+--- Cleared when the window closes, so a name cannot survive to be
+--- attached to an unrelated quest picked up minutes later.
+local talking = nil
+
+--- Which row a quest belongs to, or nil.
+local function rowForQuest(questID)
+    if not questID then return nil end
+    for _, item in ipairs(ITEMS) do
+        for _, id in ipairs(item.quests or {}) do
+            if id == questID then return item end
+        end
+    end
+    return nil
+end
+
+--- Write down where this row's quest was handed over.
+local function learnGiver(questID)
+    if not talking then return end
+    local item = rowForQuest(questID)
+    if not item then return end
+    if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetPlayerMapPosition) then return end
+
+    local map = C_Map.GetBestMapForUnit("player")
+    if not map then return end
+
+    local ok, pos = pcall(C_Map.GetPlayerMapPosition, map, "player")
+    if not (ok and pos) then return end
+
+    local x, y
+    if pos.GetXY then
+        local gotXY, px, py = pcall(pos.GetXY, pos)
+        if gotXY then x, y = px, py end
+    end
+    x, y = x or pos.x, y or pos.y
+    if not (x and y) then return end
+
+    -- What an instance answers, and what an unmapped spot answers. A pin
+    -- at the top-left corner of a map is not a useful wrong answer.
+    if x == 0 and y == 0 then return end
+
+    givers()[item.id] = {
+        map = map, x = x, y = y,
+        name = talking.name,
+        at = time and time() or nil,
+        -- Where the record came from, so the dump can say and so the
+        -- cheaper seeds know not to overwrite this one. Standing next to
+        -- somebody is the most direct observation available.
+        from = "quest",
+    }
+end
+
+do
+    -- An item name arriving for a reward line that is waiting on one.
+    --
+    -- GET_ITEM_INFO_RECEIVED is global and busy -- every item anything
+    -- asks about -- so it is filtered to Wk._wantItem before anything
+    -- happens. What passes is a handful of items, once each.
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+    f:SetScript("OnEvent", function(_, _, itemID)
+        if not (itemID and Wk._wantItem[itemID]) then return end
+        Wk._wantItem[itemID] = nil
+        if ns.OnWeeklyRewardDataArrived then pcall(ns.OnWeeklyRewardDataArrived) end
+    end)
+end
+
+do
+    local f = CreateFrame("Frame")
+    -- The three frames that mean "you are talking to somebody", and the
+    -- two that mean the conversation produced a quest.
+    f:RegisterEvent("QUEST_DETAIL")
+    f:RegisterEvent("QUEST_PROGRESS")
+    f:RegisterEvent("QUEST_COMPLETE")
+    f:RegisterEvent("QUEST_ACCEPTED")
+    f:RegisterEvent("QUEST_TURNED_IN")
+    f:RegisterEvent("QUEST_FINISHED")
+    f:SetScript("OnEvent", function(_, event, questID)
+        if event == "QUEST_ACCEPTED" or event == "QUEST_TURNED_IN" then
+            learnGiver(questID)
+            return
+        end
+        if event == "QUEST_FINISHED" then
+            talking = nil
+            return
+        end
+        local name = UnitName and UnitName("npc")
+        talking = {
+            name = (type(name) == "string" and name ~= "") and name or nil,
+        }
+    end)
+end
+
+--- Record a row's quest giver: where you stand, or where you say.
+---
+--- The fastest seed there is, and the only one that does not depend on
+--- an API nobody has watched work.
+---
+--- WITH COORDINATES, it does not need you to walk anywhere -- stand
+--- anywhere in the right zone and type the numbers off a database.
+--- That is the difference between five trips across Silvermoon and four
+--- lines pasted from one spot, and it is why the argument exists: the
+--- coordinates are published in a dozen places, and the uiMapID is
+--- published nowhere current. So the client supplies the map and you
+--- supply the position.
+---
+--- BOTH CONVENTIONS ACCEPTED. Map positions are written as fractions
+--- (0.479) and as percentages (47.9) depending on where you read them,
+--- and databases overwhelmingly use the second. Anything above 1 is
+--- taken as a percentage. That is a rule about what a PERSON typed, not
+--- a guess about what an API returned -- and the answer is echoed back
+--- as a fraction, so a misread is visible immediately rather than
+--- becoming a pin nobody checks.
+---
+--- The name comes from whatever is targeted, falling back to whoever is
+--- being talked to -- so naming the row while targeting the NPC labels
+--- the pin. Both are the client's own spelling, which matters: a
+--- hand-typed name would be English on a German client.
+---
+--- @param rowID string the checklist row
+--- @param x number|nil position across, fraction or percentage
+--- @param y number|nil position down, fraction or percentage
+--- @return string a sentence for the player, always.
+function Wk:SetGiverHere(rowID, x, y)
+    rowID = strtrim(rowID or "")
+    if rowID == "" then return nil end
+
+    local item
+    for _, candidate in ipairs(ITEMS) do
+        if candidate.id == rowID then item = candidate break end
+    end
+    if not item then
+        local names = {}
+        for _, candidate in ipairs(ITEMS) do
+            if candidate.quests then names[#names + 1] = candidate.id end
+        end
+        return "|cffff5555no such row.|r rows that can take a giver: |cffffffff"
+            .. table.concat(names, ", ") .. "|r"
+    end
+
+    if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetPlayerMapPosition) then
+        return "|cffff5555this client will not say where you are standing|r"
+    end
+
+    local map = C_Map.GetBestMapForUnit("player")
+    if not map then return "|cffff5555no map here|r" end
+
+    local given = (x ~= nil and y ~= nil)
+    if given then
+        -- Percentages, as every database writes them, become fractions.
+        if x > 1 or y > 1 then x, y = x / 100, y / 100 end
+        if x <= 0 or x >= 1 or y <= 0 or y >= 1 then
+            return ("|cffff5555%s, %s is not a position on a map|r"):format(
+                tostring(x), tostring(y))
+        end
+    else
+        local ok, pos = pcall(C_Map.GetPlayerMapPosition, map, "player")
+        if not (ok and pos) then return "|cffff5555no position here|r" end
+
+        if pos.GetXY then
+            local gotXY, px, py = pcall(pos.GetXY, pos)
+            if gotXY then x, y = px, py end
+        end
+        x, y = x or pos.x, y or pos.y
+        if not (x and y) or (x == 0 and y == 0) then
+            return "|cffff5555no position here -- instances do not have one|r"
+        end
+    end
+
+    local name = UnitName and (UnitName("target") or UnitName("npc"))
+    if type(name) ~= "string" or name == "" then name = nil end
+
+    givers()[item.id] = {
+        map = map, x = x, y = y, name = name,
+        at = time and time() or nil,
+        from = "set",
+    }
+
+    return ("|cff00ff00recorded|r %s for |cffffffff%s|r at %.4f %.4f on map %d%s"):format(
+        name or (given and "that spot" or "this spot"), item.id, x, y, map,
+        given and " |cff888888(map taken from where you are standing)|r" or "")
+end
+
+--- Any of our quests the world map can already place, taken for free.
+---
+--- The other seed, and the one that costs the player nothing at all:
+--- walk into the zone and the offers are on the map already. If
+--- GetQuestsOnMap reports an un-accepted weekly with a position -- the
+--- open question from the start of this -- then the giver is known
+--- without anybody accepting anything.
+---
+--- FILLS EMPTY SLOTS ONLY. A record made by standing next to the NPC is
+--- exact; this one is wherever the client thinks the pin goes, which is
+--- the same place but arrived at less directly. Never overwrite the
+--- better answer with the cheaper one.
+---
+--- Coordinates are required to be strictly inside 0..1. That is not
+--- paranoia about nil -- it is the one thing that could make this place
+--- a confidently wrong pin. Map coordinates come in two conventions,
+--- fractions and percentages, and a "47.9" read as a fraction is a pin
+--- off the edge of the world. Anything outside the range is simply not
+--- the convention this wants, so it is dropped rather than converted:
+--- guessing which convention a number is in is how you get a pin that
+--- is wrong half the time.
+local function scanMapForGivers()
+    local Q = C_QuestLog
+    if not (Q and Q.GetQuestsOnMap and C_Map and C_Map.GetBestMapForUnit) then return end
+
+    -- Nothing left to find is the common case after the first week, and
+    -- this runs on every zone change -- including every sub-zone, which
+    -- in a city is constantly. Answering "already done" first keeps the
+    -- walk over every row's id list off the hot path entirely.
+    local wanted = false
+    local known = givers()
+    for _, item in ipairs(ITEMS) do
+        if item.quests and #item.quests > 0 and not known[item.id] then
+            wanted = true
+            break
+        end
+    end
+    if not wanted then return end
+
+    local map = C_Map.GetBestMapForUnit("player")
+    if not map then return end
+
+    local ok, quests = pcall(Q.GetQuestsOnMap, map)
+    if not (ok and type(quests) == "table") then return end
+
+    for _, entry in ipairs(quests) do
+        if type(entry) == "table" and entry.questID then
+            local item = rowForQuest(entry.questID)
+            if item and not givers()[item.id] then
+                local x, y = entry.x, entry.y
+                if x and y and x > 0 and x < 1 and y > 0 and y < 1 then
+                    givers()[item.id] = {
+                        map = map, x = x, y = y,
+                        at = time and time() or nil,
+                        from = "map",
+                    }
+                end
+            end
+        end
+    end
+end
+
+do
+    local f = CreateFrame("Frame")
+    -- Rare events on purpose. The scan walks every quest the map knows
+    -- about against every row's id list, and the answer only changes
+    -- when the player changes zone.
+    f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    -- The sub-zone ones too, and they are the point rather than padding.
+    -- A quest giver stands in a district of a city, and walking between
+    -- districts fires only these -- so a player who logs in inside
+    -- Silvermoon and walks to the bank would otherwise never scan the
+    -- map they are standing on. The early-out above is what makes the
+    -- extra frequency free.
+    f:RegisterEvent("ZONE_CHANGED")
+    f:RegisterEvent("ZONE_CHANGED_INDOORS")
+    f:SetScript("OnEvent", function() pcall(scanMapForGivers) end)
+end
+
+--- Where this row's giver stands: what this client knows, then what
+--- shipped.
+---
+--- LEARNED WINS, and the order matters more now that rows actually ship
+--- with a giver. A shipped coordinate is a snapshot taken when the
+--- addon was built; a learned one came off the player's own client,
+--- either because they stood next to the NPC or because they said so.
+--- The live observation is the better one, it is the one that is right
+--- if Blizzard moves somebody mid-patch, and it is the one the player
+--- can fix. Shipping data that could not be overridden would turn a
+--- stale number into a bug nobody can work around.
+---
+--- `/yh where forget` drops the learned side, which puts a row back on
+--- the shipped position -- so a bad learning is recoverable in both
+--- directions.
+local function giverFor(item)
+    local rec = item and (givers()[item.id] or item.giver)
+    if not (rec and rec.map and rec.x and rec.y) then return nil end
+    return rec
+end
+
+--- Forget everything learned, for when a record is wrong.
+---
+--- One command rather than one per row: the records rebuild themselves
+--- the next time each quest is picked up, so the expensive half of
+--- being wrong is already cheap.
+function Wk:ForgetGivers()
+    local n = 0
+    for _ in pairs(givers()) do n = n + 1 end
+    YippYappHelperDB.givers = {}
+    return n
+end
+
+--- What has been learned so far, for the dump.
+function Wk:GetLearnedGivers()
+    return givers()
+end
+
+--- Where a row's quest giver stands, for the rows that record one.
+---
+--- Five of them, and every number is sourced rather than remembered.
+---
+--- WHERE THEY CAME FROM, because that is the only thing that makes a
+--- hardcoded coordinate acceptable here: Wowhead's `g_mapperData`, read
+--- off each NPC's page on 2026-09-12. That structure is datamined out
+--- of the client -- it is the same class of thing as the class-guide
+--- tables in Features/Gear/ClassGuideData.lua, not the editorial prose
+--- next to it -- and it carries its OWN uiMapId, so the map is not
+--- being inferred from a zone name either.
+---
+--- Each NPC was reached through a quest id this file already ships,
+--- rather than by searching for a name: 93751 names Halduron, 98172
+--- names Vereesa, 93598 names Aethas, 95520 names Warleader Abdumati.
+--- So the link from row to NPC is the row's own data, and a wrong NPC
+--- would have to be a wrong quest id first.
+---
+--- uiMapId 2393 was confirmed a second time, against a live client
+--- standing in Silvermoon. The published uiMapID lists are three years
+--- stale and still name 110, which is the pre-Midnight city -- so the
+--- agreement between Wowhead's number and the game's own is the thing
+--- that settles it, not either alone.
+---
+--- FOUR OF THE FIVE SIT ON TOP OF EACH OTHER, within a fifth of a
+--- percent. That is not a copy-paste error: they are the weekly quest
+--- givers and they stand together, which the rows' own `detail` lines
+--- have said all along -- Vereesa's names the Great Vault.
+---
+--- A LEARNED RECORD OUTRANKS ALL OF THIS. See giverFor below: these are
+--- a snapshot taken at build time and the player's client is live, so
+--- the moment anyone picks one of these quests up, their own
+--- observation wins. That is also the repair path if Blizzard moves
+--- somebody mid-patch.
+---
+--- English names, like every other string in this addon. The learned
+--- path can do better -- it takes the client's own spelling -- and
+--- does, as soon as there is a learned record.
+---
+--- `name` is what the waypoint is called on the map, so a player who
+--- opens it later sees who they were walking to rather than a bare pin.
+---
+---   giver = { map = 0, x = 0.0000, y = 0.0000, name = "Lady Liadrin" }
+---
+--- The zeros are deliberate. That is a SHAPE, not an example with real
+--- numbers in it -- a plausible-looking uiMapID sitting in a comment is
+--- exactly how an unchecked value ends up copied into a row.
+---
+--- `map` is a uiMapID and `x`/`y` are 0..1 map fractions, which is what
+--- both C_Map.GetPlayerMapPosition returns and UiMapPoint wants -- no
+--- multiplying by a hundred anywhere, in either direction.
+
+--- Whether the map's one user waypoint is the one we put there.
+---
+--- Compared rather than remembered, and that is the whole point. There
+--- is exactly ONE user waypoint and whoever wrote it last owns it, so a
+--- remembered "we set one" goes stale the moment the player drops their
+--- own -- and clearing a pin they placed by hand is the kind of thing
+--- an addon gets uninstalled for. Comparing costs nothing and cannot be
+--- wrong in that direction.
+local function waypointIsOurs(giver)
+    if not (giver and C_Map and C_Map.HasUserWaypoint and C_Map.GetUserWaypoint) then
+        return false
+    end
+    local ok, has = pcall(C_Map.HasUserWaypoint)
+    if not (ok and has) then return false end
+
+    local gotPoint, point = pcall(C_Map.GetUserWaypoint)
+    if not (gotPoint and type(point) == "table") then return false end
+    if point.uiMapID ~= giver.map then return false end
+
+    -- The position is a Vector2D, which answers to GetXY() and also
+    -- carries x and y as fields. Both are read because a mixin losing
+    -- one of the two is a silent nil rather than an error.
+    local x, y
+    local pos = point.position
+    if type(pos) == "table" then
+        if pos.GetXY then
+            local gotXY, px, py = pcall(pos.GetXY, pos)
+            if gotXY then x, y = px, py end
+        end
+        x, y = x or pos.x, y or pos.y
+    end
+    if not (x and y) then return false end
+
+    -- A tenth of a percent of the map, which is a couple of yards in a
+    -- city and far tighter than anything a player would place by hand
+    -- on the same spot by accident.
+    return math.abs(x - giver.x) < 0.001 and math.abs(y - giver.y) < 0.001
+end
+
+--- Drop a map pin on the giver and point the arrow at it.
+---
+--- Modelled on a working native-waypoint path rather than assembled
+--- from the call names: the map is asked whether it takes a pin at all
+--- BEFORE anything is cleared, because a restricted map refuses and the
+--- player should not lose the waypoint they had to find that out. On
+--- 12.1.0 and up SetUserWaypoint reports whether it took, so that is
+--- read rather than assumed.
+---
+--- @return string|nil "on", "off", or nil when it could not be placed
+local function pointAtGiver(giver)
+    if not (giver and C_Map and C_Map.SetUserWaypoint
+        and UiMapPoint and UiMapPoint.CreateFromCoordinates) then return nil end
+
+    -- Already ours: a second click lets go, and only of ours.
+    if waypointIsOurs(giver) then
+        if C_Map.ClearUserWaypoint then pcall(C_Map.ClearUserWaypoint) end
+        if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+            pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, false)
+        end
+        return "off"
+    end
+
+    if C_Map.CanSetUserWaypointOnMap then
+        local ok, allowed = pcall(C_Map.CanSetUserWaypointOnMap, giver.map)
+        if not (ok and allowed) then return nil end
+    end
+
+    local built, point = pcall(UiMapPoint.CreateFromCoordinates,
+        giver.map, giver.x, giver.y)
+    if not (built and point) then return nil end
+
+    local ok, placed = pcall(C_Map.SetUserWaypoint, point)
+    -- `placed` is nil on a client whose setter returns nothing, false
+    -- when it refused, and true when it took. Only the refusal is a
+    -- failure -- treating "returned nothing" as one would break the
+    -- branch on every client older than the one it was written against.
+    if not ok or placed == false then return nil end
+
+    if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+        pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+    end
+    return "on"
+end
+
+--- Which map a target lives on, or nil.
+---
+--- GetQuestUiMapID is a bare GLOBAL, not a C_QuestLog member -- TomTom
+--- and Plumber both call it that way and the namespaced spelling does
+--- not exist. Worth writing down because the rest of this file reaches
+--- for quest functions through C_QuestLog, so the odd one out looks
+--- like a typo.
+---
+--- A giver needs none of that: the row already says which map it is on,
+--- which is the third time that table has turned out to be the simple
+--- answer to a question the client makes complicated.
+local function targetMap(target, how)
+    if how == "giver" then return target.map end
+    -- Only ever asked about a quest in the log now. For one of those it
+    -- is the zone the objective is in, which is where the row is sending
+    -- you. Asked about an un-accepted quest it answers the objective's
+    -- zone too, which is why nothing asks it about one any more.
+    if type(GetQuestUiMapID) ~= "function" then return nil end
+    local ok, mapID = pcall(GetQuestUiMapID, target)
+    -- Zero is the client's "no map", and passing it on opens the world
+    -- map on whatever it was last showing -- which looks like the
+    -- feature working and is not.
+    if ok and mapID and mapID ~= 0 then return mapID end
+    return nil
+end
+
+--- Put the world map in front of the player, on the right map.
+---
+--- Part of pointing rather than a separate action. A waypoint you
+--- cannot see is a direction without a distance -- the arrow tells you
+--- which way, the map tells you how far and what is between you and it,
+--- and somebody asking "where do I pick this up" wants the second one.
+---
+--- NOT IN COMBAT. ShowUIPanel runs inside FramePositionDelegate, and the
+--- world map throwing itself over a pull is unwanted even where it is
+--- allowed.
+---
+--- C_Map.OpenWorldMap first because it is the C entry point and carries
+--- no Lua taint. The fallback goes through securecall for the reason
+--- Core/EditMode.lua sets out at length: calling ShowUIPanel straight
+--- from addon code taints the panel system for the session, and the
+--- symptom is a keybind that quietly stops working somewhere else
+--- entirely. Showing a panel never needed the taint to begin with.
+local function openMapAt(mapID)
+    if not mapID then return false end
+    if InCombatLockdown and InCombatLockdown() then return false end
+
+    if C_Map and C_Map.OpenWorldMap then
+        local ok = pcall(C_Map.OpenWorldMap, mapID)
+        if ok then return true end
+    end
+
+    if WorldMapFrame and securecall then
+        securecall("ShowUIPanel", WorldMapFrame)
+        if WorldMapFrame.SetMapID then
+            pcall(WorldMapFrame.SetMapID, WorldMapFrame, mapID)
+        end
+        return true
+    end
+    return false
+end
+
+--- What the game could point at for this row, and how.
+---
+--- Returns target, how -- where `how` says what `target` is: a quest id
+--- for "log" and "offer", the row's giver table for "giver". nil covers
+--- every case where there is nothing to point at.
+function Wk:GetTrackTarget(item)
+    if not item then return nil end
+
+    local Q = C_QuestLog
+    local ids = item.quests
+
+    if Q and C_SuperTrack and ids and #ids > 0
+        and Q.GetLogIndexForQuestID and C_SuperTrack.SetSuperTrackedQuestID then
+        for _, id in ipairs(ids) do
+            local ok, idx = pcall(Q.GetLogIndexForQuestID, id)
+            if ok and idx then return id, "log" end
+        end
+    end
+
+    local giver = giverFor(item)
+    if giver and C_Map and C_Map.SetUserWaypoint then
+        return giver, "giver"
+    end
+
+    return nil
+end
+
+--- Whether the game is already pointing at an already-resolved target.
+---
+--- Split from IsTracking below so GetList can ask both questions off
+--- ONE call to GetTrackTarget. Resolving a target walks the row's whole
+--- id list -- sixteen of them on Lady Liadrin's -- and that list is
+--- already walked three times a refresh by IsDone and ResolveQuest. A
+--- fourth walk to re-derive a value the caller is holding is the kind
+--- of thing that is free until the day it is not.
+---
+function Wk:IsTrackingTarget(target, how)
+    if not target then return false end
+
+    if how == "giver" then return waypointIsOurs(target) end
+
+    local get = C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID
+    if not get then return false end
+    local ok, current = pcall(get)
+    return (ok and current == target) and true or false
+end
+
+--- The same question, from the row.
+function Wk:IsTracking(item)
+    local target, how = self:GetTrackTarget(item)
+    return self:IsTrackingTarget(target, how)
+end
+
+--- Point the game at this row, or stop pointing at it.
+---
+--- A second click clears it, which is what a tracking toggle does
+--- everywhere else in the game. The quest cases clear with
+--- ClearAllSuperTracked rather than by setting the id to zero: zero is
+--- the quest setter's "none" and means nothing at all to the pin
+--- setter, so one call covers both and neither needs a magic number.
+---
+--- @return string|nil "on", "off", or nil when there was nothing to
+--- point at -- which the caller wants, because a click that did nothing
+--- should not redraw the page as though it had.
+function Wk:Track(item)
+    local target, how = self:GetTrackTarget(item)
+    if not target then return nil end
+
+    local result
+    if how == "giver" then
+        result = pointAtGiver(target)
+    else
+        if self:IsTrackingTarget(target, how) and C_SuperTrack.ClearAllSuperTracked then
+            if pcall(C_SuperTrack.ClearAllSuperTracked) then result = "off" end
+        end
+        if not result then
+            local ok = pcall(C_SuperTrack.SetSuperTrackedQuestID, target)
+            result = ok and "on" or nil
+        end
+    end
+
+    -- Only on the way ON. Letting go of a waypoint should not throw a
+    -- window at you, and neither should a click that placed nothing --
+    -- a map opening on a failure is the clearest possible way to report
+    -- success that did not happen.
+    if result == "on" then openMapAt(targetMap(target, how)) end
+    return result
+end
+
+------------------------------------------------------------
+-- What it pays
+--
+-- The other half of the same CurseForge request, and the half that
+-- turns the list from chores into reasons: a row that says "Complete
+-- Midnight: Dungeons" and a row that says it pays a Spark of Tides are
+-- not the same row.
+--
+-- Read off the CLIENT, never written down here. A quest retuned in the
+-- current patch reads as its old self on every database for weeks, and
+-- a reward that scales -- with level, with season, with which
+-- difficulty flagged it -- is one number there and another one here.
+-- The client is answering about this character tonight.
+------------------------------------------------------------
+
+--- Which of our own currencies an id belongs to, as a short label, or nil.
+---
+--- So a crest reward reads as "Hero Mistcrest" rather than as a bare
+--- 3445 the reader has to go and look up. The names come from
+--- Features/Gear/Crests.lua, which is where they are already recorded
+--- and already re-checked each season.
+local function knownCurrency(id)
+    if not id then return nil end
+    for _, crest in ipairs(ns.CRESTS or {}) do
+        if crest.id == id then return crest.name end
+        for _, candidate in ipairs(crest.candidates or {}) do
+            if candidate == id then return crest.name .. " (dead twin)" end
+        end
+    end
+    for _, crest in ipairs(ns.LEGACY_CRESTS or {}) do
+        if crest.id == id then return crest.name .. " (season 1)" end
+    end
+    if id == ns.CATALYST_CURRENCY_ID then return "Catalyst charge" end
+    return nil
+end
+
+--- What the client says this quest pays.
+---
+--- THE SELECTION DANCE IS THE WHOLE TRICK, and it is the reason this is
+--- one function rather than four call sites. The reward getters look
+--- like one family and are two: GetNumQuestLogRewards takes a quest id
+--- and answers about the id it is handed, while
+--- GetNumQuestLogRewardCurrencies answers about whichever entry the
+--- quest log has SELECTED and ignores the argument entirely. Reading
+--- both without selecting comes back holding a quest's items and none
+--- of its currencies -- which on a weekly is the half that matters,
+--- since the currency usually IS the reward. So the log is pointed at
+--- the entry first and put back afterwards.
+---
+--- A getter that is not there goes in `missing` rather than counting as
+--- zero. The two are indistinguishable from outside -- either way the
+--- reward goes unread and the quest looks like it pays nothing -- and a
+--- reader that cannot tell "pays nothing" from "asked the wrong
+--- question" is worse than none, because it is believed.
+---
+--- Reward data arrives with the quest, so a quest the client has not
+--- loaded answers zero to all of it. That case asks for the load and
+--- comes back `pending`, not `empty`: "nothing yet" and "nothing at
+--- all" are different sentences for a tooltip to print, and the request
+--- goes through the same `requested` table as the titles above so
+--- QUEST_DATA_LOAD_RESULT redraws the page when it lands.
+---
+--- @return table|nil { currencies, items, choices, money, xp, missing,
+--- empty, pending }. Every list is present and may be empty; a choice
+--- entry carries isCurrency when it is a reputation rather than an item.
+function Wk:GetQuestRewards(id)
+    if not id then return nil end
+
+    local cached = self._rewards[id]
+    if cached then return cached end
+
+    local out = {
+        currencies = {}, items = {}, choices = {},
+        money = 0, xp = 0, missing = {},
+    }
+
+    if type(HaveQuestRewardData) == "function" then
+        local ok, ready = pcall(HaveQuestRewardData, id)
+        if ok and not ready then
+            out.pending = true
+            if not requested[id] and C_QuestLog and C_QuestLog.RequestLoadQuestByID then
+                requested[id] = true
+                pcall(C_QuestLog.RequestLoadQuestByID, id)
+            end
+        end
+    end
+
+    local Q = C_QuestLog
+    local restore = Q and Q.GetSelectedQuest and Q.GetSelectedQuest()
+    if Q and Q.SetSelectedQuest then pcall(Q.SetSelectedQuest, id) end
+
+    local function count(fn, name, ...)
+        if type(fn) ~= "function" then
+            out.missing[#out.missing + 1] = name .. " (no such function)"
+            return 0
+        end
+        local ok, n = pcall(fn, ...)
+        if not ok then
+            out.missing[#out.missing + 1] = name .. " (errored)"
+            return 0
+        end
+        return tonumber(n) or 0
+    end
+
+    -- One currency reward, however this client hands it back. Both
+    -- shapes are read because the getter has had two: a flat
+    -- name/texture/quantity/id/quality list, and a single table.
+    -- Guessing wrong fails silently -- every field reads nil and the
+    -- reward disappears rather than erroring.
+    local function currency(j, isChoice)
+        local ok, a, b, c, d, e = pcall(GetQuestLogRewardCurrencyInfo, j, id, isChoice)
+        if not ok then return nil end
+        local name, texture, quantity, currencyID, quality
+        if type(a) == "table" then
+            name       = a.name
+            texture    = a.texture
+            quantity   = a.totalRewardAmount or a.quantity or a.numItems
+            currencyID = a.currencyID
+            quality    = a.quality
+        else
+            name, texture, quantity, currencyID, quality = a, b, c, d, e
+        end
+        if not currencyID then return nil end
+        -- The texture was discarded here for a while, and the cost was
+        -- invisible until the tooltip started drawing icons: a weekly's
+        -- currency IS its reward, so the one line that most needed art
+        -- was the only one without any.
+        return {
+            isCurrency = true, currencyID = currencyID,
+            name = name, texture = texture,
+            quantity = quantity, quality = quality,
+            known = knownCurrency(currencyID),
+        }
+    end
+
+    -- Currencies first: on a weekly, they are the reason to do it.
+    for j = 1, count(GetNumQuestLogRewardCurrencies, "GetNumQuestLogRewardCurrencies", id) do
+        local info = currency(j)
+        if info then out.currencies[#out.currencies + 1] = info end
+    end
+
+    -- One item reward, with the name filled in from the item cache when
+    -- the quest's own answer left it out -- and a load asked for when
+    -- the cache does not have it either. Marks the whole answer
+    -- incomplete in that case, so it is not cached with a hole in it.
+    local function itemReward(itemID, name, texture, quantity, quality)
+        if (not name or name == "") and C_Item then
+            if C_Item.GetItemNameByID then
+                local got, cached = pcall(C_Item.GetItemNameByID, itemID)
+                if got and type(cached) == "string" and cached ~= "" then name = cached end
+            end
+            if not name or name == "" then
+                out.incomplete = true
+                Wk._wantItem[itemID] = true
+                if C_Item.RequestLoadItemDataByID then
+                    pcall(C_Item.RequestLoadItemDataByID, itemID)
+                end
+            end
+        end
+        if not texture and C_Item and C_Item.GetItemIconByID then
+            local got, icon = pcall(C_Item.GetItemIconByID, itemID)
+            if got then texture = icon end
+        end
+        return {
+            itemID = itemID, name = name, texture = texture,
+            quantity = quantity or 1, quality = quality,
+        }
+    end
+
+    for j = 1, count(GetNumQuestLogRewards, "GetNumQuestLogRewards", id) do
+        local ok, name, texture, quantity, quality, _, itemID = pcall(GetQuestLogRewardInfo, j, id)
+        if ok and itemID then
+            out.items[#out.items + 1] = itemReward(itemID, name, texture, quantity, quality)
+        end
+    end
+
+    -- The pick-one list, which is where the reputation weeklies live.
+    --
+    -- Two readers per slot, because a choice is not always an item. A
+    -- quest offering five reputations offers five CURRENCIES, and
+    -- GetQuestLogChoiceInfo describes items -- it hands back no itemID
+    -- for a currency slot, so an item-only loop reads nothing at all
+    -- and the quest looks like it pays nothing. Ask for the item first,
+    -- and fall back to the currency reader with isChoice set.
+    --
+    -- The count has to include currencies or the loop never reaches
+    -- them: without the flag GetNumQuestLogChoices answers with the
+    -- item choices only, which for these quests is zero.
+    for j = 1, count(GetNumQuestLogChoices, "GetNumQuestLogChoices", id, true) do
+        local ok, name, texture, quantity, quality, _, itemID = pcall(GetQuestLogChoiceInfo, j)
+        if ok and itemID then
+            out.choices[#out.choices + 1] = itemReward(itemID, name, texture, quantity, quality)
+        else
+            local info = currency(j, true)
+            if info then out.choices[#out.choices + 1] = info end
+        end
+    end
+
+    out.money = count(GetQuestLogRewardMoney, "GetQuestLogRewardMoney", id)
+    out.xp    = count(GetQuestLogRewardXP, "GetQuestLogRewardXP", id)
+
+    -- The selection is a thing the player can see, so hand it back.
+    if Q and Q.SetSelectedQuest and restore then pcall(Q.SetSelectedQuest, restore) end
+
+    out.empty = #out.currencies == 0 and #out.items == 0 and #out.choices == 0
+        and out.money == 0 and out.xp == 0
+
+    -- A pending answer is not an answer. Caching one would pin "loading"
+    -- on the row for the session, because the event that would have
+    -- cleared it is the same event that has already fired by then.
+    --
+    -- Nor is an answer with a nameless item in it. Caching that is exactly
+    -- how "Item" would stick on the tooltip for the rest of the session.
+    if not (out.pending or out.incomplete) then self._rewards[id] = out end
+    return out
+end
+
 
 
 ------------------------------------------------------------
@@ -1158,70 +2260,211 @@ function Wk:DumpQuestObjectives(id)
     end
 end
 
---- Which of our own currencies an id belongs to, as a short label, or nil.
+--- Where you are standing, and what the client thinks is on this map.
 ---
---- So a crest reward reads as "Hero Mistcrest" in the dump rather than as
---- a bare 3445 the reader has to go and look up. The names come from
---- Features/Gear/Crests.lua, which is where they are already recorded and
---- already re-checked each season.
-local function knownCurrency(id)
-    if not id then return nil end
-    for _, crest in ipairs(ns.CRESTS or {}) do
-        if crest.id == id then return crest.name end
-        for _, candidate in ipairs(crest.candidates or {}) do
-            if candidate == id then return crest.name .. " (dead twin)" end
+--- Two jobs in one command, because they are asked in the same place --
+--- standing in front of a quest giver, wondering how to get the addon
+--- to point at them.
+---
+--- FIRST, the paste-ready giver line. The `giver` tables above cannot be
+--- filled in from outside the game: a uiMapID is not derivable and a
+--- coordinate off a website is a coordinate nobody checked. Stand on the
+--- NPC, run this, copy the line. Same method the quest ids came in by,
+--- for the same reason -- this addon has shipped a run of invented ids
+--- before and every one of them was dead, silently.
+---
+--- SECOND, what C_QuestLog.GetQuestsOnMap hands back here. That is the
+--- open question behind the whole feature: if an un-accepted weekly
+--- shows up in it WITH a position, the client can say which of Lady
+--- Liadrin's sixteen is this week's and the giver tables are not needed
+--- at all. Printed field by field rather than as the fields I expect,
+--- because the shape is the thing being asked about.
+function Wk:DumpHere()
+    local map = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    if not map then
+        print("|cffff5555YippYapp:|r the client will not say which map this is")
+        return
+    end
+
+    local name = "?"
+    if C_Map.GetMapInfo then
+        local ok, info = pcall(C_Map.GetMapInfo, map)
+        if ok and type(info) == "table" then name = info.name or name end
+    end
+
+    print(("|cff00ff00=== %s |cffffd100(uiMapID %d)|r|cff00ff00 ===|r"):format(name, map))
+
+    local x, y
+    if C_Map.GetPlayerMapPosition then
+        local ok, pos = pcall(C_Map.GetPlayerMapPosition, map, "player")
+        if ok and pos then
+            if pos.GetXY then
+                local gotXY, px, py = pcall(pos.GetXY, pos)
+                if gotXY then x, y = px, py end
+            end
+            x, y = x or pos.x, y or pos.y
         end
     end
-    for _, crest in ipairs(ns.LEGACY_CRESTS or {}) do
-        if crest.id == id then return crest.name .. " (season 1)" end
+
+    if x and y then
+        -- The line as it goes into ITEMS, not as a pair of numbers to
+        -- reformat by hand. Four decimals is about a yard in a city and
+        -- is what the client itself is accurate to.
+        print(("       |cffffffffgiver = { map = %d, x = %.4f, y = %.4f, name = \"\" },|r")
+            :format(map, x, y))
+        print("       |cff888888paste that onto the row, and put the NPC's name in the quotes|r")
+    else
+        print("       |cff888888no player position on this map|r")
     end
-    if id == ns.CATALYST_CURRENCY_ID then return "Catalyst charge" end
-    return nil
+
+    if C_Map.CanSetUserWaypointOnMap then
+        local ok, allowed = pcall(C_Map.CanSetUserWaypointOnMap, map)
+        print("       waypoints here: " .. ((ok and allowed) and "|cff00ff00yes|r"
+            or "|cffff5555no -- this map refuses user pins|r"))
+    end
+
+    -- The open question. Anything with a questID AND an x/y that is not
+    -- already in the log is an offer the client can locate, which is the
+    -- answer that makes the giver tables unnecessary.
+    local onMap = C_QuestLog and C_QuestLog.GetQuestsOnMap
+    if not onMap then
+        print("       |cff888888C_QuestLog.GetQuestsOnMap is absent on this client|r")
+        self:DumpTargets()
+        return
+    end
+    local ok, quests = pcall(onMap, map)
+    if not (ok and type(quests) == "table") then
+        print("       |cff888888GetQuestsOnMap answered nothing here|r")
+        return
+    end
+
+    print(("       |cffffd100GetQuestsOnMap: %d entr%s|r"):format(
+        #quests, #quests == 1 and "y" or "ies"))
+    for i, entry in ipairs(quests) do
+        if type(entry) == "table" then
+            local fields = {}
+            for k, v in pairs(entry) do
+                fields[#fields + 1] = tostring(k) .. "=" .. tostring(v)
+            end
+            table.sort(fields)
+            local id = entry.questID
+            local inLog = id and C_QuestLog.GetLogIndexForQuestID
+                and C_QuestLog.GetLogIndexForQuestID(id) and " |cff00ff00[in log]|r" or ""
+            print(("         [%d] %s%s"):format(i, table.concat(fields, "  "), inLog))
+            if id then
+                local title = questTitle(id)
+                if title then print("             " .. title) end
+            end
+        end
+    end
+
+    self:DumpLearnedGivers()
+    self:DumpTargets()
 end
 
---- What the client says this quest pays.
+--- Every giver the account has learned.
 ---
---- Worth asking the client rather than a database. A quest retuned in the
---- current patch reads as its old self on every site for weeks, and a
---- reward that scales -- with level, with season, with which difficulty
---- flagged it -- is one number there and a different one here. The client
---- is answering about this character tonight, which is the only answer a
---- reward row can be built on.
+--- Worth printing next to the rest because it is the answer to both
+--- "why does that row have no pin" and "why is that pin in the wrong
+--- place" -- the first is an absent line here, the second is a line
+--- with coordinates you can compare against where you are standing.
+function Wk:DumpLearnedGivers()
+    local learned = self:GetLearnedGivers()
+    local any = false
+    for _ in pairs(learned) do any = true break end
+
+    print("|cffffd100learned givers|r")
+    if not any then
+        print("       |cff888888none yet -- they arrive as you pick the quests up|r")
+        return
+    end
+    for id, rec in pairs(learned) do
+        print(("   %-16s |cffffffff%s|r map %d  %.4f %.4f  |cff888888(%s)|r"):format(
+            tostring(id), tostring(rec.name or "?"),
+            rec.map or 0, rec.x or 0, rec.y or 0,
+            tostring(rec.from or "?")))
+    end
+end
+
+--- Every row, and what it would point at.
 ---
---- The quest log is pointed at the entry first, and put back afterwards.
---- The reward getters look like one family and are two: GetNumQuestLogRewards
---- takes a quest id and answers about the id it is handed, while
---- GetNumQuestLogRewardCurrencies answers about whichever entry the log has
---- selected and ignores the argument. Reading both without selecting is how
---- a dump comes back holding a quest's items and none of its currencies.
+--- The answer to "nothing happens when I click". A row has no pin button
+--- when there is nowhere to send you, and there are four different
+--- reasons for that -- no quest behind the row at all, a family of ids
+--- that cannot be narrowed, a giver nobody has recorded yet, or a quest
+--- already handed in. From the page they all look identical, so this
+--- says which.
+---
+--- Printed as part of /yh where because that is the command you are
+--- already running when you want to fix it: the rows reported as
+--- "no giver recorded" are exactly the ones the line above is for.
+function Wk:DumpTargets()
+    print("|cff00ff00=== weekly rows: where each one points ===|r")
+
+    local Q = C_QuestLog
+    for _, item in ipairs(ITEMS) do
+        local target, how = self:GetTrackTarget(item)
+        local verdict
+
+        if how == "log" then
+            verdict = ("|cff00ff00quest %d, in your log|r"):format(target)
+        elseif how == "giver" then
+            verdict = ("|cff00ff00map pin: %s (%d) %.4f %.4f|r"):format(
+                tostring(target.name or "?"), target.map, target.x, target.y)
+        elseif how == "offer" then
+            verdict = ("|cff00ff00offer pin for quest %d|r"):format(target)
+        else
+            -- Which of the four, specifically. A row that says "nothing"
+            -- and a row that says "eight candidates, none of them
+            -- narrowable" are the same on screen and completely
+            -- different to fix.
+            local ids = item.quests
+            if not (ids and #ids > 0) then
+                verdict = "|cff888888nothing to point at -- this row is not a place|r"
+            elseif not item.giver then
+                local open = 0
+                if Q and Q.IsQuestFlaggedCompleted then
+                    for _, id in ipairs(ids) do
+                        local ok, done = pcall(Q.IsQuestFlaggedCompleted, id)
+                        if ok and not done then open = open + 1 end
+                    end
+                end
+                if open == 0 then
+                    verdict = "|cff888888all " .. #ids
+                        .. " of its quests are flagged done -- nothing on offer|r"
+                else
+                    -- Every one of these fixes itself. Pick the quest up
+                    -- once, next to whoever hands it out, and the row
+                    -- knows where they stand from then on -- for every
+                    -- character on the account, and for every week
+                    -- after, whichever of the family is live.
+                    verdict = ("|cffffd100%d outstanding, no giver yet -- "
+                        .. "/yh where set %s|r |cff888888(on the NPC), or "
+                        .. "/yh where set %s <x> <y> from anywhere in the zone|r")
+                        :format(open, tostring(item.id), tostring(item.id))
+                end
+            else
+                verdict = "|cffff5555has a giver but it did not resolve -- "
+                    .. "check its map, x and y|r"
+            end
+        end
+
+        print(("   %-16s %s"):format(tostring(item.id), verdict))
+    end
+end
+
+--- The same rewards, printed.
+---
+--- Everything it knows comes from Wk:GetQuestRewards above -- this is a
+--- formatter, not a second reader. It used to be the only reader, and
+--- splitting it is what let the checklist tooltip show the same answer
+--- without the selection dance being written down twice and getting it
+--- right once.
 function Wk:DumpQuestRewards(id)
     if not id then return end
 
-    local Q = C_QuestLog
-    local restore = Q and Q.GetSelectedQuest and Q.GetSelectedQuest()
-    if Q and Q.SetSelectedQuest then pcall(Q.SetSelectedQuest, id) end
-
-    -- A getter that is not there is reported, not counted as zero.
-    --
-    -- The two are indistinguishable from here: either way the reward
-    -- goes unprinted and the quest reads as paying nothing. That is how
-    -- this dump came back holding 93753's money and none of its five
-    -- reputation choices, and said nothing was wrong. A diagnostic that
-    -- cannot tell "pays nothing" from "asked the wrong question" is
-    -- worse than no diagnostic, because it is believed.
-    local missing = {}
-    local function count(fn, name, ...)
-        if type(fn) ~= "function" then
-            missing[#missing + 1] = name .. " (no such function)"
-            return 0
-        end
-        local ok, n = pcall(fn, ...)
-        if not ok then
-            missing[#missing + 1] = name .. " (errored)"
-            return 0
-        end
-        return tonumber(n) or 0
-    end
+    local rewards = self:GetQuestRewards(id)
+    if not rewards then return end
 
     local printed = false
     local function header()
@@ -1230,92 +2473,59 @@ function Wk:DumpQuestRewards(id)
         print("       |cffffd100rewards|r")
     end
 
-    -- One currency reward, however this client hands it back. Read both
-    -- shapes because the getter has had two: a flat
-    -- name/texture/quantity/id list, and a single table. Guessing wrong
-    -- fails silently -- every field reads nil and the line prints "?".
-    local function currency(j, isChoice)
-        local ok, a, _, c, d = pcall(GetQuestLogRewardCurrencyInfo, j, id, isChoice)
-        if not ok then return end
-        local name, quantity, currencyID
-        if type(a) == "table" then
-            name       = a.name
-            quantity   = a.totalRewardAmount or a.quantity or a.numItems
-            currencyID = a.currencyID
-        else
-            name, quantity, currencyID = a, c, d
-        end
-        if not currencyID then return end
+    local function currencyLine(info, isChoice)
         header()
-        local known = knownCurrency(currencyID)
+        local known = knownCurrency(info.currencyID)
         print(("         %scurrency %d x%s  %s%s"):format(
             isChoice and "choice " or "",
-            currencyID,
-            tostring(quantity or "?"),
-            tostring(name or "?"),
+            info.currencyID,
+            tostring(info.quantity or "?"),
+            tostring(info.name or "?"),
             known and (" |cff00ff00<- " .. known .. "|r") or ""))
-        return true
     end
 
-    -- Currencies first: on a weekly, they are the reason to do it.
-    for j = 1, count(GetNumQuestLogRewardCurrencies, "GetNumQuestLogRewardCurrencies", id) do currency(j) end
+    for _, info in ipairs(rewards.currencies) do currencyLine(info) end
 
-    for j = 1, count(GetNumQuestLogRewards, "GetNumQuestLogRewards", id) do
-        local ok, name, _, quantity, _, _, itemID = pcall(GetQuestLogRewardInfo, j, id)
-        if ok and itemID then
-            header()
-            print(("         item %d x%s  %s"):format(itemID, tostring(quantity or 1), tostring(name or "?")))
-        end
+    for _, info in ipairs(rewards.items) do
+        header()
+        print(("         item %d x%s  %s"):format(
+            info.itemID, tostring(info.quantity or 1), tostring(info.name or "?")))
     end
 
-    -- The pick-one list, which is where the reputation weeklies live.
-    --
-    -- Two readers per slot, because a choice is not always an item. A
-    -- quest offering five reputations offers five currencies, and
-    -- GetQuestLogChoiceInfo describes items -- it hands back no itemID
-    -- for a currency slot, so an item-only loop prints nothing at all
-    -- and the quest reads as paying nothing. Ask for the item first,
-    -- and fall back to the currency reader with isChoice set.
-    --
-    -- The count has to include currencies or the loop never reaches
-    -- them: without the flag GetNumQuestLogChoices answers with the item
-    -- choices only, which for these quests is zero.
-    for j = 1, count(GetNumQuestLogChoices, "GetNumQuestLogChoices", id, true) do
-        local ok, name, _, quantity, _, _, itemID = pcall(GetQuestLogChoiceInfo, j)
-        if ok and itemID then
-            header()
-            print(("         choice item %d x%s  %s"):format(itemID, tostring(quantity or 1), tostring(name or "?")))
+    for _, info in ipairs(rewards.choices) do
+        if info.isCurrency then
+            currencyLine(info, true)
         else
-            currency(j, true)
+            header()
+            print(("         choice item %d x%s  %s"):format(
+                info.itemID, tostring(info.quantity or 1), tostring(info.name or "?")))
         end
     end
 
-    local money = count(GetQuestLogRewardMoney, "GetQuestLogRewardMoney", id)
-    if money > 0 then
+    if rewards.money > 0 then
         header()
-        local ok, coins = pcall(GetCoinTextureString, money)
-        print("         money " .. ((ok and coins) or (money .. "c")))
+        local ok, coins = pcall(GetCoinTextureString, rewards.money)
+        print("         money " .. ((ok and coins) or (rewards.money .. "c")))
     end
 
-    local xp = count(GetQuestLogRewardXP, "GetQuestLogRewardXP", id)
-    if xp > 0 then
+    if rewards.xp > 0 then
         header()
-        print("         xp " .. xp)
+        print("         xp " .. rewards.xp)
     end
-
-    -- The selection is a thing the player can see, so hand it back.
-    if Q and Q.SetSelectedQuest and restore then pcall(Q.SetSelectedQuest, restore) end
 
     if not printed then
         -- Not the same as "pays nothing". Reward data arrives with the
         -- quest and a quest the client has not fully loaded answers zero
-        -- to all of the above, so say which of the two this might be.
-        print("       |cff888888no rewards reported -- either it pays none, or the "
-            .. "client has not loaded this quest's data yet|r")
+        -- to all of the above, so say which of the two this might be --
+        -- and the reader now knows the difference, so say which it is.
+        print("       |cff888888no rewards reported -- "
+            .. (rewards.pending
+                and "the client has not loaded this quest's data yet, so ask again in a moment"
+                or "it pays none") .. "|r")
     end
 
-    if #missing > 0 then
+    if #rewards.missing > 0 then
         print("       |cffff5555could not be read on this client:|r |cff888888"
-            .. table.concat(missing, ", ") .. "|r")
+            .. table.concat(rewards.missing, ", ") .. "|r")
     end
 end

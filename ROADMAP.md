@@ -6,6 +6,57 @@ re-deriving whether it is possible.
 
 ---
 
+## Weekly checklist: keeping the giver coordinates honest
+
+**Status:** done and shipped. Kept here for the sourcing, because the
+next person to touch these numbers needs to know where they came from.
+
+Five rows ship a `giver` in `Features/Planner/WeeklyChecklist.lua`:
+Lady Liadrin, Halduron Brightwing, Vereesa Windrunner, Archmage Aethas
+Sunreaver (all uiMapID 2393, Silvermoon City) and Warleader Abdumati
+(2509, Vaults of Atal'Utek).
+
+### Where they came from, and why that was acceptable
+
+Wowhead's `g_mapperData`, read off each NPC page on 2026-09-12. That is
+datamined client data -- the same class as the class-guide tables -- not
+the editorial prose beside it, which is the distinction that matters
+against the rule about third-party sourcing.
+
+Two things made it safe rather than a repeat of the invented teleport
+ids:
+
+- **The map id came with the data.** `g_mapperData` carries `uiMapId`
+  itself, so nothing was inferred from a zone name. It was then
+  confirmed a second time against a live client standing in Silvermoon,
+  which is what settles it -- the published UiMapID lists are stale at
+  patch 10.1.7 and still name 110, the pre-Midnight city.
+- **Each NPC was reached through a quest id this addon already ships**
+  (93751, 98172, 93598, 95520), not by searching a name. A wrong NPC
+  would have to be a wrong quest id first.
+
+### What stops them going stale badly
+
+A learned record outranks a shipped one. Shipped is a snapshot from
+build time; anything in the saved variables came off the player's own
+client, so a giver that moves in a patch corrects itself the first time
+anyone picks that quest up. `/yh where forget` goes back the other way.
+
+`Tools/loadcheck.py` asserts the shape of every shipped giver -- a map
+id, and a position strictly inside 0..1 -- because these are
+hand-transcribed numbers and a percentage left unconverted does not
+error, it just puts a pin somewhere wrong on every install. It also
+requires that **every** quest-backed row ships one. "At least one"
+passed on a page where eight rows out of nine had nothing to click,
+which is the state this feature shipped in twice.
+
+### Still unverified
+
+`C_QuestLog.GetQuestsOnMap` including un-accepted offers with positions.
+The map-scan seed uses it where it works and silently does nothing where
+it does not; coordinates outside 0..1 are dropped rather than converted,
+so the failure mode is no pin rather than a wrong one.
+
 ## Weekly checklist: quest ids instead of ticks
 
 **Status:** plumbing built, ids missing. Blocked on one thing only, and that
